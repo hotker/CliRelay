@@ -50,6 +50,9 @@ var newClaudeOAuthRefresher = func(cfg *config.Config) claudeOAuthRefresher {
 	return claudeauth.NewClaudeAuth(cfg)
 }
 
+const kimiOAuthClientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+const kimiOAuthTokenURL = "https://auth.kimi.com/api/oauth/token"
+
 type apiCallRequest struct {
 	AuthIndexSnake  *string           `json:"auth_index"`
 	AuthIndexCamel  *string           `json:"authIndex"`
@@ -276,6 +279,10 @@ func (h *Handler) resolveTokenForAuth(ctx context.Context, auth *coreauth.Auth) 
 	}
 	if provider == "claude" || provider == "anthropic" {
 		token, errToken := h.refreshClaudeOAuthAccessToken(ctx, auth)
+		return token, errToken
+	}
+	if provider == "kimi" {
+		token, errToken := h.refreshKimiOAuthAccessToken(ctx, auth)
 		return token, errToken
 	}
 
@@ -538,6 +545,116 @@ func (h *Handler) refreshAntigravityOAuthAccessToken(ctx context.Context, auth *
 		auth.Metadata["expired"] = now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)
 	}
 	auth.Metadata["type"] = "antigravity"
+
+	if h != nil && h.authManager != nil {
+		auth.LastRefreshedAt = now
+		auth.UpdatedAt = now
+		_, _ = h.authManager.Update(ctx, auth)
+	}
+
+	return strings.TrimSpace(tokenResp.AccessToken), nil
+}
+
+func (h *Handler) refreshKimiOAuthAccessToken(ctx context.Context, auth *coreauth.Auth) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if auth == nil {
+		return "", nil
+	}
+
+	metadata := auth.Metadata
+	if len(metadata) == 0 {
+		return "", fmt.Errorf("kimi oauth metadata missing")
+	}
+
+	current := strings.TrimSpace(tokenValueFromMetadata(metadata))
+	expStr := stringValue(metadata, "expired")
+	if current != "" && expStr != "" {
+		if ts, errParse := time.Parse(time.RFC3339, strings.TrimSpace(expStr)); errParse == nil {
+			if time.Now().Add(30 * time.Second).Before(ts) {
+				return current, nil
+			}
+		}
+	}
+
+	refreshToken := stringValue(metadata, "refresh_token")
+	if refreshToken == "" {
+		return "", fmt.Errorf("kimi refresh token missing")
+	}
+
+	deviceID := stringValue(metadata, "device_id")
+
+	form := url.Values{}
+	form.Set("client_id", kimiOAuthClientID)
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodPost, kimiOAuthTokenURL, strings.NewReader(form.Encode()))
+	if errReq != nil {
+		return "", errReq
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Msh-Platform", "cli-proxy-api")
+	if deviceID != "" {
+		req.Header.Set("X-Msh-Device-Id", deviceID)
+	}
+
+	httpClient := util.NewHTTPClient(30 * time.Second)
+	httpClient.Transport = h.apiCallTransport(auth)
+	resp, errDo := httpClient.Do(req)
+	if errDo != nil {
+		return "", errDo
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
+
+	bodyBytes, errRead := bodyutil.ReadAll(resp.Body, managementOAuthTokenResponseLimit)
+	if errRead != nil {
+		if bodyutil.IsTooLarge(errRead) {
+			return "", fmt.Errorf("kimi oauth token refresh response too large")
+		}
+		return "", errRead
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("kimi oauth token refresh failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var tokenResp struct {
+		AccessToken  string  `json:"access_token"`
+		RefreshToken string  `json:"refresh_token"`
+		ExpiresIn    float64 `json:"expires_in"`
+		TokenType    string  `json:"token_type"`
+	}
+	if errUnmarshal := json.Unmarshal(bodyBytes, &tokenResp); errUnmarshal != nil {
+		return "", errUnmarshal
+	}
+
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return "", fmt.Errorf("kimi oauth token refresh returned empty access_token")
+	}
+
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	now := time.Now()
+	auth.Metadata["access_token"] = strings.TrimSpace(tokenResp.AccessToken)
+	if strings.TrimSpace(tokenResp.RefreshToken) != "" {
+		auth.Metadata["refresh_token"] = strings.TrimSpace(tokenResp.RefreshToken)
+	}
+	auth.Metadata["type"] = "kimi"
+	if deviceID != "" {
+		auth.Metadata["device_id"] = deviceID
+	}
+	if tokenResp.ExpiresIn > 0 {
+		auth.Metadata["expires_in"] = int64(tokenResp.ExpiresIn)
+		auth.Metadata["timestamp"] = now.UnixMilli()
+		auth.Metadata["expired"] = now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)
+	}
 
 	if h != nil && h.authManager != nil {
 		auth.LastRefreshedAt = now
