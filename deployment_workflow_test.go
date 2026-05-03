@@ -36,3 +36,21 @@ func TestDeployWorkflowOnlyPublishesBackendBinary(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseAndDeployWorkflowsRejectVendoredPanelAssets(t *testing.T) {
+	for _, path := range []string{
+		".github/workflows/pr-test-build.yml",
+		".github/workflows/deploy.yml",
+		".github/workflows/docker-image.yml",
+		".github/workflows/docker-publish.yml",
+		".github/workflows/release.yaml",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(data), `./scripts/ensure-no-vendored-panel-assets.sh`) {
+			t.Fatalf("%s must reject committed frontend panel build output", path)
+		}
+	}
+}

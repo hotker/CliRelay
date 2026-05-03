@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject vendored panel assets
+        run: ./scripts/ensure-no-vendored-panel-assets.sh
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.1'
