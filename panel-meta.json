@@ -1,7 +1,7 @@
 {
-  "build_date": "2026-05-03T12:46:10.223Z",
-  "commit": "87a03e02b38452a83a871482ba349de9061c84cd",
-  "ref": "feature/api-key-import-switch-options",
+  "build_date": "2026-05-03T13:14:10.515Z",
+  "commit": "c120bba529c748b01cee6e4b9ac10ddf17d619a2",
+  "ref": "fix/ccswitch-client-specific-import",
   "repository": "git@github.com:kittors/codeProxy.git",
-  "version": "panel-feature/api-key-import-switch-options-87a03e0"
+  "version": "panel-fix/ccswitch-client-specific-import-c120bba"
 }
