@@ -319,6 +319,50 @@ func TestBuildAuthFileEntryHonorsExplicitEmptyDisplayTags(t *testing.T) {
 	}
 }
 
+func TestBuildAuthFileEntryIncludesActiveRestrictions(t *testing.T) {
+	nextRetry := time.Now().Add(34*time.Minute + 50*time.Second).UTC().Truncate(time.Second)
+	auth := &coreauth.Auth{
+		ID:       "codex-restricted",
+		FileName: "codex-restricted.json",
+		Provider: "codex",
+		Status:   coreauth.StatusError,
+		Attributes: map[string]string{
+			"path": "codex-restricted.json",
+		},
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5": {
+				Status:         coreauth.StatusError,
+				StatusMessage:  "unauthorized",
+				Unavailable:    true,
+				NextRetryAfter: nextRetry,
+				LastError:      &coreauth.Error{Message: "unauthorized", HTTPStatus: http.StatusUnauthorized},
+			},
+		},
+	}
+
+	entry := (&Handler{}).buildAuthFileEntry(auth)
+	if entry == nil {
+		t.Fatal("expected auth file entry")
+	}
+	restrictions, ok := entry["restrictions"].([]gin.H)
+	if !ok {
+		t.Fatalf("restrictions type = %T, want []gin.H", entry["restrictions"])
+	}
+	if len(restrictions) != 1 {
+		t.Fatalf("restrictions length = %d, want 1", len(restrictions))
+	}
+	got := restrictions[0]
+	if got["scope"] != "model" || got["model"] != "gpt-5" || got["http_status"] != http.StatusUnauthorized {
+		t.Fatalf("restriction = %#v, want model gpt-5 401", got)
+	}
+	if got["status_message"] != "unauthorized" {
+		t.Fatalf("status_message = %#v, want unauthorized", got["status_message"])
+	}
+	if retry, ok := got["next_retry_after"].(time.Time); !ok || !retry.Equal(nextRetry) {
+		t.Fatalf("next_retry_after = %#v, want %v", got["next_retry_after"], nextRetry)
+	}
+}
+
 func TestBuildAuthFileEntryIncludesSubscriptionExpiration(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(90 * time.Minute).Truncate(time.Minute)
 	auth := &coreauth.Auth{
