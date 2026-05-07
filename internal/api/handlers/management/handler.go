@@ -356,11 +356,11 @@ func (h *Handler) persistRuntimeSetting(c *gin.Context, key string, value any) b
 		usage.CleanDBBackedConfigFromYAML(h.configFilePath)
 	}
 	cfg := h.cfg
-	if h != nil && h.authManager != nil {
+	if h.authManager != nil {
 		h.authManager.SetConfig(cfg)
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	if h != nil && h.onConfigMutated != nil {
+	if h.onConfigMutated != nil {
 		h.onConfigMutated(cfg)
 	}
 	return true
