@@ -103,7 +103,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 
 // createConnection creates a new HTTP/2 connection with Firefox TLS fingerprint
 func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientConn, error) {
-	conn, err := t.dialer.Dial("tcp", addr)
+	conn, err := t.dialer.Dial("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}

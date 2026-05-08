@@ -35,7 +35,7 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 func NewDefaultTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: DefaultHTTPDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: DefaultHTTPDialTimeout, KeepAlive: 30 * time.Second, LocalAddr: &net.TCPAddr{IP: net.IPv4zero}}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       DefaultHTTPIdleConnTimeout,
