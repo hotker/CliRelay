@@ -48,6 +48,7 @@ func (h *Handler) PutCcSwitchImportConfigs(c *gin.Context) {
 			DefaultModel:         strings.TrimSpace(items[idx].DefaultModel),
 			ModelMappings:        items[idx].ModelMappings,
 			AllowedChannelGroups: items[idx].AllowedChannelGroups,
+			RoutePath:            items[idx].RoutePath,
 			EndpointPath:         items[idx].EndpointPath,
 			UsageAutoInterval:    items[idx].UsageAutoInterval,
 			APIKeyField:          strings.TrimSpace(items[idx].APIKeyField),
