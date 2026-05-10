@@ -56,4 +56,5 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker-compose.yml:${CLIRELAY_PROJECT_DIR:-${PWD:-.}}/docker-compose.yml:ro
       - ./.env:${CLIRELAY_PROJECT_DIR:-${PWD:-.}}/.env
+      - ${CLI_PROXY_CONFIG_PATH:-${CLIRELAY_PROJECT_DIR:-${PWD:-.}}/config.yaml}:/CLIProxyAPI/config.yaml
     restart: unless-stopped
