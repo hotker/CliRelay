@@ -38,7 +38,9 @@ func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 
 	// Primary: load from SQLite
 	rows := usage.ListAPIKeys()
+	profiles := usage.ListAPIKeyPermissionProfiles()
 	for _, row := range rows {
+		row = usage.EffectiveAPIKeyRowWithProfiles(row, profiles)
 		trimmed := strings.TrimSpace(row.Key)
 		if trimmed == "" || row.Disabled {
 			continue
@@ -62,6 +64,7 @@ func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 
 	// Fallback: YAML config (for backward compatibility during migration)
 	for _, entry := range cfg.APIKeyEntries {
+		row := usage.EffectiveAPIKeyRowWithProfiles(usage.APIKeyRowFromConfig(entry), profiles)
 		trimmed := strings.TrimSpace(entry.Key)
 		if trimmed == "" || entry.Disabled {
 			continue
@@ -70,16 +73,16 @@ func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 			continue
 		}
 		result[trimmed] = keyConfig{
-			allowedModels:        entry.AllowedModels,
-			allowedChannels:      entry.AllowedChannels,
-			allowedChannelGroups: entry.AllowedChannelGroups,
-			dailyLimit:           entry.DailyLimit,
-			totalQuota:           entry.TotalQuota,
-			spendingLimit:        entry.SpendingLimit,
-			concurrencyLimit:     entry.ConcurrencyLimit,
-			rpmLimit:             entry.RPMLimit,
-			tpmLimit:             entry.TPMLimit,
-			systemPrompt:         entry.SystemPrompt,
+			allowedModels:        row.AllowedModels,
+			allowedChannels:      row.AllowedChannels,
+			allowedChannelGroups: row.AllowedChannelGroups,
+			dailyLimit:           row.DailyLimit,
+			totalQuota:           row.TotalQuota,
+			spendingLimit:        row.SpendingLimit,
+			concurrencyLimit:     row.ConcurrencyLimit,
+			rpmLimit:             row.RPMLimit,
+			tpmLimit:             row.TPMLimit,
+			systemPrompt:         row.SystemPrompt,
 		}
 	}
 	for _, k := range cfg.APIKeys {

@@ -105,3 +105,43 @@ func TestPutAPIKeyPermissionProfilesRejectsMissingIdentity(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
+
+func TestPatchAPIKeyEntryPersistsPermissionProfileID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupPermissionProfilesTestDB(t)
+
+	if err := usage.UpsertAPIKey(usage.APIKeyRow{Key: "sk-bound-profile", Name: "Bound"}); err != nil {
+		t.Fatalf("UpsertAPIKey: %v", err)
+	}
+
+	body := []byte(`{
+  "match": "sk-bound-profile",
+  "value": {
+    "permission-profile-id": "standard",
+    "daily-limit": 15000,
+    "allowed-channel-groups": ["pro"]
+  }
+}`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPatch, "/api-key-entries", bytes.NewReader(body))
+
+	h := NewHandler(&config.Config{
+		Routing: config.RoutingConfig{
+			ChannelGroups: []config.RoutingChannelGroup{{Name: "pro"}},
+		},
+	}, "", nil)
+	h.PatchAPIKeyEntry(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := usage.GetAPIKey("sk-bound-profile")
+	if got == nil {
+		t.Fatal("expected API key after PATCH")
+	}
+	if got.PermissionProfileID != "standard" {
+		t.Fatalf("permission profile id = %q, want standard", got.PermissionProfileID)
+	}
+}

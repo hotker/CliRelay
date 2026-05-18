@@ -104,6 +104,10 @@ type APIKeyEntry struct {
 	// Disabled marks this key as inactive. Disabled keys cannot authenticate.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 
+	// PermissionProfileID links this key to a reusable permission profile.
+	// When set, the current profile values are used for limits and restrictions.
+	PermissionProfileID string `yaml:"permission-profile-id,omitempty" json:"permission-profile-id,omitempty"`
+
 	// DailyLimit is the maximum number of requests per day. 0 means unlimited.
 	DailyLimit int `yaml:"daily-limit,omitempty" json:"daily-limit,omitempty"`
 

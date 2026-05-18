@@ -1,12 +1,15 @@
 package logging
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 )
 
 func TestGinLogrusRecoveryRepanicsErrAbortHandler(t *testing.T) {
@@ -56,5 +59,41 @@ func TestGinLogrusRecoveryHandlesRegularPanic(t *testing.T) {
 	engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", recorder.Code)
+	}
+}
+
+func TestGinLogrusLoggerPrefersForwardedClientIPForCDNRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var buf bytes.Buffer
+	originalOutput := log.StandardLogger().Out
+	defer log.SetOutput(originalOutput)
+	log.SetOutput(&buf)
+
+	engine := gin.New()
+	if err := engine.SetTrustedProxies(nil); err != nil {
+		t.Fatalf("SetTrustedProxies(nil): %v", err)
+	}
+	engine.Use(GinLogrusLogger())
+	engine.GET("/probe", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.RemoteAddr = "198.51.100.10:4321"
+	req.Header.Set("CF-Connecting-IP", "203.0.113.24")
+	recorder := httptest.NewRecorder()
+
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	line := buf.String()
+	if !strings.Contains(line, "203.0.113.24") {
+		t.Fatalf("log line = %q, want real forwarded client IP", line)
+	}
+	if strings.Contains(line, "198.51.100.10") {
+		t.Fatalf("log line = %q, should not use proxy connection IP", line)
 	}
 }

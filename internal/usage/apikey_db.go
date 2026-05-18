@@ -16,6 +16,7 @@ type APIKeyRow struct {
 	Key                  string   `json:"key"`
 	Name                 string   `json:"name,omitempty"`
 	Disabled             bool     `json:"disabled,omitempty"`
+	PermissionProfileID  string   `json:"permission-profile-id,omitempty"`
 	DailyLimit           int      `json:"daily-limit,omitempty"`
 	TotalQuota           int      `json:"total-quota,omitempty"`
 	SpendingLimit        float64  `json:"spending-limit,omitempty"`
@@ -36,6 +37,7 @@ func (r *APIKeyRow) ToConfigEntry() config.APIKeyEntry {
 		Key:                  r.Key,
 		Name:                 r.Name,
 		Disabled:             r.Disabled,
+		PermissionProfileID:  r.PermissionProfileID,
 		DailyLimit:           r.DailyLimit,
 		TotalQuota:           r.TotalQuota,
 		SpendingLimit:        r.SpendingLimit,
@@ -56,6 +58,7 @@ func APIKeyRowFromConfig(entry config.APIKeyEntry) APIKeyRow {
 		Key:                  entry.Key,
 		Name:                 entry.Name,
 		Disabled:             entry.Disabled,
+		PermissionProfileID:  entry.PermissionProfileID,
 		DailyLimit:           entry.DailyLimit,
 		TotalQuota:           entry.TotalQuota,
 		SpendingLimit:        entry.SpendingLimit,
@@ -75,6 +78,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key               TEXT PRIMARY KEY NOT NULL,
   name              TEXT NOT NULL DEFAULT '',
   disabled          INTEGER NOT NULL DEFAULT 0,
+  permission_profile_id TEXT NOT NULL DEFAULT '',
   daily_limit       INTEGER NOT NULL DEFAULT 0,
   total_quota       INTEGER NOT NULL DEFAULT 0,
   spending_limit    REAL NOT NULL DEFAULT 0,
@@ -103,6 +107,7 @@ func migrateAPIKeyColumns(db *sql.DB) {
 		name       string
 		definition string
 	}{
+		{name: "permission_profile_id", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "allowed_channels", definition: "TEXT NOT NULL DEFAULT '[]'"},
 		{name: "allowed_channel_groups", definition: "TEXT NOT NULL DEFAULT '[]'"},
 	} {
@@ -258,9 +263,9 @@ func MigrateAPIKeysFromConfig(cfg *config.Config, configFilePath string) int {
 	}
 
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO api_keys
-		(key, name, disabled, daily_limit, total_quota, spending_limit,
+		(key, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit,
 		 concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		log.Errorf("usage: prepare api_keys migration: %v", err)
@@ -287,7 +292,7 @@ func MigrateAPIKeysFromConfig(cfg *config.Config, configFilePath string) int {
 			disabledInt = 1
 		}
 		if _, err := stmt.Exec(
-			row.Key, row.Name, disabledInt,
+			row.Key, row.Name, disabledInt, strings.TrimSpace(row.PermissionProfileID),
 			row.DailyLimit, row.TotalQuota, row.SpendingLimit,
 			row.ConcurrencyLimit, row.RPMLimit, row.TPMLimit,
 			string(modelsJSON), string(channelsJSON), string(channelGroupsJSON), row.SystemPrompt,
@@ -321,6 +326,58 @@ func MigrateAPIKeysFromConfig(cfg *config.Config, configFilePath string) int {
 	return imported
 }
 
+// EffectiveAPIKeyRow applies the currently linked permission profile to an API key row.
+// If the profile is missing, the row's copied/custom settings remain the fallback.
+func EffectiveAPIKeyRow(row APIKeyRow) APIKeyRow {
+	return EffectiveAPIKeyRowWithProfiles(row, ListAPIKeyPermissionProfiles())
+}
+
+// EffectiveAPIKeyRowWithProfiles applies a preloaded permission profile snapshot.
+func EffectiveAPIKeyRowWithProfiles(row APIKeyRow, profiles []APIKeyPermissionProfileRow) APIKeyRow {
+	profileID := strings.TrimSpace(row.PermissionProfileID)
+	if profileID == "" {
+		return row
+	}
+
+	var matched *APIKeyPermissionProfileRow
+	for _, profile := range profiles {
+		if profile.ID == profileID {
+			copy := profile
+			matched = &copy
+			break
+		}
+	}
+	if matched == nil {
+		return row
+	}
+
+	row.PermissionProfileID = profileID
+	row.DailyLimit = matched.DailyLimit
+	row.TotalQuota = matched.TotalQuota
+	row.SpendingLimit = 0
+	row.ConcurrencyLimit = matched.ConcurrencyLimit
+	row.RPMLimit = matched.RPMLimit
+	row.TPMLimit = matched.TPMLimit
+	row.AllowedModels = append([]string(nil), matched.AllowedModels...)
+	row.AllowedChannels = append([]string(nil), matched.AllowedChannels...)
+	row.AllowedChannelGroups = append([]string(nil), matched.AllowedChannelGroups...)
+	row.SystemPrompt = matched.SystemPrompt
+	return row
+}
+
+// EffectiveAPIKeyRows applies the current permission profile snapshot to each row.
+func EffectiveAPIKeyRows(rows []APIKeyRow) []APIKeyRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	profiles := ListAPIKeyPermissionProfiles()
+	out := make([]APIKeyRow, len(rows))
+	for idx, row := range rows {
+		out[idx] = EffectiveAPIKeyRowWithProfiles(row, profiles)
+	}
+	return out
+}
+
 // ListAPIKeys retrieves all API key entries from SQLite.
 func ListAPIKeys() []APIKeyRow {
 	db := getDB()
@@ -329,7 +386,7 @@ func ListAPIKeys() []APIKeyRow {
 	}
 
 	rows, err := db.Query(`SELECT key, name, disabled, daily_limit, total_quota,
-		spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at
 		FROM api_keys ORDER BY created_at ASC`)
 	if err != nil {
@@ -349,7 +406,7 @@ func GetAPIKey(key string) *APIKeyRow {
 	}
 
 	row := db.QueryRow(`SELECT key, name, disabled, daily_limit, total_quota,
-		spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at
 		FROM api_keys WHERE key = ?`, key)
 
@@ -369,6 +426,7 @@ func UpsertAPIKey(entry APIKeyRow) error {
 	}
 	entry.Key = trimmed
 	entry.Name = strings.TrimSpace(entry.Name)
+	entry.PermissionProfileID = strings.TrimSpace(entry.PermissionProfileID)
 
 	modelsJSON, _ := json.Marshal(entry.AllowedModels)
 	if entry.AllowedModels == nil {
@@ -392,11 +450,12 @@ func UpsertAPIKey(entry APIKeyRow) error {
 	}
 
 	_, err := db.Exec(`INSERT INTO api_keys
-		(key, name, disabled, daily_limit, total_quota, spending_limit,
+		(key, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit,
 		 concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET
 			name=excluded.name, disabled=excluded.disabled,
+			permission_profile_id=excluded.permission_profile_id,
 			daily_limit=excluded.daily_limit, total_quota=excluded.total_quota,
 			spending_limit=excluded.spending_limit, concurrency_limit=excluded.concurrency_limit,
 			rpm_limit=excluded.rpm_limit, tpm_limit=excluded.tpm_limit,
@@ -404,7 +463,7 @@ func UpsertAPIKey(entry APIKeyRow) error {
 			allowed_channel_groups=excluded.allowed_channel_groups,
 			system_prompt=excluded.system_prompt,
 			updated_at=excluded.updated_at`,
-		trimmed, entry.Name, disabledInt,
+		trimmed, entry.Name, disabledInt, entry.PermissionProfileID,
 		entry.DailyLimit, entry.TotalQuota, entry.SpendingLimit,
 		entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
 		string(modelsJSON), string(channelsJSON), string(channelGroupsJSON), entry.SystemPrompt,
@@ -441,9 +500,9 @@ func ReplaceAllAPIKeys(entries []APIKeyRow) error {
 	}
 
 	stmt, err := tx.Prepare(`INSERT INTO api_keys
-		(key, name, disabled, daily_limit, total_quota, spending_limit,
+		(key, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit,
 		 concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -458,6 +517,7 @@ func ReplaceAllAPIKeys(entries []APIKeyRow) error {
 		}
 		entry.Key = trimmed
 		entry.Name = strings.TrimSpace(entry.Name)
+		entry.PermissionProfileID = strings.TrimSpace(entry.PermissionProfileID)
 		modelsJSON, _ := json.Marshal(entry.AllowedModels)
 		if entry.AllowedModels == nil {
 			modelsJSON = []byte("[]")
@@ -478,7 +538,7 @@ func ReplaceAllAPIKeys(entries []APIKeyRow) error {
 			entry.CreatedAt = now
 		}
 		if _, err := stmt.Exec(
-			trimmed, entry.Name, disabledInt,
+			trimmed, entry.Name, disabledInt, entry.PermissionProfileID,
 			entry.DailyLimit, entry.TotalQuota, entry.SpendingLimit,
 			entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
 			string(modelsJSON), string(channelsJSON), string(channelGroupsJSON), entry.SystemPrompt,
@@ -517,7 +577,7 @@ func scanAPIKeyFromRow(row scannable) *APIKeyRow {
 	var channelGroupsJSON string
 	if err := row.Scan(
 		&r.Key, &r.Name, &disabledInt,
-		&r.DailyLimit, &r.TotalQuota, &r.SpendingLimit,
+		&r.DailyLimit, &r.TotalQuota, &r.PermissionProfileID, &r.SpendingLimit,
 		&r.ConcurrencyLimit, &r.RPMLimit, &r.TPMLimit,
 		&modelsJSON, &channelsJSON, &channelGroupsJSON, &r.SystemPrompt,
 		&r.CreatedAt, &r.UpdatedAt,
@@ -525,6 +585,7 @@ func scanAPIKeyFromRow(row scannable) *APIKeyRow {
 		return nil
 	}
 	r.Disabled = disabledInt != 0
+	r.PermissionProfileID = strings.TrimSpace(r.PermissionProfileID)
 	if modelsJSON != "" && modelsJSON != "[]" {
 		_ = json.Unmarshal([]byte(modelsJSON), &r.AllowedModels)
 	}
@@ -545,7 +606,7 @@ func scanSingleAPIKeyRow(row *sql.Row) *APIKeyRow {
 	var channelGroupsJSON string
 	if err := row.Scan(
 		&r.Key, &r.Name, &disabledInt,
-		&r.DailyLimit, &r.TotalQuota, &r.SpendingLimit,
+		&r.DailyLimit, &r.TotalQuota, &r.PermissionProfileID, &r.SpendingLimit,
 		&r.ConcurrencyLimit, &r.RPMLimit, &r.TPMLimit,
 		&modelsJSON, &channelsJSON, &channelGroupsJSON, &r.SystemPrompt,
 		&r.CreatedAt, &r.UpdatedAt,
@@ -553,6 +614,7 @@ func scanSingleAPIKeyRow(row *sql.Row) *APIKeyRow {
 		return nil
 	}
 	r.Disabled = disabledInt != 0
+	r.PermissionProfileID = strings.TrimSpace(r.PermissionProfileID)
 	if modelsJSON != "" && modelsJSON != "[]" {
 		_ = json.Unmarshal([]byte(modelsJSON), &r.AllowedModels)
 	}

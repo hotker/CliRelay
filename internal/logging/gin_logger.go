@@ -71,6 +71,9 @@ func GinLogrusLogger() gin.HandlerFunc {
 
 		statusCode := c.Writer.Status()
 		clientIP := c.ClientIP()
+		if ip, _ := util.ForwardedClientIP(c.Request); ip != "" {
+			clientIP = ip
+		}
 		method := c.Request.Method
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
 

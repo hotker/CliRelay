@@ -247,12 +247,13 @@ func (h *Handler) PutAPIKeyPermissionProfiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.refreshAPIKeyCache()
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
 // api-key-entries: backed by SQLite api_keys table
 func (h *Handler) GetAPIKeyEntries(c *gin.Context) {
-	rows := usage.ListAPIKeys()
+	rows := usage.EffectiveAPIKeyRows(usage.ListAPIKeys())
 	entries := make([]config.APIKeyEntry, 0, len(rows))
 	for _, r := range rows {
 		entries = append(entries, r.ToConfigEntry())
@@ -324,6 +325,7 @@ func (h *Handler) PatchAPIKeyEntry(c *gin.Context) {
 	type apiKeyEntryPatch struct {
 		Key                  *string   `json:"key"`
 		Name                 *string   `json:"name"`
+		PermissionProfileID  *string   `json:"permission-profile-id"`
 		DailyLimit           *int      `json:"daily-limit"`
 		TotalQuota           *int      `json:"total-quota"`
 		SpendingLimit        *float64  `json:"spending-limit"`
@@ -395,6 +397,9 @@ func (h *Handler) PatchAPIKeyEntry(c *gin.Context) {
 	// Apply patches
 	if body.Value.Name != nil {
 		entry.Name = strings.TrimSpace(*body.Value.Name)
+	}
+	if body.Value.PermissionProfileID != nil {
+		entry.PermissionProfileID = strings.TrimSpace(*body.Value.PermissionProfileID)
 	}
 	if body.Value.DailyLimit != nil {
 		entry.DailyLimit = *body.Value.DailyLimit

@@ -54,10 +54,11 @@ func TestAPIKeyUpsertAndGet(t *testing.T) {
 	defer cleanup()
 
 	entry := APIKeyRow{
-		Key:          "sk-test-123",
-		Name:         "Test Key",
-		DailyLimit:   100,
-		SystemPrompt: "You are a helpful assistant.\n### Special chars: # * ** ☢️",
+		Key:                 "sk-test-123",
+		Name:                "Test Key",
+		PermissionProfileID: "standard",
+		DailyLimit:          100,
+		SystemPrompt:        "You are a helpful assistant.\n### Special chars: # * ** ☢️",
 	}
 
 	if err := UpsertAPIKey(entry); err != nil {
@@ -74,12 +75,16 @@ func TestAPIKeyUpsertAndGet(t *testing.T) {
 	if got.DailyLimit != 100 {
 		t.Errorf("daily_limit = %d, want 100", got.DailyLimit)
 	}
+	if got.PermissionProfileID != "standard" {
+		t.Errorf("permission_profile_id = %q, want %q", got.PermissionProfileID, "standard")
+	}
 	if got.SystemPrompt != entry.SystemPrompt {
 		t.Errorf("system_prompt = %q, want %q", got.SystemPrompt, entry.SystemPrompt)
 	}
 
 	// Update
 	entry.Name = "Updated Key"
+	entry.PermissionProfileID = "strict"
 	entry.DailyLimit = 200
 	if err := UpsertAPIKey(entry); err != nil {
 		t.Fatalf("UpsertAPIKey (update): %v", err)
@@ -94,6 +99,9 @@ func TestAPIKeyUpsertAndGet(t *testing.T) {
 	}
 	if got.DailyLimit != 200 {
 		t.Errorf("daily_limit after update = %d, want 200", got.DailyLimit)
+	}
+	if got.PermissionProfileID != "strict" {
+		t.Errorf("permission_profile_id after update = %q, want %q", got.PermissionProfileID, "strict")
 	}
 }
 
@@ -196,7 +204,7 @@ func TestAPIKeyReplaceAll(t *testing.T) {
 
 	// Replace all
 	newKeys := []APIKeyRow{
-		{Key: "sk-new-a", Name: "New A"},
+		{Key: "sk-new-a", Name: "New A", PermissionProfileID: "standard"},
 		{Key: "sk-new-b", Name: "New B"},
 	}
 	if err := ReplaceAllAPIKeys(newKeys); err != nil {
@@ -209,6 +217,15 @@ func TestAPIKeyReplaceAll(t *testing.T) {
 	}
 	if list[0].Key != "sk-new-a" && list[1].Key != "sk-new-a" {
 		t.Fatal("expected sk-new-a in list")
+	}
+	var profileID string
+	for _, row := range list {
+		if row.Key == "sk-new-a" {
+			profileID = row.PermissionProfileID
+		}
+	}
+	if profileID != "standard" {
+		t.Fatalf("permission_profile_id for sk-new-a = %q, want standard", profileID)
 	}
 
 	// Old keys should be gone

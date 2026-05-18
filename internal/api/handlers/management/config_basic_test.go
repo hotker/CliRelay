@@ -375,6 +375,67 @@ logging-to-file: true
 	}
 }
 
+func TestPutConfigYAMLNotifiesConfigMutationHookAfterPayloadRuntimeSettingUpdate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	usage.CloseDB()
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	if err := usage.InitDB(dbPath, config.RequestLogStorageConfig{}, time.UTC); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(usage.CloseDB)
+
+	if err := usage.UpsertRuntimeSetting(usage.RuntimeSettingPayload, config.PayloadConfig{
+		Override: []config.PayloadRule{
+			{
+				Models: []config.PayloadModelRule{{Name: "old-model", Protocol: "codex"}},
+				Params: map[string]any{"service_tier": "standard"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed payload runtime setting: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("port: 8318\nlogging-to-file: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	body := []byte(`port: 8318
+payload:
+  override:
+    - models:
+        - name: gpt-5.4
+          protocol: codex
+        - name: gpt-5.4-mini
+          protocol: codex
+      params:
+        service_tier: priority
+logging-to-file: true
+`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/config.yaml", bytes.NewReader(body))
+
+	var hookCalled bool
+	var hookPayload config.PayloadConfig
+	h := NewHandler(&config.Config{}, configPath, nil)
+	h.SetConfigMutatedHook(func(updated *config.Config) {
+		hookCalled = true
+		if updated != nil {
+			hookPayload = updated.Payload
+		}
+	})
+	h.PutConfigYAML(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PutConfigYAML status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if !hookCalled {
+		t.Fatal("config mutation hook was not called")
+	}
+	assertPayloadOverrideRule(t, hookPayload)
+}
+
 func assertPayloadOverrideRule(t *testing.T, payload config.PayloadConfig) {
 	t.Helper()
 	if len(payload.Override) != 1 {

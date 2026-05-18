@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -396,7 +395,7 @@ func buildRequestDetailContent(ctx context.Context) string {
 }
 
 func requestLogClientIP(ginCtx *gin.Context, req *http.Request) (string, string) {
-	if ip, source := forwardedClientIP(req); ip != "" {
+	if ip, source := util.ForwardedClientIP(req); ip != "" {
 		return ip, source
 	}
 	if ginCtx != nil {
@@ -405,91 +404,11 @@ func requestLogClientIP(ginCtx *gin.Context, req *http.Request) (string, string)
 		}
 	}
 	if req != nil {
-		if ip := remoteAddrIP(req.RemoteAddr); ip != "" {
+		if ip := util.RemoteAddrIP(req.RemoteAddr); ip != "" {
 			return ip, "remote_addr"
 		}
 	}
 	return "", ""
-}
-
-func forwardedClientIP(req *http.Request) (string, string) {
-	if req == nil || req.Header == nil {
-		return "", ""
-	}
-	headerPriority := []string{
-		"CF-Connecting-IP",
-		"True-Client-IP",
-		"X-Real-IP",
-		"X-Forwarded-For",
-	}
-	for _, header := range headerPriority {
-		if ip := firstHeaderIP(req.Header, header); ip != "" {
-			return ip, header
-		}
-	}
-	if ip := forwardedHeaderIP(req.Header); ip != "" {
-		return ip, "Forwarded"
-	}
-	return "", ""
-}
-
-func firstHeaderIP(headers http.Header, header string) string {
-	for _, value := range headers.Values(header) {
-		for _, candidate := range strings.Split(value, ",") {
-			if ip := normalizeIPCandidate(candidate); ip != "" {
-				return ip
-			}
-		}
-	}
-	return ""
-}
-
-func forwardedHeaderIP(headers http.Header) string {
-	for _, value := range headers.Values("Forwarded") {
-		for _, entry := range strings.Split(value, ",") {
-			for _, part := range strings.Split(entry, ";") {
-				key, rawValue, ok := strings.Cut(part, "=")
-				if !ok || !strings.EqualFold(strings.TrimSpace(key), "for") {
-					continue
-				}
-				if ip := normalizeIPCandidate(rawValue); ip != "" {
-					return ip
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func remoteAddrIP(remoteAddr string) string {
-	remoteAddr = strings.TrimSpace(remoteAddr)
-	if remoteAddr == "" {
-		return ""
-	}
-	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		return normalizeIPCandidate(host)
-	}
-	return normalizeIPCandidate(remoteAddr)
-}
-
-func normalizeIPCandidate(candidate string) string {
-	candidate = strings.TrimSpace(candidate)
-	candidate = strings.Trim(candidate, `"`)
-	if candidate == "" || strings.EqualFold(candidate, "unknown") {
-		return ""
-	}
-	if strings.HasPrefix(candidate, "[") {
-		if end := strings.Index(candidate, "]"); end > 0 {
-			candidate = candidate[1:end]
-		}
-	} else if host, _, err := net.SplitHostPort(candidate); err == nil {
-		candidate = host
-	}
-	ip := net.ParseIP(strings.TrimSpace(candidate))
-	if ip == nil {
-		return ""
-	}
-	return ip.String()
 }
 
 func bytesToString(value any) string {

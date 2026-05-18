@@ -329,14 +329,15 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if WriteConfig(h.configFilePath, body) != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "write_failed", "message": "failed to write config"})
 		return
 	}
 	// Reload into handler to keep memory in sync
 	newCfg, err := config.LoadConfig(h.configFilePath)
 	if err != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload_failed", "message": err.Error()})
 		return
 	}
@@ -346,7 +347,12 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		usage.ApplyStoredRuntimeSettings(newCfg)
 	}
 	h.cfg = newCfg
+	mutated := h.onConfigMutated
+	h.mu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
+	if mutated != nil {
+		mutated(newCfg)
+	}
 }
 
 // GetConfigYAML returns the raw config.yaml file bytes without re-encoding.
