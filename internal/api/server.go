@@ -880,6 +880,8 @@ func (s *Server) registerManagementRoutes() {
 	{
 		pub.GET("/usage", s.mgmt.GetPublicUsageByAPIKey)
 		pub.POST("/usage", s.mgmt.GetPublicUsageByAPIKey)
+		pub.GET("/ccswitch-import-configs", s.mgmt.GetPublicCcSwitchImportConfigs)
+		pub.POST("/ccswitch-import-configs", s.mgmt.GetPublicCcSwitchImportConfigs)
 		pub.GET("/usage/logs", s.mgmt.GetPublicUsageLogs)
 		pub.POST("/usage/logs", s.mgmt.GetPublicUsageLogs)
 		pub.GET("/usage/logs/:id/content", s.mgmt.GetPublicLogContent)
