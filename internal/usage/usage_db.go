@@ -76,6 +76,7 @@ type LogStats struct {
 	SuccessRate float64 `json:"success_rate"`
 	TotalTokens int64   `json:"total_tokens"`
 	TotalCost   float64 `json:"total_cost"`
+	CacheRate   float64 `json:"cache_rate"`
 }
 
 type ClearRequestLogsResult struct {
@@ -580,7 +581,8 @@ func QueryFilters(days int) (FilterOptions, error) {
 func QueryStats(params LogQueryParams) (LogStats, error) {
 	db := getDB()
 	if db == nil {
-		return LogStats{}, nil
+
+	return LogStats{CacheRate: 0}, nil
 	}
 	if params.Days < 1 {
 		params.Days = 7
@@ -588,11 +590,11 @@ func QueryStats(params LogQueryParams) (LogStats, error) {
 
 	where, args := buildWhereClause(params)
 
-	var total, successCount, totalTokens int64
+	var total, successCount, totalTokens, cacheHitCount int64
 	var totalCost float64
-	statsSQL := "SELECT COUNT(*), COALESCE(SUM(CASE WHEN failed=0 THEN 1 ELSE 0 END),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost),0) " +
+	statsSQL := "SELECT COUNT(*), COALESCE(SUM(CASE WHEN failed=0 THEN 1 ELSE 0 END),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost),0), COALESCE(SUM(CASE WHEN cached_tokens>0 THEN 1 ELSE 0 END),0) " +
 		"FROM request_logs" + where
-	if err := db.QueryRow(statsSQL, args...).Scan(&total, &successCount, &totalTokens, &totalCost); err != nil {
+	if err := db.QueryRow(statsSQL, args...).Scan(&total, &successCount, &totalTokens, &totalCost, &cacheHitCount); err != nil {
 		return LogStats{}, fmt.Errorf("usage: stats query: %w", err)
 	}
 
@@ -601,10 +603,16 @@ func QueryStats(params LogQueryParams) (LogStats, error) {
 		successRate = float64(successCount) / float64(total) * 100
 	}
 
+	var cacheRate float64
+	if total > 0 {
+		cacheRate = float64(cacheHitCount) / float64(total) * 100
+	}
+
 	return LogStats{
 		Total:       total,
 		SuccessRate: successRate,
 		TotalTokens: totalTokens,
+		CacheRate:   cacheRate,
 		TotalCost:   totalCost,
 	}, nil
 }
