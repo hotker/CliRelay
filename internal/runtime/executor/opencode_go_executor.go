@@ -81,11 +81,13 @@ func (e *OpenCodeGoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth
 func (e *OpenCodeGoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	// Vision preprocessing: when the model doesn't support vision but the
 	// current request has images, call qwen3.5-plus internally to get a text
-	// description and replace the image. The model is never changed, so
-	// Codex Desktop always sees deepseek-v4-flash.
+	// description and replace the image. The model is never changed, so the
+	// original model is preserved for subsequent requests and usage logging.
 	apiKey := opencodeGoAPIKey(auth)
-	if opencodeGoNeedsReasoningInjection(req.Model) && opencodeGoHasCurrentImage(req.Payload) && apiKey != "" {
-		if preprocessed, ok := opencodeGoPreprocessVision(ctx, e.cfg, auth, apiKey, req.Payload); ok {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	visionModel := opencodeGoVisionFallbackModel(e.cfg, auth)
+	if !opencodeGoSupportsNativeVision(baseModel) && opencodeGoHasCurrentImage(req.Payload) && apiKey != "" && visionModel != "" {
+		if preprocessed, ok := opencodeGoPreprocessVision(ctx, e.cfg, auth, apiKey, visionModel, req.Payload); ok {
 			req.Payload = preprocessed
 		}
 	}
@@ -135,10 +137,12 @@ func (e *OpenCodeGoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Aut
 }
 
 func (e *OpenCodeGoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	// Vision preprocessing: replace images with qwen descriptions.
+	// Vision preprocessing: replace images with text from the configured vision model.
 	apiKey := opencodeGoAPIKey(auth)
-	if opencodeGoNeedsReasoningInjection(req.Model) && opencodeGoHasCurrentImage(req.Payload) && apiKey != "" {
-		if preprocessed, ok := opencodeGoPreprocessVision(ctx, e.cfg, auth, apiKey, req.Payload); ok {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	visionModel := opencodeGoVisionFallbackModel(e.cfg, auth)
+	if !opencodeGoSupportsNativeVision(baseModel) && opencodeGoHasCurrentImage(req.Payload) && apiKey != "" && visionModel != "" {
+		if preprocessed, ok := opencodeGoPreprocessVision(ctx, e.cfg, auth, apiKey, visionModel, req.Payload); ok {
 			req.Payload = preprocessed
 		}
 	}

@@ -19,13 +19,14 @@ import (
 
 const visionPreprocessTimeout = 30 * time.Second
 
-// opencodeGoVisionPreprocessImage sends a base64-encoded image to qwen3.5-plus
-// via OpenCode and returns a concise text description. When the API call fails
-// we return a generic placeholder so the calling code can degrade gracefully.
-func opencodeGoVisionPreprocessImage(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, apiKey, imageData, imageType string) (string, error) {
+// opencodeGoVisionPreprocessImage sends a base64-encoded image to the configured
+// vision model via OpenCode and returns a concise text description. When the API
+// call fails we return a generic placeholder so the calling code can degrade
+// gracefully.
+func opencodeGoVisionPreprocessImage(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, apiKey, visionModel, imageData, imageType string) (string, error) {
 	prompt := "Describe what you see in this image concisely in one or two sentences. Focus on visual details relevant to a coding assistant."
 
-	body := buildVisionRequestBody("qwen3.5-plus", prompt, imageData, imageType)
+	body := buildVisionRequestBody(visionModel, prompt, imageData, imageType)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, opencodeGoBaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build vision request: %w", err)
@@ -189,13 +190,14 @@ func contentHasImage(item gjson.Result) bool {
 }
 
 // opencodeGoPreprocessVision replaces images in the current user message with
-// text descriptions from qwen3.5-plus. The model in the payload is NOT changed
-// — Codex Desktop always sees deepseek-v4-flash.
+// text descriptions from the configured vision model (vision_fallback_model).
+// The model in the payload is NOT changed — requests always stay on the
+// original model.
 //
 // Returns the modified payload and a boolean indicating whether any replacement
 // was performed.
-func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, apiKey string, payload []byte) ([]byte, bool) {
-	if len(payload) == 0 || !gjson.ValidBytes(payload) || apiKey == "" {
+func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, apiKey, visionModel string, payload []byte) ([]byte, bool) {
+	if visionModel == "" || len(payload) == 0 || !gjson.ValidBytes(payload) || apiKey == "" {
 		return payload, false
 	}
 
@@ -228,7 +230,7 @@ func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *c
 			}
 
 			// Call qwen to describe the image
-			description, err := opencodeGoVisionPreprocessImage(visionCtx, cfg, auth, apiKey, imgData, imgType)
+			description, err := opencodeGoVisionPreprocessImage(visionCtx, cfg, auth, apiKey, visionModel, imgData, imgType)
 			if err != nil {
 				procErr = err
 				description = "[Image description unavailable]"
@@ -238,7 +240,7 @@ func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *c
 			contentPath := fmt.Sprintf("messages.%d.content.%d", msgIdx, pIdx)
 			payload, _ = sjson.SetBytes(payload, contentPath+".type", "text")
 			payload, _ = sjson.SetBytes(payload, contentPath+".text", "[Image: "+description+"]")
-			_, _ = sjson.DeleteBytes(payload, contentPath+".image_url")
+			payload, _ = sjson.DeleteBytes(payload, contentPath+".image_url")
 			modified = true
 		}
 		return payload
@@ -288,7 +290,7 @@ func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *c
 					if imgData == "" {
 						continue
 					}
-					description, err := opencodeGoVisionPreprocessImage(visionCtx, cfg, auth, apiKey, imgData, imgType)
+					description, err := opencodeGoVisionPreprocessImage(visionCtx, cfg, auth, apiKey, visionModel, imgData, imgType)
 					if err != nil {
 						procErr = err
 						description = "[Image description unavailable]"
@@ -296,7 +298,7 @@ func opencodeGoPreprocessVision(ctx context.Context, cfg *config.Config, auth *c
 					contentPath := fmt.Sprintf("input.%d.content.%d", i, pIdx)
 					payload, _ = sjson.SetBytes(payload, contentPath+".type", "input_text")
 					payload, _ = sjson.SetBytes(payload, contentPath+".input_text", "[Image: "+description+"]")
-					_, _ = sjson.DeleteBytes(payload, contentPath+".image_url")
+					payload, _ = sjson.DeleteBytes(payload, contentPath+".image_url")
 					modified = true
 				}
 			}

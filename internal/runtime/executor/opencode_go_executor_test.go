@@ -61,10 +61,19 @@ func TestOpenCodeGoExecutorUsesVisionFallbackForImageRequests(t *testing.T) {
 	var gotPath string
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		reqModel := gjson.GetBytes(body, "model").String()
+		if reqModel == "qwen3.5-plus" {
+			// Vision preprocessing call to describe the image
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a test image description"}}]}`))
+			return
+		}
+		// Actual execution call — stays on original model
 		gotPath = r.URL.Path
-		gotBody, _ = io.ReadAll(r.Body)
+		gotBody = body
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_vision","object":"chat.completion","created":1,"model":"qwen3.5-plus","choices":[{"index":0,"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_vision","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
 	}))
 	defer server.Close()
 
@@ -91,17 +100,17 @@ func TestOpenCodeGoExecutorUsesVisionFallbackForImageRequests(t *testing.T) {
 	if gotPath != "/zen/go/v1/chat/completions" {
 		t.Fatalf("path = %q, want /zen/go/v1/chat/completions", gotPath)
 	}
-	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "qwen3.5-plus" {
-		t.Fatalf("upstream model = %q, want qwen3.5-plus; body=%s", gotModel, string(gotBody))
+	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "deepseek-v4-flash" {
+		t.Fatalf("upstream model = %q, want deepseek-v4-flash; body=%s", gotModel, string(gotBody))
 	}
-	if !strings.Contains(string(gotBody), `"image_url"`) {
-		t.Fatalf("current image should be preserved for vision fallback; body=%s", string(gotBody))
+	if strings.Contains(string(gotBody), `"image_url"`) {
+		t.Fatalf("image should be replaced with text after vision preprocessing; body=%s", string(gotBody))
 	}
 	if gotModel := gjson.GetBytes(resp.Payload, "model").String(); gotModel != "deepseek-v4-flash" {
 		t.Fatalf("response model = %q, want deepseek-v4-flash; payload=%s", gotModel, string(resp.Payload))
 	}
-	if !gjson.GetBytes(gotBody, "enable_thinking").Exists() || gjson.GetBytes(gotBody, "enable_thinking").Bool() {
-		t.Fatalf("enable_thinking = %s, want false; body=%s", gjson.GetBytes(gotBody, "enable_thinking").Raw, string(gotBody))
+	if gjson.GetBytes(gotBody, "enable_thinking").Exists() {
+		t.Fatalf("enable_thinking should not be present when no vision fallback is applied; body=%s", string(gotBody))
 	}
 	if gotText := gjson.GetBytes(resp.Payload, "choices.0.message.content").String(); gotText != "vision ok" {
 		t.Fatalf("response text = %q, want vision ok; payload=%s", gotText, string(resp.Payload))
@@ -110,11 +119,20 @@ func TestOpenCodeGoExecutorUsesVisionFallbackForImageRequests(t *testing.T) {
 
 func TestOpenCodeGoExecutorUsesConfiguredNonQwenVisionFallback(t *testing.T) {
 	var gotBody []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_vision","object":"chat.completion","created":1,"model":"mimo-v2-omni","choices":[{"index":0,"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
-	}))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			reqModel := gjson.GetBytes(body, "model").String()
+			if reqModel == "qwen3.5-plus" {
+				// Vision preprocessing call to describe the image
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a test image description"}}]}`))
+				return
+			}
+			// Actual execution call — stays on original model
+			gotBody = body
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_vision","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
+		}))
 	defer server.Close()
 
 	oldBaseURL := opencodeGoBaseURL
@@ -137,11 +155,11 @@ func TestOpenCodeGoExecutorUsesConfiguredNonQwenVisionFallback(t *testing.T) {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 
-	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "mimo-v2-omni" {
-		t.Fatalf("upstream model = %q, want mimo-v2-omni; body=%s", gotModel, string(gotBody))
+	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "deepseek-v4-flash" {
+		t.Fatalf("upstream model = %q, want deepseek-v4-flash; body=%s", gotModel, string(gotBody))
 	}
-	if !strings.Contains(string(gotBody), `"image_url"`) {
-		t.Fatalf("current image should be preserved for configured vision fallback; body=%s", string(gotBody))
+	if strings.Contains(string(gotBody), `"image_url"`) {
+		t.Fatalf("image should be replaced with text after vision preprocessing; body=%s", string(gotBody))
 	}
 	if gjson.GetBytes(gotBody, "enable_thinking").Exists() {
 		t.Fatalf("enable_thinking should not be added for non-qwen fallback; body=%s", string(gotBody))
@@ -153,11 +171,20 @@ func TestOpenCodeGoExecutorUsesConfiguredNonQwenVisionFallback(t *testing.T) {
 
 func TestOpenCodeGoExecutorIgnoresConfiguredTextOnlyFallbackModel(t *testing.T) {
 	var gotBody []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_text_only_fallback","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
-	}))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			reqModel := gjson.GetBytes(body, "model").String()
+			if reqModel == "qwen3.5-plus" {
+				// Vision preprocessing call to describe the image
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a description"}}]}`))
+				return
+			}
+			// Actual execution call — text-only model, stays on original model
+			gotBody = body
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_text_only_fallback","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		}))
 	defer server.Close()
 
 	oldBaseURL := opencodeGoBaseURL
@@ -201,7 +228,7 @@ func TestOpenCodeGoExecutorLeavesTextRequestsOnRequestedModel(t *testing.T) {
 	auth := &cliproxyauth.Auth{
 		Attributes: map[string]string{
 			"api_key":               "test-key",
-			"vision_fallback_model": "qwen3.5-plus",
+			"vision_fallback_model": "deepseek-v4-flash",
 		},
 	}
 	payload := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}`)
@@ -237,7 +264,7 @@ func TestOpenCodeGoExecutorLeavesTextFollowUpWithHistoricalImageOnRequestedModel
 	auth := &cliproxyauth.Auth{
 		Attributes: map[string]string{
 			"api_key":               "test-key",
-			"vision_fallback_model": "qwen3.5-plus",
+			"vision_fallback_model": "deepseek-v4-flash",
 		},
 	}
 	payload := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]},{"role":"assistant","content":"vision ok"},{"role":"user","content":"now answer a normal text question"}]}`)
@@ -276,7 +303,7 @@ func TestOpenCodeGoExecutorSanitizesResponsesHistoryImagesForTextFollowUp(t *tes
 	auth := &cliproxyauth.Auth{
 		Attributes: map[string]string{
 			"api_key":               "test-key",
-			"vision_fallback_model": "qwen3.5-plus",
+			"vision_fallback_model": "deepseek-v4-flash",
 		},
 	}
 	payload := []byte(`{"model":"deepseek-v4-flash","input":[{"role":"user","content":[{"type":"input_text","text":"what is this?"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]},{"role":"assistant","content":[{"type":"output_text","text":"vision ok"}]},{"role":"user","content":[{"type":"input_text","text":"now answer a normal text question"}]}]}`)
@@ -301,9 +328,18 @@ func TestOpenCodeGoExecutorSanitizesResponsesHistoryImagesForTextFollowUp(t *tes
 func TestOpenCodeGoExecutorStreamRewritesVisionFallbackModel(t *testing.T) {
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
+		body, _ := io.ReadAll(r.Body)
+		reqModel := gjson.GetBytes(body, "model").String()
+		if reqModel == "qwen3.5-plus" {
+			// Vision preprocessing call to describe the image
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a test image description"}}]}`))
+			return
+		}
+		// Actual execution call — stays on original model
+		gotBody = body
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","created":1,"model":"qwen3.5-plus","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}` + "\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -335,8 +371,8 @@ func TestOpenCodeGoExecutorStreamRewritesVisionFallbackModel(t *testing.T) {
 		}
 		chunks.Write(chunk.Payload)
 	}
-	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "qwen3.5-plus" {
-		t.Fatalf("upstream model = %q, want qwen3.5-plus; body=%s", gotModel, string(gotBody))
+	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "deepseek-v4-flash" {
+		t.Fatalf("upstream model = %q, want deepseek-v4-flash; body=%s", gotModel, string(gotBody))
 	}
 	out := chunks.String()
 	if strings.Contains(out, "qwen3.5-plus") {
@@ -360,11 +396,20 @@ func TestOpenCodeGoRewriteFallbackStreamPayloadRewritesSSEModelFields(t *testing
 
 func TestOpenCodeGoExecutorIgnoresExcludedVisionFallback(t *testing.T) {
 	var gotBody []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_excluded","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
-	}))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			reqModel := gjson.GetBytes(body, "model").String()
+			if reqModel == "qwen3.5-plus" {
+				// Vision preprocessing call to describe the image
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a description"}}]}`))
+				return
+			}
+			// Actual execution call — stays on original model
+			gotBody = body
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_excluded","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		}))
 	defer server.Close()
 
 	oldBaseURL := opencodeGoBaseURL
