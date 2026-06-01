@@ -1,12 +1,25 @@
 package vision
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 )
+
+type fakeAnalyzer struct {
+	resp AnalyzeResponse
+	err  error
+}
+
+func (f fakeAnalyzer) Analyze(context.Context, AnalyzeRequest) (AnalyzeResponse, error) {
+	return f.resp, f.err
+}
+
+func (f fakeAnalyzer) Name() string { return "fake" }
 
 func TestComputeHash(t *testing.T) {
 	h1 := ComputeHash("same-data")
@@ -241,9 +254,9 @@ func TestInjectRegistryNote(t *testing.T) {
 
 func TestDetectIntent(t *testing.T) {
 	tests := []struct {
-		msg     string
-		count   int
-		want    Intent
+		msg   string
+		count int
+		want  Intent
 	}{
 		{"好的", 2, IntentNone},
 		{"继续", 2, IntentNone},
@@ -362,10 +375,123 @@ func TestSessionKeyResolution(t *testing.T) {
 }
 
 func TestComputeImageHash(t *testing.T) {
-    h1 := ComputeHash("data")
-    h2 := ComputeHash("data2")
-    if h1 == h2 {
-        t.Fatal("different data should produce different hashes")
-    }
+	h1 := ComputeHash("data")
+	h2 := ComputeHash("data2")
+	if h1 == h2 {
+		t.Fatal("different data should produce different hashes")
+	}
 }
 
+func TestProcessorHistoricalReanalysisKeepsReachableState(t *testing.T) {
+	registry := newGlobalRegistry(DefaultGlobalConfig())
+	processor := &Processor{
+		registry: registry,
+		analyzer: fakeAnalyzer{resp: AnalyzeResponse{
+			Summary: ImageSummary{
+				Summary:  "reanalyzed",
+				OCRHints: []string{"ocr2"},
+			},
+		}},
+		maxEntries: DefaultGlobalConfig().MaxEntriesPerSession,
+	}
+
+	payload := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"first"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}]},{"role":"assistant","content":"ok"},{"role":"user","content":"第一张图里有什么？"}]}`)
+
+	res, err := processor.Process(context.Background(), payload, SessionKey("sess-1"), 1)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if !strings.Contains(res.RegistryNote, "Image #1: reanalyzed") {
+		t.Fatalf("registry note = %q, want reanalyzed summary", res.RegistryNote)
+	}
+	if strings.Contains(res.RegistryNote, "未出现在当前请求") {
+		t.Fatalf("registry note should not claim image is unavailable: %q", res.RegistryNote)
+	}
+
+	entries := registry.GetSession("sess-1").AllEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].CurrentPayloadReachable {
+		t.Fatal("historical image present in payload should be marked reachable")
+	}
+}
+
+func TestProcessorWithoutSessionAssignsDistinctEphemeralOrdinals(t *testing.T) {
+	processor := &Processor{
+		registry:   newGlobalRegistry(DefaultGlobalConfig()),
+		analyzer:   fakeAnalyzer{},
+		maxEntries: DefaultGlobalConfig().MaxEntriesPerSession,
+	}
+
+	payload := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]},{"role":"assistant","content":"ok"},{"role":"user","content":[{"type":"text","text":"b"},{"type":"image_url","image_url":{"url":"data:image/png;base64,BBBB"}}]},{"role":"assistant","content":"ok2"},{"role":"user","content":"继续"}]}`)
+
+	res, err := processor.Process(context.Background(), payload, "", 1)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	out := string(res.Payload)
+	if strings.Count(out, "[Image #1 from previous turn]") != 1 {
+		t.Fatalf("payload should contain exactly one Image #1 placeholder: %s", out)
+	}
+	if strings.Count(out, "[Image #2 from previous turn]") != 1 {
+		t.Fatalf("payload should contain exactly one Image #2 placeholder: %s", out)
+	}
+}
+
+func TestProcessorDuplicateCurrentImageDoesNotAdvanceOrdinal(t *testing.T) {
+	registry := newGlobalRegistry(DefaultGlobalConfig())
+	processor := &Processor{
+		registry:   registry,
+		analyzer:   fakeAnalyzer{},
+		maxEntries: DefaultGlobalConfig().MaxEntriesPerSession,
+	}
+
+	payload := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"first"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}]}]}`)
+
+	if _, err := processor.Process(context.Background(), payload, SessionKey("sess-dup"), 1); err != nil {
+		t.Fatalf("first Process() error = %v", err)
+	}
+	if _, err := processor.Process(context.Background(), payload, SessionKey("sess-dup"), 2); err != nil {
+		t.Fatalf("second Process() error = %v", err)
+	}
+
+	store := registry.GetSession("sess-dup")
+	if store == nil {
+		t.Fatal("expected session store to exist")
+	}
+	if store.nextOrdinal != 1 {
+		t.Fatalf("nextOrdinal = %d, want 1 for repeated same image", store.nextOrdinal)
+	}
+	if len(store.AllEntries()) != 1 {
+		t.Fatalf("expected 1 entry for repeated same image, got %d", len(store.AllEntries()))
+	}
+}
+
+func TestProcessorResetsReachabilityPerRequest(t *testing.T) {
+	registry := newGlobalRegistry(DefaultGlobalConfig())
+	processor := &Processor{
+		registry:   registry,
+		analyzer:   fakeAnalyzer{},
+		maxEntries: DefaultGlobalConfig().MaxEntriesPerSession,
+	}
+
+	payload1 := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"first"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`)
+	payload2 := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"data:image/png;base64,BBBB"}}]}]}`)
+	payload3 := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"first again"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]},{"role":"assistant","content":"ok"},{"role":"user","content":"还有什么细节？"}]}`)
+
+	if _, err := processor.Process(context.Background(), payload1, SessionKey("sess-reset"), 1); err != nil {
+		t.Fatalf("payload1 Process() error = %v", err)
+	}
+	if _, err := processor.Process(context.Background(), payload2, SessionKey("sess-reset"), 2); err != nil {
+		t.Fatalf("payload2 Process() error = %v", err)
+	}
+	res, err := processor.Process(context.Background(), payload3, SessionKey("sess-reset"), 3)
+	if err != nil {
+		t.Fatalf("payload3 Process() error = %v", err)
+	}
+
+	if strings.Count(res.RegistryNote, "未出现在当前请求") != 1 {
+		t.Fatalf("registry note should mark exactly one older image unavailable: %q", res.RegistryNote)
+	}
+}

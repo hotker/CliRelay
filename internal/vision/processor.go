@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/tidwall/gjson"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // ProcessResult contains the outcome of processing a payload through the registry.
@@ -46,7 +46,10 @@ func (p *Processor) Process(ctx context.Context, payload []byte, sessionKey Sess
 	var sessionStore *SessionStore
 	if hasSession {
 		sessionStore = p.registry.GetOrCreateSession(sessionKey)
+		sessionStore.ResetReachability()
 	}
+	ephemeralEntries := make(map[ImageHash]*ImageEntry)
+	ephemeralNextOrdinal := 0
 
 	// Separate current-turn from historical images
 	var currentParts, historicalParts []ImagePart
@@ -67,18 +70,27 @@ func (p *Processor) Process(ctx context.Context, payload []byte, sessionKey Sess
 		if data == "" {
 			continue
 		}
-		hash := ComputeHash(data)
 		if sessionStore == nil {
 			continue
 		}
-		ordinal := sessionStore.NextOrdinal()
-		sessionStore.GetOrCreateEntry(hash, ordinal, p.maxEntries)
+		hash := ComputeHash(data)
+		if sessionStore.GetEntry(hash) == nil {
+			ordinal := sessionStore.NextOrdinal()
+			sessionStore.GetOrCreateEntry(hash, ordinal, p.maxEntries)
+		}
 		sessionStore.UpdateEntry(hash, func(e *ImageEntry) {
 			e.SourceKind = ImageSourceUserUpload
-			e.FirstSeenTurn = turnIndex
+			if e.FirstSeenTurn == 0 {
+				e.FirstSeenTurn = turnIndex
+			}
 			e.LastSeenTurn = turnIndex
 			e.CurrentPayloadReachable = true
 			e.Availability = ImageAvailableInline
+			e.Occurrences = append(e.Occurrences, ImageOccurrence{
+				TurnIndex:  turnIndex,
+				MessageIdx: part.MsgIdx,
+				PartIdx:    part.PartIdx,
+			})
 		})
 	}
 
@@ -103,7 +115,23 @@ func (p *Processor) Process(ctx context.Context, payload []byte, sessionKey Sess
 			continue
 		}
 		hash := ComputeHash(data)
-		entry := p.findOrCreateEntry(sessionStore, hash, data, turnIndex)
+		entry := p.findOrCreateEntry(sessionStore, hash, turnIndex, ephemeralEntries, &ephemeralNextOrdinal)
+		if sessionStore != nil {
+			sessionStore.UpdateEntry(hash, func(e *ImageEntry) {
+				e.SourceKind = ImageSourceUserUpload
+				if e.FirstSeenTurn == 0 {
+					e.FirstSeenTurn = turnIndex
+				}
+				e.LastSeenTurn = turnIndex
+				e.CurrentPayloadReachable = true
+				e.Availability = ImageAvailableInline
+				e.Occurrences = append(e.Occurrences, ImageOccurrence{
+					TurnIndex:  turnIndex,
+					MessageIdx: part.MsgIdx,
+					PartIdx:    part.PartIdx,
+				})
+			})
+		}
 		placeholder := BuildShortPlaceholder(entry)
 
 		var err error
@@ -149,13 +177,21 @@ type ImageDataInfo struct {
 	MIMEType string
 }
 
-func (p *Processor) findOrCreateEntry(sessionStore *SessionStore, hash ImageHash, data string, turnIndex int) *ImageEntry {
+func (p *Processor) findOrCreateEntry(sessionStore *SessionStore, hash ImageHash, turnIndex int, ephemeralEntries map[ImageHash]*ImageEntry, ephemeralNextOrdinal *int) *ImageEntry {
 	if sessionStore == nil {
-		return &ImageEntry{
-			Hash:          hash,
-			StableOrdinal: 1,
-			Summary:       ImageSummary{Confidence: "low"},
+		if entry, ok := ephemeralEntries[hash]; ok {
+			return entry
 		}
+		*ephemeralNextOrdinal = *ephemeralNextOrdinal + 1
+		entry := &ImageEntry{
+			Hash:                    hash,
+			StableOrdinal:           *ephemeralNextOrdinal,
+			CurrentPayloadReachable: true,
+			Availability:            ImageAvailableInline,
+			Summary:                 ImageSummary{Confidence: "low"},
+		}
+		ephemeralEntries[hash] = entry
+		return entry
 	}
 	existing := sessionStore.GetEntry(hash)
 	if existing != nil {

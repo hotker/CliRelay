@@ -147,6 +147,18 @@ func (s *SessionStore) NextOrdinal() int {
 	return s.nextOrdinal
 }
 
+// ResetReachability marks all entries as not reachable for the current request.
+// Callers should then mark the entries actually present in the request as reachable.
+func (s *SessionStore) ResetReachability() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entries {
+		e.CurrentPayloadReachable = false
+		e.Availability = ImageUnavailableNow
+	}
+	s.updatedAt = time.Now()
+}
+
 // GetOrCreateEntry finds an existing entry by hash or creates a new one.
 func (s *SessionStore) GetOrCreateEntry(hash ImageHash, ordinal int, maxEntries int) *ImageEntry {
 	s.mu.Lock()
