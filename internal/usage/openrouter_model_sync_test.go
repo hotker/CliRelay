@@ -522,8 +522,12 @@ func TestSyncOpenRouterModelsQwen8DigitDateSuffixUpdatesBaseModel(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SyncOpenRouterModelList() error = %v", err)
 	}
-	if result.Seen != 1 || result.Added != 0 || result.Updated != 1 || result.Skipped != 0 {
+	if result.Seen != 1 || result.Added != 1 || result.Updated != 0 || result.Skipped != 0 {
 		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	if _, ok := GetModelConfig("qwen3.5-plus-20260420"); !ok {
+		t.Fatal("expected variant qwen3.5-plus-20260420 to exist as a separate row")
 	}
 
 	updated, ok := GetModelConfig("qwen3.5-plus")
@@ -578,9 +582,10 @@ func TestSyncOpenRouterModelsQwenSegmentedDateSuffixUpdatesBaseModel(t *testing.
 
 func TestSyncOpenRouterModelsVariantGroupHighestPricing(t *testing.T) {
 	initModelConfigTestDB(t)
+	seedBaseModelForTest(t, "qwen3.5-plus", "qwen")
 
-	// Both variants map to the same base qwen3.5-plus. The first sync creates the
-	// base row; the merge pass aggregates the highest prices from both variants.
+	// Both variants are stored with their full IDs. The merge pass groups
+	// them by canonical base ID and aggregates the highest prices.
 	result, err := SyncOpenRouterModelList(context.Background(), []OpenRouterRemoteModel{
 		{
 			ID:          "qwen/qwen3.5-plus-20260420",
@@ -607,8 +612,8 @@ func TestSyncOpenRouterModelsVariantGroupHighestPricing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncOpenRouterModelList() error = %v", err)
 	}
-	if result.Seen != 2 || result.Updated < 1 {
-		t.Fatalf("expected 2 seen and at least 1 updated, got %+v", result)
+	if result.Seen != 2 || result.Added != 2 {
+		t.Fatalf("expected 2 seen and 2 added (one per variant), got %+v", result)
 	}
 
 	updated, ok := GetModelConfig("qwen3.5-plus")
@@ -625,6 +630,7 @@ func TestSyncOpenRouterModelsVariantGroupHighestPricing(t *testing.T) {
 
 func TestSyncOpenRouterModelsVariantGroupTwoVariantsSecondHasHigherCachedPrice(t *testing.T) {
 	initModelConfigTestDB(t)
+	seedBaseModelForTest(t, "qwen3.5-plus", "qwen")
 
 	_, err := SyncOpenRouterModelList(context.Background(), []OpenRouterRemoteModel{
 		{
@@ -729,8 +735,7 @@ func TestSyncOpenRouterModelsExactBaseMatchBeforeVariant(t *testing.T) {
 		t.Fatalf("SyncOpenRouterModelList() error = %v", err)
 	}
 	// First model: exact match → modelID="qwen3.5-plus" (no strip) → added=1
-	// Second model: variant → modelID="qwen3.5-plus" (stripped) → updated=1
-	if result.Seen != 2 || result.Added != 1 || result.Updated < 1 {
+	if result.Seen != 2 || result.Added != 2 {
 		t.Fatalf("unexpected sync result: %+v", result)
 	}
 

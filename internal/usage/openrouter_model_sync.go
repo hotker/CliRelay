@@ -420,8 +420,8 @@ func openRouterLocalModelID(remoteModelID, owner string) string {
 	modelID := openRouterProviderlessModelID(remoteModelID)
 	if normalizeModelOwnerValue(owner) == "anthropic" {
 		modelID = strings.ReplaceAll(modelID, ".", "-")
+		modelID = openRouterStripDateSuffix(modelID)
 	}
-	modelID = openRouterStripDateSuffix(modelID)
 	return modelID
 }
 
@@ -668,6 +668,20 @@ func openRouterIsAnthropicReleaseDateAlias(modelID, baseModelID string) bool {
 	return openRouterIsDateSuffixAlias(modelID, baseModelID)
 }
 
+// openRouterCanonicalGroupID computes a unique group key for variant merging.
+// It applies the same normalizations as openRouterLocalModelID (Anthropic dot-to-dash)
+// and then strips date/version suffixes. Unlike openRouterLocalModelID, this is
+// called on raw remote IDs (with provider prefix) and always strips date suffixes
+// regardless of owner, so exact matches and date variants of the same model are
+// grouped together in the merge pass.
+func openRouterCanonicalGroupID(remoteModelID string) string {
+	providerless := openRouterProviderlessModelID(remoteModelID)
+	if normalizeModelOwnerValue(openRouterOwnerFromModelID(remoteModelID)) == "anthropic" {
+		providerless = strings.ReplaceAll(providerless, ".", "-")
+	}
+	return openRouterStripDateSuffix(providerless)
+}
+
 // openRouterMergeVariantGroups performs a second pass after the main sync loop.
 // It groups all remote models by their date-stripped base ID and updates existing
 // base model config rows with the highest prices and best metadata found across
@@ -690,7 +704,7 @@ func openRouterMergeVariantGroups(models []OpenRouterRemoteModel) error {
 			continue
 		}
 		providerless := openRouterProviderlessModelID(remoteModelID)
-		baseID := openRouterStripDateSuffix(providerless)
+		baseID := openRouterCanonicalGroupID(remoteModelID)
 		groups[baseID] = append(groups[baseID], groupEntry{
 			providerlessID: providerless,
 			model:          m,
@@ -702,11 +716,6 @@ func openRouterMergeVariantGroups(models []OpenRouterRemoteModel) error {
 		if !exists {
 			continue
 		}
-		// Skip groups with only one member — the main loop already handled it.
-		if len(entries) < 2 {
-			continue
-		}
-
 		// Aggregate: highest prices, best description, most complete modalities.
 		bestInputPrice := baseModel.InputPricePerMillion
 		bestOutputPrice := baseModel.OutputPricePerMillion
@@ -734,12 +743,8 @@ func openRouterMergeVariantGroups(models []OpenRouterRemoteModel) error {
 				bestDesc = desc
 			}
 			inMod, outMod := openRouterModelModalities(e.model)
-			if len(inMod) > len(bestModalities.input) {
-				bestModalities.input = inMod
-			}
-			if len(outMod) > len(bestModalities.output) {
-				bestModalities.output = outMod
-			}
+			bestModalities.input = unionModalities(bestModalities.input, inMod)
+			bestModalities.output = unionModalities(bestModalities.output, outMod)
 		}
 
 		// Apply the merged data back to the base model.
@@ -775,6 +780,36 @@ func openRouterMergeVariantGroups(models []OpenRouterRemoteModel) error {
 	}
 
 	return nil
+}
+
+// unionModalities returns a deduplicated union of two modality slices.
+// The order is preserved from a, with any missing entries from b appended.
+func unionModalities(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, m := range a {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	for _, m := range b {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	return out
 }
 
 func ownerMatchesOpenRouterAliasPrefix(owner, cleanOwner string) bool {
