@@ -56,7 +56,7 @@ func TestSanitizeOpenCodeGoKeysDropsEmptyAndDeduplicates(t *testing.T) {
 			{APIKey: " "},
 			{APIKey: "go-key", Prefix: " team "},
 			{APIKey: "go-key", Prefix: "duplicate"},
-			{APIKey: "go-key-2", Headers: map[string]string{" X-Trace ": " on "}, VisionFallbackModel: " qwen3.6-plus "},
+			{APIKey: "go-key-2", Headers: map[string]string{" X-Trace ": " on "}, VisionFallbackModel: " qwen3.6-plus ", WorkspaceID: " wrk_123 ", AuthCookie: " auth-token "},
 		},
 	}
 
@@ -73,5 +73,8 @@ func TestSanitizeOpenCodeGoKeysDropsEmptyAndDeduplicates(t *testing.T) {
 	}
 	if cfg.OpenCodeGoKey[1].VisionFallbackModel != "qwen3.6-plus" {
 		t.Fatalf("vision fallback model = %q, want qwen3.6-plus", cfg.OpenCodeGoKey[1].VisionFallbackModel)
+	}
+	if cfg.OpenCodeGoKey[1].WorkspaceID != "wrk_123" || cfg.OpenCodeGoKey[1].AuthCookie != "auth-token" {
+		t.Fatalf("usage fields not normalized: %+v", cfg.OpenCodeGoKey[1])
 	}
 }

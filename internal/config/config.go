@@ -734,6 +734,12 @@ type OpenCodeGoKey struct {
 
 	// VisionFallbackModel is used for image requests whose requested model lacks vision support.
 	VisionFallbackModel string `yaml:"vision-fallback-model,omitempty" json:"vision-fallback-model,omitempty"`
+
+	// WorkspaceID identifies the OpenCode workspace used for dashboard usage checks.
+	WorkspaceID string `yaml:"-" json:"workspace-id,omitempty"`
+
+	// AuthCookie stores the OpenCode dashboard auth cookie value used for usage checks.
+	AuthCookie string `yaml:"-" json:"auth-cookie,omitempty"`
 }
 
 // LoadConfig reads a YAML configuration file from the given path,
@@ -1166,6 +1172,8 @@ func (cfg *Config) SanitizeOpenCodeGoKeys() {
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
 		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.WorkspaceID = strings.TrimSpace(entry.WorkspaceID)
+		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 		out = append(out, entry)
 	}
 	cfg.OpenCodeGoKey = out

@@ -1059,6 +1059,8 @@ func (h *Handler) PatchOpenCodeGoKey(c *gin.Context) {
 		Headers        *map[string]string `json:"headers"`
 		ExcludedModels *[]string          `json:"excluded-models"`
 		VisionFallback *string            `json:"vision-fallback-model"`
+		WorkspaceID    *string            `json:"workspace-id"`
+		AuthCookie     *string            `json:"auth-cookie"`
 	}
 	var body struct {
 		APIKey *string          `json:"api-key"`
@@ -1124,6 +1126,12 @@ func (h *Handler) PatchOpenCodeGoKey(c *gin.Context) {
 	}
 	if body.Value.VisionFallback != nil {
 		entry.VisionFallbackModel = strings.TrimSpace(*body.Value.VisionFallback)
+	}
+	if body.Value.WorkspaceID != nil {
+		entry.WorkspaceID = strings.TrimSpace(*body.Value.WorkspaceID)
+	}
+	if body.Value.AuthCookie != nil {
+		entry.AuthCookie = strings.TrimSpace(*body.Value.AuthCookie)
 	}
 	normalizeOpenCodeGoKey(&entry)
 	if entry.APIKey == "" {
@@ -1827,6 +1835,8 @@ func normalizeOpenCodeGoKey(entry *config.OpenCodeGoKey) {
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
 	entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+	entry.WorkspaceID = strings.TrimSpace(entry.WorkspaceID)
+	entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 }
 
 func normalizedOpenCodeGoKeyEntries(entries []config.OpenCodeGoKey) []config.OpenCodeGoKey {
