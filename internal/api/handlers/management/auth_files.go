@@ -845,38 +845,26 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 			defer oauthcallback.StopInstance(ctx, callbackPort, forwarder)
 		}
 
-		// Wait for callback file written by server route
-		waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-gemini-%s.oauth", state))
 		fmt.Println("Waiting for authentication callback...")
-		deadline := time.Now().Add(oauthCallbackWaitTimeout)
-		var authCode string
-		for {
-			if !IsOAuthSessionPending(state, "gemini") {
+		resultMap, errWait := WaitOAuthCallbackFile(h.cfg.AuthDir, "gemini", state, oauthCallbackWaitTimeout)
+		if errWait != nil {
+			if errors.Is(errWait, errOAuthSessionNotPending) {
 				return
 			}
-			if time.Now().After(deadline) {
-				log.Error("oauth flow timed out")
-				SetOAuthSessionError(state, "OAuth flow timed out")
-				return
-			}
-			if data, errR := os.ReadFile(waitFile); errR == nil {
-				var m map[string]string
-				_ = json.Unmarshal(data, &m)
-				_ = os.Remove(waitFile)
-				if errStr := m["error"]; errStr != "" {
-					log.Errorf("Authentication failed: %s", errStr)
-					SetOAuthSessionError(state, "Authentication failed")
-					return
-				}
-				authCode = m["code"]
-				if authCode == "" {
-					log.Errorf("Authentication failed: code not found")
-					SetOAuthSessionError(state, "Authentication failed: code not found")
-					return
-				}
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
+			log.Error("oauth flow timed out")
+			SetOAuthSessionError(state, "OAuth flow timed out")
+			return
+		}
+		if errStr := resultMap["error"]; errStr != "" {
+			log.Errorf("Authentication failed: %s", errStr)
+			SetOAuthSessionError(state, "Authentication failed")
+			return
+		}
+		authCode := resultMap["code"]
+		if authCode == "" {
+			log.Errorf("Authentication failed: code not found")
+			SetOAuthSessionError(state, "Authentication failed: code not found")
+			return
 		}
 
 		// Exchange authorization code for token
