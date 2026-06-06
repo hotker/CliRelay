@@ -633,67 +633,35 @@ func (h *Handler) removeAuth(ctx context.Context, id string) {
 }
 
 func (h *Handler) deleteTokenRecord(ctx context.Context, path string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("auth path is empty")
-	}
-	store := h.tokenStoreWithBaseDir()
-	if store == nil {
-		return fmt.Errorf("token store unavailable")
-	}
-	return store.Delete(ctx, path)
+	return h.authFileRepository().Delete(ctx, path)
 }
 
-func (h *Handler) tokenStoreWithBaseDir() coreauth.Store {
+func (h *Handler) authFileRepository() managementauthfiles.Repository {
 	if h == nil {
-		return nil
+		return managementauthfiles.Repository{}
 	}
 	store := h.tokenStore
 	if store == nil {
 		store = sdkAuth.GetTokenStore()
 		h.tokenStore = store
 	}
+	baseDir := ""
 	if h.cfg != nil {
-		if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
-			dirSetter.SetBaseDir(h.cfg.AuthDir)
-		}
+		baseDir = h.cfg.AuthDir
 	}
-	return store
+	return managementauthfiles.Repository{
+		Store:        store,
+		BaseDir:      baseDir,
+		PostAuthHook: h.postAuthHook,
+	}
 }
 
 func (h *Handler) persistAuthFileChange(ctx context.Context, message string, paths ...string) error {
-	store := h.tokenStoreWithBaseDir()
-	if store == nil {
-		return nil
-	}
-	persister, ok := store.(interface {
-		PersistAuthFiles(context.Context, string, ...string) error
-	})
-	if !ok {
-		return nil
-	}
-	if strings.TrimSpace(message) == "" {
-		message = "Update auth file"
-	}
-	if err := persister.PersistAuthFiles(ctx, message, paths...); err != nil {
-		return fmt.Errorf("failed to persist auth file: %w", err)
-	}
-	return nil
+	return h.authFileRepository().PersistChange(ctx, message, paths...)
 }
 
 func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (string, error) {
-	if record == nil {
-		return "", fmt.Errorf("token record is nil")
-	}
-	store := h.tokenStoreWithBaseDir()
-	if store == nil {
-		return "", fmt.Errorf("token store unavailable")
-	}
-	if h.postAuthHook != nil {
-		if err := h.postAuthHook(ctx, record); err != nil {
-			return "", fmt.Errorf("post-auth hook failed: %w", err)
-		}
-	}
-	return store.Save(ctx, record)
+	return h.authFileRepository().Save(ctx, record)
 }
 
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
