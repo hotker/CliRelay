@@ -34,6 +34,38 @@ func RecordFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage, now t
 	}
 }
 
+func CookieRecordFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage, now time.Time) *coreauth.Auth {
+	if tokenStorage == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	email := strings.TrimSpace(tokenStorage.Email)
+	if email == "" {
+		return nil
+	}
+
+	fileStem := internaliflow.SanitizeIFlowFileName(email)
+	if fileStem == "" {
+		fileStem = fmt.Sprintf("iflow-%d", now.UnixMilli())
+	} else {
+		fileStem = fmt.Sprintf("iflow-%s", fileStem)
+	}
+	fileName := fmt.Sprintf("%s-%d.json", fileStem, now.Unix())
+	tokenStorage.Email = email
+
+	return &coreauth.Auth{
+		ID:         fileName,
+		Provider:   "iflow",
+		FileName:   fileName,
+		Storage:    tokenStorage,
+		Metadata:   CookieMetadataFromTokenStorage(tokenStorage),
+		Attributes: AttributesFromTokenStorage(tokenStorage),
+	}
+}
+
 func MetadataFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage, identifier string) map[string]any {
 	metadata := map[string]any{
 		"email": strings.TrimSpace(identifier),
@@ -43,6 +75,20 @@ func MetadataFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage, ide
 	}
 	metadata["api_key"] = tokenStorage.APIKey
 	return metadata
+}
+
+func CookieMetadataFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage) map[string]any {
+	if tokenStorage == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"email":        strings.TrimSpace(tokenStorage.Email),
+		"api_key":      tokenStorage.APIKey,
+		"expired":      tokenStorage.Expire,
+		"cookie":       tokenStorage.Cookie,
+		"type":         tokenStorage.Type,
+		"last_refresh": tokenStorage.LastRefresh,
+	}
 }
 
 func AttributesFromTokenStorage(tokenStorage *internaliflow.IFlowTokenStorage) map[string]string {

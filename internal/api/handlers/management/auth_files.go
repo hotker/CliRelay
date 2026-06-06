@@ -1638,33 +1638,7 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 		return
 	}
 
-	fileName := iflowauth.SanitizeIFlowFileName(email)
-	if fileName == "" {
-		fileName = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
-	} else {
-		fileName = fmt.Sprintf("iflow-%s", fileName)
-	}
-
-	tokenStorage.Email = email
-	timestamp := time.Now().Unix()
-
-	record := &coreauth.Auth{
-		ID:       fmt.Sprintf("%s-%d.json", fileName, timestamp),
-		Provider: "iflow",
-		FileName: fmt.Sprintf("%s-%d.json", fileName, timestamp),
-		Storage:  tokenStorage,
-		Metadata: map[string]any{
-			"email":        email,
-			"api_key":      tokenStorage.APIKey,
-			"expired":      tokenStorage.Expire,
-			"cookie":       tokenStorage.Cookie,
-			"type":         tokenStorage.Type,
-			"last_refresh": tokenStorage.LastRefresh,
-		},
-		Attributes: map[string]string{
-			"api_key": tokenStorage.APIKey,
-		},
-	}
+	record := iflowprovider.CookieRecordFromTokenStorage(tokenStorage, time.Now())
 
 	savedPath, errSave := h.saveTokenRecord(ctx, record)
 	if errSave != nil {

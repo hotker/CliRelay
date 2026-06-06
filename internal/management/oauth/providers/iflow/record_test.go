@@ -58,3 +58,64 @@ func TestRecordFromTokenStorageHandlesNilStorage(t *testing.T) {
 		t.Fatalf("RecordFromTokenStorage(nil) = %#v, want nil", record)
 	}
 }
+
+func TestCookieRecordFromTokenStorageBuildsCookieRecord(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 30, 45, 123000000, time.UTC)
+	storage := &internaliflow.IFlowTokenStorage{
+		Email:       " user*name@example.com ",
+		APIKey:      "api-key",
+		Expire:      "2026-06-07T00:00:00Z",
+		Cookie:      "BXAuth=cookie;",
+		Type:        "iflow",
+		LastRefresh: "2026-06-06T12:00:00Z",
+	}
+
+	record := CookieRecordFromTokenStorage(storage, now)
+	if record == nil {
+		t.Fatal("CookieRecordFromTokenStorage() = nil")
+	}
+	if record.ID != "iflow-userxname@example.com-1780749045.json" || record.FileName != "iflow-userxname@example.com-1780749045.json" {
+		t.Fatalf("ID/FileName = %q/%q, want sanitized timestamped cookie filename", record.ID, record.FileName)
+	}
+	if storage.Email != "user*name@example.com" {
+		t.Fatalf("storage.Email = %q, want trimmed original email", storage.Email)
+	}
+	if record.Provider != "iflow" || record.Storage != storage {
+		t.Fatalf("provider/storage = %q/%#v, want iflow/original storage", record.Provider, record.Storage)
+	}
+	for key, want := range map[string]string{
+		"email":        "user*name@example.com",
+		"api_key":      "api-key",
+		"expired":      "2026-06-07T00:00:00Z",
+		"cookie":       "BXAuth=cookie;",
+		"type":         "iflow",
+		"last_refresh": "2026-06-06T12:00:00Z",
+	} {
+		if got, _ := record.Metadata[key].(string); got != want {
+			t.Fatalf("metadata[%s] = %q, want %q", key, got, want)
+		}
+	}
+	if got := record.Attributes["api_key"]; got != "api-key" {
+		t.Fatalf("attributes[api_key] = %q, want api-key", got)
+	}
+}
+
+func TestCookieRecordFromTokenStorageUsesTimestampFallbackForUnsanitizableEmail(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 30, 45, 123000000, time.UTC)
+	record := CookieRecordFromTokenStorage(&internaliflow.IFlowTokenStorage{Email: " 用户 "}, now)
+	if record == nil {
+		t.Fatal("CookieRecordFromTokenStorage() = nil")
+	}
+	if record.ID != "iflow-1780749045123-1780749045.json" {
+		t.Fatalf("ID = %q, want timestamp fallback filename", record.ID)
+	}
+}
+
+func TestCookieRecordFromTokenStorageRequiresEmail(t *testing.T) {
+	if record := CookieRecordFromTokenStorage(&internaliflow.IFlowTokenStorage{}, time.Time{}); record != nil {
+		t.Fatalf("CookieRecordFromTokenStorage(empty email) = %#v, want nil", record)
+	}
+	if record := CookieRecordFromTokenStorage(nil, time.Time{}); record != nil {
+		t.Fatalf("CookieRecordFromTokenStorage(nil) = %#v, want nil", record)
+	}
+}
