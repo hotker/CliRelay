@@ -1228,41 +1228,30 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 			defer oauthcallback.StopInstance(ctx, callbackPort, forwarder)
 		}
 
-		waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-antigravity-%s.oauth", state))
-		deadline := time.Now().Add(oauthCallbackWaitTimeout)
-		var authCode string
-		for {
-			if !IsOAuthSessionPending(state, "antigravity") {
+		payload, errWait := WaitOAuthCallbackFile(h.cfg.AuthDir, "antigravity", state, oauthCallbackWaitTimeout)
+		if errWait != nil {
+			if errors.Is(errWait, errOAuthSessionNotPending) {
 				return
 			}
-			if time.Now().After(deadline) {
-				log.Error("oauth flow timed out")
-				SetOAuthSessionError(state, "OAuth flow timed out")
-				return
-			}
-			if data, errReadFile := os.ReadFile(waitFile); errReadFile == nil {
-				var payload map[string]string
-				_ = json.Unmarshal(data, &payload)
-				_ = os.Remove(waitFile)
-				if errStr := strings.TrimSpace(payload["error"]); errStr != "" {
-					log.Errorf("Authentication failed: %s", errStr)
-					SetOAuthSessionError(state, "Authentication failed")
-					return
-				}
-				if payloadState := strings.TrimSpace(payload["state"]); payloadState != "" && payloadState != state {
-					log.Errorf("Authentication failed: state mismatch")
-					SetOAuthSessionError(state, "Authentication failed: state mismatch")
-					return
-				}
-				authCode = strings.TrimSpace(payload["code"])
-				if authCode == "" {
-					log.Error("Authentication failed: code not found")
-					SetOAuthSessionError(state, "Authentication failed: code not found")
-					return
-				}
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
+			log.Error("oauth flow timed out")
+			SetOAuthSessionError(state, "OAuth flow timed out")
+			return
+		}
+		if errStr := strings.TrimSpace(payload["error"]); errStr != "" {
+			log.Errorf("Authentication failed: %s", errStr)
+			SetOAuthSessionError(state, "Authentication failed")
+			return
+		}
+		if payloadState := strings.TrimSpace(payload["state"]); payloadState != "" && payloadState != state {
+			log.Errorf("Authentication failed: state mismatch")
+			SetOAuthSessionError(state, "Authentication failed: state mismatch")
+			return
+		}
+		authCode := strings.TrimSpace(payload["code"])
+		if authCode == "" {
+			log.Error("Authentication failed: code not found")
+			SetOAuthSessionError(state, "Authentication failed: code not found")
+			return
 		}
 
 		tokenResp, errToken := authSvc.ExchangeCodeForTokens(ctx, authCode, redirectURI)
