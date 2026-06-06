@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/antigravity"
 	geminiAuth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
@@ -732,134 +731,41 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	ctx := detachedAuthContext(c)
 
-	fmt.Println("Initializing Antigravity authentication...")
-
-	authSvc := antigravity.NewAntigravityAuth(h.cfg, nil)
-
-	state, errState := misc.GenerateRandomState()
-	if errState != nil {
-		log.Errorf("Failed to generate state parameter: %v", errState)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
-		return
-	}
-
-	isWebUI := isWebUIRequest(c)
-	var forwarder *oauthcallback.Forwarder
-	callbackPort := antigravity.CallbackPort
-	if isWebUI {
-		targetURL, errTarget := h.managementCallbackURL("/antigravity/callback")
-		if errTarget != nil {
-			log.WithError(errTarget).Error("failed to compute antigravity callback target")
+	result, err := antigravityprovider.StartOAuthLogin(ctx, antigravityprovider.OAuthLoginOptions{
+		Config:              h.cfg,
+		WebUI:               isWebUIRequest(c),
+		CallbackTarget:      h.managementCallbackURL,
+		WaitCallback:        WaitOAuthCallbackFile,
+		CallbackWaitTimeout: oauthCallbackWaitTimeout,
+		SaveRecord:          h.saveTokenRecord,
+		Sessions: antigravityprovider.SessionCallbacks{
+			Register:         RegisterOAuthSession,
+			SetError:         SetOAuthSessionError,
+			Complete:         CompleteOAuthSession,
+			CompleteProvider: CompleteOAuthSessionsByProvider,
+		},
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, antigravityprovider.ErrStateGeneration):
+			log.Errorf("Failed to generate state parameter: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
+		case errors.Is(err, antigravityprovider.ErrCallbackUnavailable):
+			log.WithError(err).Error("failed to compute antigravity callback target")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "callback server unavailable"})
-			return
-		}
-		var errStart error
-		if forwarder, callbackPort, errStart = oauthcallback.StartOnAvailablePort(antigravity.CallbackPort, "antigravity", targetURL); errStart != nil {
-			log.WithError(errStart).Error("failed to start antigravity callback forwarder")
+		case errors.Is(err, antigravityprovider.ErrCallbackStart):
+			log.WithError(err).Error("failed to start antigravity callback forwarder")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start callback server"})
-			return
+		case errors.Is(err, antigravityprovider.ErrOAuthClientIDMissing):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "antigravity oauth client-id not configured"})
+		default:
+			log.WithError(err).Error("failed to start antigravity oauth flow")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start oauth flow"})
 		}
-	}
-
-	redirectURI := fmt.Sprintf("http://localhost:%d/oauth-callback", callbackPort)
-	authURL := authSvc.BuildAuthURL(state, redirectURI)
-	if strings.TrimSpace(authURL) == "" {
-		if isWebUI {
-			oauthcallback.StopInstance(ctx, callbackPort, forwarder)
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "antigravity oauth client-id not configured"})
 		return
 	}
 
-	RegisterOAuthSession(state, "antigravity")
-
-	go func() {
-		if isWebUI {
-			defer oauthcallback.StopInstance(ctx, callbackPort, forwarder)
-		}
-
-		payload, errWait := WaitOAuthCallbackFile(h.cfg.AuthDir, "antigravity", state, oauthCallbackWaitTimeout)
-		if errWait != nil {
-			if errors.Is(errWait, errOAuthSessionNotPending) {
-				return
-			}
-			log.Error("oauth flow timed out")
-			SetOAuthSessionError(state, "OAuth flow timed out")
-			return
-		}
-		if errStr := strings.TrimSpace(payload["error"]); errStr != "" {
-			log.Errorf("Authentication failed: %s", errStr)
-			SetOAuthSessionError(state, "Authentication failed")
-			return
-		}
-		if payloadState := strings.TrimSpace(payload["state"]); payloadState != "" && payloadState != state {
-			log.Errorf("Authentication failed: state mismatch")
-			SetOAuthSessionError(state, "Authentication failed: state mismatch")
-			return
-		}
-		authCode := strings.TrimSpace(payload["code"])
-		if authCode == "" {
-			log.Error("Authentication failed: code not found")
-			SetOAuthSessionError(state, "Authentication failed: code not found")
-			return
-		}
-
-		tokenResp, errToken := authSvc.ExchangeCodeForTokens(ctx, authCode, redirectURI)
-		if errToken != nil {
-			log.Errorf("Failed to exchange token: %v", errToken)
-			SetOAuthSessionError(state, "Failed to exchange token")
-			return
-		}
-
-		accessToken := strings.TrimSpace(tokenResp.AccessToken)
-		if accessToken == "" {
-			log.Error("antigravity: token exchange returned empty access token")
-			SetOAuthSessionError(state, "Failed to exchange token")
-			return
-		}
-
-		email, errInfo := authSvc.FetchUserInfo(ctx, accessToken)
-		if errInfo != nil {
-			log.Errorf("Failed to fetch user info: %v", errInfo)
-			SetOAuthSessionError(state, "Failed to fetch user info")
-			return
-		}
-		email = strings.TrimSpace(email)
-		if email == "" {
-			log.Error("antigravity: user info returned empty email")
-			SetOAuthSessionError(state, "Failed to fetch user info")
-			return
-		}
-
-		projectID := ""
-		if accessToken != "" {
-			fetchedProjectID, errProject := authSvc.FetchProjectID(ctx, accessToken)
-			if errProject != nil {
-				log.Warnf("antigravity: failed to fetch project ID: %v", errProject)
-			} else {
-				projectID = fetchedProjectID
-				log.Infof("antigravity: obtained project ID %s", projectID)
-			}
-		}
-
-		record := antigravityprovider.RecordFromTokenResponse(tokenResp, email, projectID, time.Now())
-		savedPath, errSave := h.saveTokenRecord(ctx, record)
-		if errSave != nil {
-			log.Errorf("Failed to save token to file: %v", errSave)
-			SetOAuthSessionError(state, "Failed to save token to file")
-			return
-		}
-
-		CompleteOAuthSession(state)
-		CompleteOAuthSessionsByProvider("antigravity")
-		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
-		if projectID != "" {
-			fmt.Printf("Using GCP project: %s\n", projectID)
-		}
-		fmt.Println("You can now use Antigravity services through this CLI")
-	}()
-
-	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+	c.JSON(200, gin.H{"status": "ok", "url": result.AuthURL, "state": result.State})
 }
 
 func (h *Handler) RequestQwenToken(c *gin.Context) {
