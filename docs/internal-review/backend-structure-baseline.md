@@ -18,15 +18,15 @@ docs/internal-review/backend-structure-allowlist.json
 
 ## 当前结构指标
 
-基于 2026-06-06 Phase 1 management routes 拆分后的基线：
+基于 2026-06-06 Phase 1 management route domains 拆分后的基线：
 
 | 指标 | 数量 |
 | --- | ---: |
-| Go 文件总数 | 656 |
-| 生产 Go 文件 | 442 |
+| Go 文件总数 | 664 |
+| 生产 Go 文件 | 450 |
 | 测试 Go 文件 | 214 |
-| `internal/` Go 文件 | 533 |
-| `internal/` 生产 Go 文件 | 371 |
+| `internal/` Go 文件 | 541 |
+| `internal/` 生产 Go 文件 | 379 |
 | `internal/` 测试 Go 文件 | 162 |
 | 生产 Go 文件中 `>800` 行 | 25 |
 | 生产 Go 文件中 `>1200` 行 | 13 |
