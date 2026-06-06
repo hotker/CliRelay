@@ -16,6 +16,7 @@ import (
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	geminiAuth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/geminicli"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -266,7 +267,7 @@ func (h *Handler) reconcileCodexWhamUsagePlan(ctx context.Context, auth *coreaut
 	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return nil
 	}
-	planType := normalizeTagValue(payload.PlanType)
+	planType := managementauthfiles.NormalizeTagValue(payload.PlanType)
 	if planType == "" {
 		return nil
 	}
@@ -279,7 +280,7 @@ func (h *Handler) reconcileCodexWhamUsagePlan(ctx context.Context, auth *coreaut
 		auth.Metadata["type"] = "codex"
 		changed = true
 	}
-	currentPlanType := normalizeTagValue(metadataString(auth.Metadata, "plan_type", "planType"))
+	currentPlanType := managementauthfiles.NormalizeTagValue(managementauthfiles.MetadataString(auth.Metadata, "plan_type", "planType"))
 	if currentPlanType != planType {
 		auth.Metadata["plan_type"] = planType
 		delete(auth.Metadata, "planType")
@@ -310,11 +311,11 @@ func reconcileAuthExplicitDisplayTags(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
 	}
-	currentTags, ok := metadataStringSliceWithPresence(auth.Metadata, "display_tags")
+	currentTags, ok := managementauthfiles.MetadataStringSliceWithPresence(auth.Metadata, "display_tags")
 	if !ok {
 		return false
 	}
-	reconciledTags := buildAuthTagPayload(auth).DisplayTags
+	reconciledTags := managementauthfiles.BuildTagPayload(auth).DisplayTags
 	if normalizedStringSlicesEqual(currentTags, reconciledTags) {
 		return false
 	}
@@ -327,7 +328,7 @@ func normalizedStringSlicesEqual(a []string, b []string) bool {
 		return false
 	}
 	for i := range a {
-		if normalizeTagValue(a[i]) != normalizeTagValue(b[i]) {
+		if managementauthfiles.NormalizeTagValue(a[i]) != managementauthfiles.NormalizeTagValue(b[i]) {
 			return false
 		}
 	}

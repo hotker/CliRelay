@@ -379,12 +379,12 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 			entry["account"] = account
 		}
 	}
-	tags := buildAuthTagPayload(auth)
+	tags := managementauthfiles.BuildTagPayload(auth)
 	entry["default_tags"] = tags.DefaultTags
 	entry["custom_tags"] = tags.CustomTags
 	entry["hidden_default_tags"] = tags.HiddenDefaultTags
 	entry["display_tags"] = tags.DisplayTags
-	if planType := normalizeTagValue(metadataString(auth.Metadata, "plan_type", "planType")); planType != "" {
+	if planType := managementauthfiles.NormalizeTagValue(managementauthfiles.MetadataString(auth.Metadata, "plan_type", "planType")); planType != "" {
 		entry["plan_type"] = planType
 	}
 	managementauthfiles.AddSubscriptionFields(entry, auth.Metadata, time.Now())
@@ -924,7 +924,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		changed = true
 	}
 	if req.CustomTags != nil {
-		tags, errNormalize := normalizeEditableTags(*req.CustomTags, maxCustomAuthTags)
+		tags, errNormalize := managementauthfiles.NormalizeEditableTags(*req.CustomTags, managementauthfiles.MaxCustomTags)
 		if errNormalize != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": errNormalize.Error()})
 			return
@@ -940,7 +940,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		changed = true
 	}
 	if req.HiddenDefaultTags != nil {
-		tags := normalizeTagList(*req.HiddenDefaultTags)
+		tags := managementauthfiles.NormalizeTagList(*req.HiddenDefaultTags)
 		if targetAuth.Metadata == nil {
 			targetAuth.Metadata = make(map[string]any)
 		}
@@ -952,7 +952,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		changed = true
 	}
 	if req.DisplayTags != nil {
-		tags := normalizeTagList(*req.DisplayTags)
+		tags := managementauthfiles.NormalizeTagList(*req.DisplayTags)
 		if targetAuth.Metadata == nil {
 			targetAuth.Metadata = make(map[string]any)
 		}

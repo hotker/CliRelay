@@ -22,12 +22,12 @@ docs/internal-review/backend-structure-allowlist.json
 
 | 指标 | 数量 |
 | --- | ---: |
-| Go 文件总数 | 592 |
-| 生产 Go 文件 | 409 |
-| 测试 Go 文件 | 183 |
-| `internal/` Go 文件 | 469 |
-| `internal/` 生产 Go 文件 | 338 |
-| `internal/` 测试 Go 文件 | 131 |
+| Go 文件总数 | 594 |
+| 生产 Go 文件 | 410 |
+| 测试 Go 文件 | 184 |
+| `internal/` Go 文件 | 471 |
+| `internal/` 生产 Go 文件 | 339 |
+| `internal/` 测试 Go 文件 | 132 |
 | 生产 Go 文件中 `>800` 行 | 26 |
 | 生产 Go 文件中 `>1200` 行 | 14 |
 | `internal/` 生产 Go 文件中 `>800` 行 | 23 |

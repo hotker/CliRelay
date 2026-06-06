@@ -47,7 +47,7 @@ type channelGroupItem struct {
 
 func collectChannelDescriptors(cfg *config.Config, auths []*coreauth.Auth) []channelDescriptor {
 	items := make([]channelDescriptor, 0)
-	push := func(name, prefix, source string, disabled bool, disabledAuthority int, tags authTagPayload) {
+	push := func(name, prefix, source string, disabled bool, disabledAuthority int, tags managementauthfiles.TagPayload) {
 		name = strings.TrimSpace(name)
 		prefix = internalrouting.NormalizeGroupName(prefix)
 		if name == "" && prefix == "" {
@@ -68,25 +68,25 @@ func collectChannelDescriptors(cfg *config.Config, auths []*coreauth.Auth) []cha
 
 	if cfg != nil {
 		for _, entry := range cfg.GeminiKey {
-			push(entry.Name, entry.Prefix, "gemini", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("gemini", nil))
+			push(entry.Name, entry.Prefix, "gemini", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("gemini", nil))
 		}
 		for _, entry := range cfg.ClaudeKey {
-			push(entry.Name, entry.Prefix, "claude", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("claude", nil))
+			push(entry.Name, entry.Prefix, "claude", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("claude", nil))
 		}
 		for _, entry := range cfg.BedrockKey {
-			push(entry.Name, entry.Prefix, "bedrock", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("bedrock", nil))
+			push(entry.Name, entry.Prefix, "bedrock", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("bedrock", nil))
 		}
 		for _, entry := range cfg.CodexKey {
-			push(entry.Name, entry.Prefix, "codex", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("codex", nil))
+			push(entry.Name, entry.Prefix, "codex", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("codex", nil))
 		}
 		for _, entry := range cfg.OpenCodeGoKey {
-			push(entry.Name, entry.Prefix, "opencode-go", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("opencode-go", nil))
+			push(entry.Name, entry.Prefix, "opencode-go", providerExcludesAllModels(entry.ExcludedModels), channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("opencode-go", nil))
 		}
 		for _, entry := range cfg.VertexCompatAPIKey {
-			push("", entry.Prefix, "vertex", false, channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("vertex", nil))
+			push("", entry.Prefix, "vertex", false, channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("vertex", nil))
 		}
 		for _, entry := range cfg.OpenAICompatibility {
-			push(entry.Name, entry.Prefix, "openai", entry.Disabled, channelDisabledAuthorityConfig, buildAuthTagPayloadFromValues("openai", nil))
+			push(entry.Name, entry.Prefix, "openai", entry.Disabled, channelDisabledAuthorityConfig, managementauthfiles.BuildTagPayloadFromValues("openai", nil))
 		}
 	}
 
@@ -100,7 +100,7 @@ func collectChannelDescriptors(cfg *config.Config, auths []*coreauth.Auth) []cha
 			auth.Provider,
 			authChannelDisabled(auth),
 			channelDisabledAuthorityRuntime,
-			buildAuthTagPayload(auth),
+			managementauthfiles.BuildTagPayload(auth),
 		)
 	}
 
