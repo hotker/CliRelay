@@ -27,6 +27,7 @@ const (
 	githubTokenEnv        = "CLIRELAY_GITHUB_TOKEN"
 	autoUpdateChannelEnv  = "CLIRELAY_UPDATE_CHANNEL"
 	defaultUpdaterService = "clirelay"
+	dockerPublishWorkflow = "docker-publish.yml"
 )
 
 type updateCheckResponse struct {
@@ -80,13 +81,36 @@ type branchCommitInfo struct {
 	SHA     string `json:"sha"`
 	HTMLURL string `json:"html_url"`
 	Commit  struct {
-		Message string `json:"message"`
+		Message   string         `json:"message"`
+		Author    gitCommitActor `json:"author"`
+		Committer gitCommitActor `json:"committer"`
 	} `json:"commit"`
 }
 
+type gitCommitActor struct {
+	Date time.Time `json:"date"`
+}
+
+type workflowRunInfo struct {
+	ID         int64     `json:"id"`
+	HTMLURL    string    `json:"html_url"`
+	HeadSHA    string    `json:"head_sha"`
+	HeadBranch string    `json:"head_branch"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	Event      string    `json:"event"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type workflowRunsResponse struct {
+	WorkflowRuns []workflowRunInfo `json:"workflow_runs"`
+}
+
 var (
-	fetchBranchCommitForUpdateCheck      = fetchBranchCommit
-	fetchLatestReleaseInfoForUpdateCheck = fetchLatestReleaseInfo
+	fetchBranchCommitForUpdateCheck                = fetchBranchCommit
+	fetchLatestReleaseInfoForUpdateCheck           = fetchLatestReleaseInfo
+	fetchLatestSuccessfulWorkflowRunForUpdateCheck = fetchLatestSuccessfulWorkflowRun
 )
 
 func (h *Handler) GetAutoUpdateEnabled(c *gin.Context) {
@@ -165,7 +189,11 @@ func (h *Handler) ApplyUpdate(c *gin.Context) {
 		return
 	}
 	if !check.UpdateAvailable {
-		c.JSON(http.StatusOK, gin.H{"status": "noop", "message": "already up to date"})
+		message := strings.TrimSpace(check.Message)
+		if message == "" {
+			message = "already up to date"
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "noop", "message": message})
 		return
 	}
 
@@ -259,6 +287,16 @@ func (h *Handler) buildUpdateCheck(ctx context.Context) (*updateCheckResponse, e
 
 	backendUpdateAvailable := branchErr == nil && autoUpdateAvailableFromCommit(currentCommit, branch.SHA)
 	frontendUpdateAvailable := frontendErr == nil && autoUpdateAvailableFromCommit(currentUICommit, frontendBranch.SHA)
+	rawUpdateAvailable := backendUpdateAvailable || frontendUpdateAvailable
+
+	dockerPublishReady := true
+	dockerPublishMessage := ""
+	if cfg.AutoUpdate.Enabled && rawUpdateAvailable && branchErr == nil && frontendErr == nil && shouldVerifyDockerPublish(cfg, repo) {
+		if err := verifyDockerPublishReady(ctx, client, repo, channel, branch, frontendBranch); err != nil {
+			dockerPublishReady = false
+			dockerPublishMessage = err.Error()
+		}
+	}
 
 	resp := &updateCheckResponse{
 		Enabled:           cfg.AutoUpdate.Enabled,
@@ -278,13 +316,15 @@ func (h *Handler) buildUpdateCheck(ctx context.Context) (*updateCheckResponse, e
 		DockerTag:         dockerTagForChannel(channel, branch.SHA),
 		ReleaseNotes:      releaseNotes,
 		ReleaseURL:        strings.TrimSpace(release.HTMLURL),
-		UpdateAvailable:   cfg.AutoUpdate.Enabled && (backendUpdateAvailable || frontendUpdateAvailable),
+		UpdateAvailable:   cfg.AutoUpdate.Enabled && rawUpdateAvailable && dockerPublishReady,
 		UpdaterAvailable:  checkUpdaterAvailable(ctx, cfg),
 	}
 	if !resp.Enabled {
 		resp.Message = "auto update disabled"
 	} else if branchErr != nil || frontendErr != nil {
 		resp.Message = buildUpdateCheckWarning(branchErr, frontendErr)
+	} else if !dockerPublishReady {
+		resp.Message = dockerPublishMessage
 	} else if !resp.UpdateAvailable {
 		resp.Message = "already up to date"
 	}
@@ -421,6 +461,96 @@ func fetchLatestReleaseInfo(ctx context.Context, client *http.Client, repo strin
 		return info, fmt.Errorf("github release status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	return info, json.NewDecoder(resp.Body).Decode(&info)
+}
+
+func fetchLatestSuccessfulWorkflowRun(ctx context.Context, client *http.Client, repo string, workflow string, branch string) (workflowRunInfo, error) {
+	var info workflowRunInfo
+	endpoint := githubAPIURL(repo, "actions/workflows/"+url.PathEscape(strings.TrimSpace(workflow))+"/runs")
+	query := url.Values{}
+	query.Set("branch", strings.TrimSpace(branch))
+	query.Set("status", "success")
+	query.Set("per_page", "20")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return info, err
+	}
+	applyGitHubAPIHeaders(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return info, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return info, fmt.Errorf("github workflow runs status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var payload workflowRunsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return info, err
+	}
+	for _, run := range payload.WorkflowRuns {
+		if strings.EqualFold(strings.TrimSpace(run.Status), "completed") &&
+			strings.EqualFold(strings.TrimSpace(run.Conclusion), "success") {
+			return run, nil
+		}
+	}
+	return info, fmt.Errorf("no successful %s run found for %s", workflow, strings.TrimSpace(branch))
+}
+
+func shouldVerifyDockerPublish(cfg *config.Config, repo string) bool {
+	if cfg == nil {
+		return false
+	}
+	return normalizeGitHubRepository(repo) == normalizeGitHubRepository(config.DefaultAutoUpdateRepository) &&
+		strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate.DockerImage), config.DefaultAutoUpdateDockerImage)
+}
+
+func verifyDockerPublishReady(ctx context.Context, client *http.Client, repo string, channel string, backend branchCommitInfo, frontend branchCommitInfo) error {
+	run, err := fetchLatestSuccessfulWorkflowRunForUpdateCheck(ctx, client, repo, dockerPublishWorkflow, channel)
+	if err != nil {
+		return fmt.Errorf("docker image readiness check failed: %w", err)
+	}
+	if !sameCommit(run.HeadSHA, backend.SHA) {
+		return fmt.Errorf(
+			"docker image for %s is not ready; latest successful publish is %s but branch head is %s",
+			channel,
+			shortCommit(run.HeadSHA),
+			shortCommit(backend.SHA),
+		)
+	}
+
+	sourceTime := latestCommitTime(backend, frontend)
+	runTime := run.CreatedAt
+	if runTime.IsZero() {
+		runTime = run.UpdatedAt
+	}
+	if !sourceTime.IsZero() && !runTime.IsZero() && runTime.Before(sourceTime) {
+		return fmt.Errorf("docker image for %s is not ready; latest successful publish predates the latest source commit", channel)
+	}
+	return nil
+}
+
+func latestCommitTime(commits ...branchCommitInfo) time.Time {
+	var latest time.Time
+	for _, commit := range commits {
+		candidate := commit.Commit.Committer.Date
+		if candidate.IsZero() {
+			candidate = commit.Commit.Author.Date
+		}
+		if candidate.After(latest) {
+			latest = candidate
+		}
+	}
+	return latest
+}
+
+func sameCommit(left string, right string) bool {
+	a := strings.ToLower(strings.TrimSpace(left))
+	b := strings.ToLower(strings.TrimSpace(right))
+	if a == "" || b == "" {
+		return false
+	}
+	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
 func inferAutoUpdateChannel(version string, envChannel string) string {

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
@@ -229,6 +230,231 @@ func TestBuildUpdateCheckGracefullyHandlesGitHubFailures(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateCheckWaitsForDevDockerPublishRun(t *testing.T) {
+	origFetchBranchCommit := fetchBranchCommitForUpdateCheck
+	origFetchLatestRelease := fetchLatestReleaseInfoForUpdateCheck
+	origFetchWorkflowRun := fetchLatestSuccessfulWorkflowRunForUpdateCheck
+	origVersion := buildinfo.Version
+	origCommit := buildinfo.Commit
+	origFrontendVersion := buildinfo.FrontendVersion
+	origFrontendCommit := buildinfo.FrontendCommit
+	origFrontendRef := buildinfo.FrontendRef
+	t.Cleanup(func() {
+		fetchBranchCommitForUpdateCheck = origFetchBranchCommit
+		fetchLatestReleaseInfoForUpdateCheck = origFetchLatestRelease
+		fetchLatestSuccessfulWorkflowRunForUpdateCheck = origFetchWorkflowRun
+		buildinfo.Version = origVersion
+		buildinfo.Commit = origCommit
+		buildinfo.FrontendVersion = origFrontendVersion
+		buildinfo.FrontendCommit = origFrontendCommit
+		buildinfo.FrontendRef = origFrontendRef
+	})
+
+	currentBackend := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	latestBackend := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	frontendCommit := "cccccccccccccccccccccccccccccccccccccccc"
+	sourceTime := time.Date(2026, 6, 6, 10, 30, 0, 0, time.UTC)
+
+	fetchBranchCommitForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, channel string) (branchCommitInfo, error) {
+		switch repo {
+		case "kittors/CliRelay":
+			return branchCommitAt(latestBackend, sourceTime), nil
+		case "kittors/codeProxy":
+			return branchCommitAt(frontendCommit, sourceTime.Add(-time.Minute)), nil
+		default:
+			t.Fatalf("unexpected repo %q", repo)
+			return branchCommitInfo{}, nil
+		}
+	}
+	fetchLatestReleaseInfoForUpdateCheck = func(ctx context.Context, client *http.Client, repo string) (releaseInfo, error) {
+		return releaseInfo{}, nil
+	}
+	fetchLatestSuccessfulWorkflowRunForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, workflow string, branch string) (workflowRunInfo, error) {
+		if workflow != dockerPublishWorkflow {
+			t.Fatalf("workflow = %q, want %q", workflow, dockerPublishWorkflow)
+		}
+		return workflowRunInfo{
+			HeadSHA:    currentBackend,
+			Status:     "completed",
+			Conclusion: "success",
+			CreatedAt:  sourceTime.Add(-time.Hour),
+		}, nil
+	}
+
+	buildinfo.Version = "dev-" + shortCommit(currentBackend)
+	buildinfo.Commit = currentBackend
+	buildinfo.FrontendVersion = "panel-dev-" + shortCommit(frontendCommit)
+	buildinfo.FrontendCommit = frontendCommit
+	buildinfo.FrontendRef = "dev"
+
+	cfg := &config.Config{}
+	cfg.AutoUpdate.Enabled = true
+	cfg.AutoUpdate.Channel = "dev"
+	cfg.AutoUpdate.Repository = config.DefaultAutoUpdateRepository
+	cfg.AutoUpdate.DockerImage = config.DefaultAutoUpdateDockerImage
+	cfg.RemoteManagement.PanelGitHubRepository = config.DefaultPanelGitHubRepository
+
+	resp, err := (&Handler{cfg: cfg}).buildUpdateCheck(context.Background())
+	if err != nil {
+		t.Fatalf("buildUpdateCheck() error = %v, want nil", err)
+	}
+	if resp.UpdateAvailable {
+		t.Fatalf("UpdateAvailable = true, want false while dev image publish has not completed")
+	}
+	if !strings.Contains(resp.Message, "not ready") {
+		t.Fatalf("Message = %q, want docker publish readiness warning", resp.Message)
+	}
+	if resp.LatestCommit != latestBackend {
+		t.Fatalf("LatestCommit = %q, want branch head %q", resp.LatestCommit, latestBackend)
+	}
+}
+
+func TestBuildUpdateCheckWaitsForFrontendDevDockerRebuild(t *testing.T) {
+	origFetchBranchCommit := fetchBranchCommitForUpdateCheck
+	origFetchLatestRelease := fetchLatestReleaseInfoForUpdateCheck
+	origFetchWorkflowRun := fetchLatestSuccessfulWorkflowRunForUpdateCheck
+	origVersion := buildinfo.Version
+	origCommit := buildinfo.Commit
+	origFrontendVersion := buildinfo.FrontendVersion
+	origFrontendCommit := buildinfo.FrontendCommit
+	origFrontendRef := buildinfo.FrontendRef
+	t.Cleanup(func() {
+		fetchBranchCommitForUpdateCheck = origFetchBranchCommit
+		fetchLatestReleaseInfoForUpdateCheck = origFetchLatestRelease
+		fetchLatestSuccessfulWorkflowRunForUpdateCheck = origFetchWorkflowRun
+		buildinfo.Version = origVersion
+		buildinfo.Commit = origCommit
+		buildinfo.FrontendVersion = origFrontendVersion
+		buildinfo.FrontendCommit = origFrontendCommit
+		buildinfo.FrontendRef = origFrontendRef
+	})
+
+	backendCommit := "dddddddddddddddddddddddddddddddddddddddd"
+	currentFrontend := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	latestFrontend := "ffffffffffffffffffffffffffffffffffffffff"
+	frontendTime := time.Date(2026, 6, 6, 11, 0, 0, 0, time.UTC)
+
+	fetchBranchCommitForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, channel string) (branchCommitInfo, error) {
+		switch repo {
+		case "kittors/CliRelay":
+			return branchCommitAt(backendCommit, frontendTime.Add(-time.Hour)), nil
+		case "kittors/codeProxy":
+			return branchCommitAt(latestFrontend, frontendTime), nil
+		default:
+			t.Fatalf("unexpected repo %q", repo)
+			return branchCommitInfo{}, nil
+		}
+	}
+	fetchLatestReleaseInfoForUpdateCheck = func(ctx context.Context, client *http.Client, repo string) (releaseInfo, error) {
+		return releaseInfo{}, nil
+	}
+	fetchLatestSuccessfulWorkflowRunForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, workflow string, branch string) (workflowRunInfo, error) {
+		return workflowRunInfo{
+			HeadSHA:    backendCommit,
+			Status:     "completed",
+			Conclusion: "success",
+			CreatedAt:  frontendTime.Add(-time.Minute),
+		}, nil
+	}
+
+	buildinfo.Version = "dev-" + shortCommit(backendCommit)
+	buildinfo.Commit = backendCommit
+	buildinfo.FrontendVersion = "panel-dev-" + shortCommit(currentFrontend)
+	buildinfo.FrontendCommit = currentFrontend
+	buildinfo.FrontendRef = "dev"
+
+	cfg := &config.Config{}
+	cfg.AutoUpdate.Enabled = true
+	cfg.AutoUpdate.Channel = "dev"
+	cfg.AutoUpdate.Repository = config.DefaultAutoUpdateRepository
+	cfg.AutoUpdate.DockerImage = config.DefaultAutoUpdateDockerImage
+	cfg.RemoteManagement.PanelGitHubRepository = config.DefaultPanelGitHubRepository
+
+	resp, err := (&Handler{cfg: cfg}).buildUpdateCheck(context.Background())
+	if err != nil {
+		t.Fatalf("buildUpdateCheck() error = %v, want nil", err)
+	}
+	if resp.UpdateAvailable {
+		t.Fatalf("UpdateAvailable = true, want false while frontend dev rebuild has not been published")
+	}
+	if !strings.Contains(resp.Message, "predates the latest source commit") {
+		t.Fatalf("Message = %q, want frontend rebuild readiness warning", resp.Message)
+	}
+}
+
+func TestBuildUpdateCheckAllowsDevUpdateAfterDockerPublishReady(t *testing.T) {
+	origFetchBranchCommit := fetchBranchCommitForUpdateCheck
+	origFetchLatestRelease := fetchLatestReleaseInfoForUpdateCheck
+	origFetchWorkflowRun := fetchLatestSuccessfulWorkflowRunForUpdateCheck
+	origVersion := buildinfo.Version
+	origCommit := buildinfo.Commit
+	origFrontendVersion := buildinfo.FrontendVersion
+	origFrontendCommit := buildinfo.FrontendCommit
+	origFrontendRef := buildinfo.FrontendRef
+	t.Cleanup(func() {
+		fetchBranchCommitForUpdateCheck = origFetchBranchCommit
+		fetchLatestReleaseInfoForUpdateCheck = origFetchLatestRelease
+		fetchLatestSuccessfulWorkflowRunForUpdateCheck = origFetchWorkflowRun
+		buildinfo.Version = origVersion
+		buildinfo.Commit = origCommit
+		buildinfo.FrontendVersion = origFrontendVersion
+		buildinfo.FrontendCommit = origFrontendCommit
+		buildinfo.FrontendRef = origFrontendRef
+	})
+
+	currentBackend := "1111111111111111111111111111111111111111"
+	latestBackend := "2222222222222222222222222222222222222222"
+	frontendCommit := "3333333333333333333333333333333333333333"
+	sourceTime := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+
+	fetchBranchCommitForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, channel string) (branchCommitInfo, error) {
+		switch repo {
+		case "kittors/CliRelay":
+			return branchCommitAt(latestBackend, sourceTime), nil
+		case "kittors/codeProxy":
+			return branchCommitAt(frontendCommit, sourceTime), nil
+		default:
+			t.Fatalf("unexpected repo %q", repo)
+			return branchCommitInfo{}, nil
+		}
+	}
+	fetchLatestReleaseInfoForUpdateCheck = func(ctx context.Context, client *http.Client, repo string) (releaseInfo, error) {
+		return releaseInfo{}, nil
+	}
+	fetchLatestSuccessfulWorkflowRunForUpdateCheck = func(ctx context.Context, client *http.Client, repo string, workflow string, branch string) (workflowRunInfo, error) {
+		return workflowRunInfo{
+			HeadSHA:    latestBackend,
+			Status:     "completed",
+			Conclusion: "success",
+			CreatedAt:  sourceTime.Add(time.Minute),
+		}, nil
+	}
+
+	buildinfo.Version = "dev-" + shortCommit(currentBackend)
+	buildinfo.Commit = currentBackend
+	buildinfo.FrontendVersion = "panel-dev-" + shortCommit(frontendCommit)
+	buildinfo.FrontendCommit = frontendCommit
+	buildinfo.FrontendRef = "dev"
+
+	cfg := &config.Config{}
+	cfg.AutoUpdate.Enabled = true
+	cfg.AutoUpdate.Channel = "dev"
+	cfg.AutoUpdate.Repository = config.DefaultAutoUpdateRepository
+	cfg.AutoUpdate.DockerImage = config.DefaultAutoUpdateDockerImage
+	cfg.RemoteManagement.PanelGitHubRepository = config.DefaultPanelGitHubRepository
+
+	resp, err := (&Handler{cfg: cfg}).buildUpdateCheck(context.Background())
+	if err != nil {
+		t.Fatalf("buildUpdateCheck() error = %v, want nil", err)
+	}
+	if !resp.UpdateAvailable {
+		t.Fatalf("UpdateAvailable = false, want true after dev image publish completes; message=%q", resp.Message)
+	}
+	if resp.Message != "" {
+		t.Fatalf("Message = %q, want empty for available update", resp.Message)
+	}
+}
+
 func TestBuildUpdateCheckUsesConfiguredPanelRepository(t *testing.T) {
 	origFetchBranchCommit := fetchBranchCommitForUpdateCheck
 	origFetchLatestRelease := fetchLatestReleaseInfoForUpdateCheck
@@ -437,6 +663,12 @@ func TestFetchUpdateProgressProxiesUpdaterStatus(t *testing.T) {
 	if len(progress.Logs) != 1 || progress.Logs[0].Message != "docker compose pull clirelay" {
 		t.Fatalf("Logs = %+v, want updater log entry", progress.Logs)
 	}
+}
+
+func branchCommitAt(sha string, at time.Time) branchCommitInfo {
+	info := branchCommitInfo{SHA: sha}
+	info.Commit.Committer.Date = at
+	return info
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

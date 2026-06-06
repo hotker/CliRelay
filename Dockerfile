@@ -37,7 +37,7 @@ ENV VITE_PANEL_REF=${FRONTEND_REF}
 ENV VITE_PANEL_COMMIT=${FRONTEND_COMMIT}
 ENV VITE_PANEL_BUILD_DATE=${BUILD_DATE}
 RUN bun install --frozen-lockfile
-RUN bunx vite build
+RUN bun run build
 
 # ── Backend build ────────────────────────────────────────────────────────────
 FROM --platform=$BUILDPLATFORM golang:1.26.1-alpine AS backend-builder
