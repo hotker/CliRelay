@@ -223,37 +223,19 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	service := managementauthfiles.DeleteService{
+		AuthDir:        h.cfg.AuthDir,
+		Manager:        h.authManager,
+		Repository:     h.authFileRepository(),
+		RemoveChannels: h.removeChannelReferences,
+	}
 	if managementauthfiles.IsDeleteAllValue(c.Query("all")) {
-		entries, err := os.ReadDir(h.cfg.AuthDir)
+		result, err := service.DeleteAll(ctx)
 		if err != nil {
-			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
+			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		deleted := 0
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !managementauthfiles.IsJSONFileName(name) {
-				continue
-			}
-			full := managementauthfiles.FilePath(h.cfg.AuthDir, name)
-			deletedChannels := deletedAuthChannelIdentifiers(h.findAuthByNameOrID(name))
-			if err = os.Remove(full); err == nil {
-				if errDel := h.deleteTokenRecord(ctx, full); errDel != nil {
-					c.JSON(500, gin.H{"error": errDel.Error()})
-					return
-				}
-				deleted++
-				h.removeAuth(ctx, full)
-				if errCleanup := h.removeChannelReferences(deletedChannels); errCleanup != nil {
-					c.JSON(500, gin.H{"error": errCleanup.Error()})
-					return
-				}
-			}
-		}
-		c.JSON(200, gin.H{"status": "ok", "deleted": deleted})
+		c.JSON(200, gin.H{"status": "ok", "deleted": result.Deleted})
 		return
 	}
 	name, errValidate := managementauthfiles.ValidateFileQueryName(c.Query("name"), false)
@@ -261,23 +243,12 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		c.JSON(400, gin.H{"error": errValidate.Error()})
 		return
 	}
-	full := managementauthfiles.FilePath(h.cfg.AuthDir, name)
-	deletedChannels := deletedAuthChannelIdentifiers(h.findAuthByNameOrID(name))
-	if err := os.Remove(full); err != nil {
-		if os.IsNotExist(err) {
+	if _, err := service.DeleteOne(ctx, name); err != nil {
+		if errors.Is(err, managementauthfiles.ErrAuthFileNotFound) {
 			c.JSON(404, gin.H{"error": "file not found"})
 		} else {
-			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to remove file: %v", err)})
+			c.JSON(500, gin.H{"error": err.Error()})
 		}
-		return
-	}
-	if err := h.deleteTokenRecord(ctx, full); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	h.removeAuth(ctx, full)
-	if err := h.removeChannelReferences(deletedChannels); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"status": "ok"})
@@ -288,10 +259,6 @@ func (h *Handler) findAuthByNameOrID(name string) *coreauth.Auth {
 		return nil
 	}
 	return managementauthfiles.FindByNameOrID(h.authManager, name)
-}
-
-func deletedAuthChannelIdentifiers(auth *coreauth.Auth) []string {
-	return managementauthfiles.DeletedChannelIdentifiers(auth)
 }
 
 func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []byte) error {
@@ -408,21 +375,6 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-func (h *Handler) removeAuth(ctx context.Context, id string) {
-	if h == nil || h.authManager == nil {
-		return
-	}
-	authDir := ""
-	if h.cfg != nil {
-		authDir = h.cfg.AuthDir
-	}
-	managementauthfiles.RemoveFromManager(ctx, h.authManager, authDir, id)
-}
-
-func (h *Handler) deleteTokenRecord(ctx context.Context, path string) error {
-	return h.authFileRepository().Delete(ctx, path)
 }
 
 func (h *Handler) authFileRepository() managementauthfiles.Repository {
