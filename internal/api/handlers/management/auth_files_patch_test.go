@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -640,32 +639,6 @@ func TestBuildAuthFileEntryIncludesSubscriptionStartAndPeriod(t *testing.T) {
 	}
 	if _, ok := entry["subscription_remaining_days"].(int64); !ok {
 		t.Fatalf("subscription_remaining_days = %#v, want int64", entry["subscription_remaining_days"])
-	}
-}
-
-func TestClaudeOAuthMetadataFromTokenStorageIncludesRuntimeTokens(t *testing.T) {
-	expired := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
-	lastRefresh := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
-
-	meta := claudeOAuthMetadataFromTokenStorage(&claude.ClaudeTokenStorage{
-		AccessToken:  "access-token",
-		RefreshToken: "refresh-token",
-		Email:        "claude@example.com",
-		Expire:       expired,
-		LastRefresh:  lastRefresh,
-	})
-
-	for key, want := range map[string]string{
-		"type":          "claude",
-		"access_token":  "access-token",
-		"refresh_token": "refresh-token",
-		"email":         "claude@example.com",
-		"expired":       expired,
-		"last_refresh":  lastRefresh,
-	} {
-		if got, _ := meta[key].(string); got != want {
-			t.Fatalf("metadata[%s] = %q, want %q", key, got, want)
-		}
 	}
 }
 

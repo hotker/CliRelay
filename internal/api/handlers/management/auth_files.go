@@ -27,6 +27,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
 	oauthcallback "github.com/router-for-me/CLIProxyAPI/v6/internal/management/oauth/callback"
+	claudeprovider "github.com/router-for-me/CLIProxyAPI/v6/internal/management/oauth/providers/claude"
 	geminicli "github.com/router-for-me/CLIProxyAPI/v6/internal/management/oauth/providers/geminicli"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
@@ -692,31 +693,6 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 	return store.Save(ctx, record)
 }
 
-func claudeOAuthMetadataFromTokenStorage(tokenStorage *claude.ClaudeTokenStorage) map[string]any {
-	metadata := map[string]any{
-		"type": "claude",
-	}
-	if tokenStorage == nil {
-		return metadata
-	}
-	if email := strings.TrimSpace(tokenStorage.Email); email != "" {
-		metadata["email"] = email
-	}
-	if accessToken := strings.TrimSpace(tokenStorage.AccessToken); accessToken != "" {
-		metadata["access_token"] = accessToken
-	}
-	if refreshToken := strings.TrimSpace(tokenStorage.RefreshToken); refreshToken != "" {
-		metadata["refresh_token"] = refreshToken
-	}
-	if expired := strings.TrimSpace(tokenStorage.Expire); expired != "" {
-		metadata["expired"] = expired
-	}
-	if lastRefresh := strings.TrimSpace(tokenStorage.LastRefresh); lastRefresh != "" {
-		metadata["last_refresh"] = lastRefresh
-	}
-	return metadata
-}
-
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	ctx := detachedAuthContext(c)
 
@@ -845,7 +821,7 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 			Provider: "claude",
 			FileName: fmt.Sprintf("claude-%s.json", tokenStorage.Email),
 			Storage:  tokenStorage,
-			Metadata: claudeOAuthMetadataFromTokenStorage(tokenStorage),
+			Metadata: claudeprovider.MetadataFromTokenStorage(tokenStorage),
 		}
 		savedPath, errSave := h.saveTokenRecord(ctx, record)
 		if errSave != nil {
