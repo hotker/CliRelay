@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -343,9 +344,9 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	if usage.ConfigStoreAvailable() {
-		usage.PersistRuntimeSettingsPresentInYAML(newCfg, body)
-		usage.MigrateRuntimeSettingsFromConfig(newCfg, h.configFilePath)
-		usage.ApplyStoredRuntimeSettings(newCfg)
+		settingsstore.PersistRuntimeSettingsPresentInYAML(newCfg, body)
+		settingsstore.MigrateRuntimeSettingsFromConfig(newCfg, h.configFilePath)
+		settingsstore.ApplyStoredRuntimeSettings(newCfg)
 	}
 	h.cfg = newCfg
 	mutated := h.onConfigMutated

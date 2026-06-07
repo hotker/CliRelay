@@ -24,11 +24,11 @@ SERVER_PATH = Path("internal/api/server.go")
 MANAGEMENT_PERSISTENCE_SYMBOLS = (
     "config.SaveConfigPreserveComments",
     "config.SaveConfigPreserveCommentsUpdateNestedScalar",
-    "usage.UpsertRuntimeSetting",
-    "usage.PersistRuntimeSettingsFromConfig",
+    "settingsstore.UpsertRuntimeSetting",
+    "settingsstore.PersistRuntimeSettingsFromConfig",
     "usage.CleanDBBackedConfigFromYAML",
-    "usage.MigrateRuntimeSettingsFromConfig",
-    "usage.ApplyStoredRuntimeSettings",
+    "settingsstore.MigrateRuntimeSettingsFromConfig",
+    "settingsstore.ApplyStoredRuntimeSettings",
 )
 
 

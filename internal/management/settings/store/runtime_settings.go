@@ -1,4 +1,4 @@
-package usage
+package store
 
 import (
 	"database/sql"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -26,23 +27,6 @@ const (
 	RuntimeSettingOAuthModelAlias      = "oauth-model-alias"
 	RuntimeSettingPayload              = "payload"
 )
-
-const createRuntimeSettingsTableSQL = `
-CREATE TABLE IF NOT EXISTS runtime_settings (
-  setting_key TEXT PRIMARY KEY NOT NULL,
-  payload     TEXT NOT NULL DEFAULT '{}',
-  updated_at  TEXT NOT NULL DEFAULT ''
-);
-`
-
-func initRuntimeSettingsTable(db *sql.DB) {
-	if db == nil {
-		return
-	}
-	if _, err := db.Exec(createRuntimeSettingsTableSQL); err != nil {
-		log.Errorf("usage: create runtime_settings table: %v", err)
-	}
-}
 
 type runtimeSettingSpec struct {
 	key        string
@@ -400,7 +384,7 @@ func payloadConfigMeaningful(payload config.PayloadConfig) bool {
 }
 
 func runtimeSettingPayload(key string) (json.RawMessage, bool) {
-	db := getDB()
+	db := usage.GetDB()
 	if db == nil {
 		return nil, false
 	}
@@ -424,7 +408,7 @@ func runtimeSettingExists(key string) bool {
 }
 
 func UpsertRuntimeSetting(key string, value any) error {
-	db := getDB()
+	db := usage.GetDB()
 	if db == nil {
 		return nil
 	}
@@ -448,7 +432,7 @@ func UpsertRuntimeSetting(key string, value any) error {
 }
 
 func PersistRuntimeSettingsFromConfig(cfg *config.Config) int {
-	if cfg == nil || !ConfigStoreAvailable() {
+	if cfg == nil || !usage.ConfigStoreAvailable() {
 		return 0
 	}
 	persisted := 0
@@ -468,7 +452,7 @@ func PersistRuntimeSettingsFromConfig(cfg *config.Config) int {
 // PersistRuntimeSettingsPresentInYAML stores DB-backed runtime settings that
 // were explicitly included in a management config.yaml save.
 func PersistRuntimeSettingsPresentInYAML(cfg *config.Config, yamlContent []byte) int {
-	if cfg == nil || !ConfigStoreAvailable() {
+	if cfg == nil || !usage.ConfigStoreAvailable() {
 		return 0
 	}
 	present := yamlRootKeys(yamlContent)
@@ -519,7 +503,7 @@ func yamlRootKeys(data []byte) map[string]bool {
 }
 
 func ApplyStoredRuntimeSettings(cfg *config.Config) bool {
-	if cfg == nil || !ConfigStoreAvailable() {
+	if cfg == nil || !usage.ConfigStoreAvailable() {
 		return false
 	}
 	applied := false
@@ -536,7 +520,7 @@ func ApplyStoredRuntimeSettings(cfg *config.Config) bool {
 }
 
 func MigrateRuntimeSettingsFromConfig(cfg *config.Config, configFilePath string) int {
-	if cfg == nil || !ConfigStoreAvailable() {
+	if cfg == nil || !usage.ConfigStoreAvailable() {
 		return 0
 	}
 	migrated := 0
@@ -559,13 +543,13 @@ func MigrateRuntimeSettingsFromConfig(cfg *config.Config, configFilePath string)
 		return migrated
 	}
 	if migrated > 0 {
-		if backupConfigForMigration(configFilePath, runtimeSettingsBackupSuffix) {
-			cleanRuntimeSettingsFromYAML(configFilePath)
+		if usage.BackupConfigForMigration(configFilePath, usage.RuntimeSettingsMigrationBackupSuffix) {
+			usage.CleanRuntimeSettingsFromYAML(configFilePath)
 		}
 		return migrated
 	}
 	if hadStored {
-		cleanRuntimeSettingsFromYAML(configFilePath)
+		usage.CleanRuntimeSettingsFromYAML(configFilePath)
 	}
 	return migrated
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	oauthsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/oauth"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -28,7 +29,7 @@ func (h *Handler) renameChannelReferences(oldNames []string, newName string) err
 		}
 		if renameOAuthModelAliasChannels(h.cfg, oldNameSet, newName) {
 			configChanged = true
-			if err := usage.UpsertRuntimeSetting(usage.RuntimeSettingOAuthModelAlias, h.cfg.OAuthModelAlias); err != nil {
+			if err := settingsstore.UpsertRuntimeSetting(settingsstore.RuntimeSettingOAuthModelAlias, h.cfg.OAuthModelAlias); err != nil {
 				return fmt.Errorf("failed to persist oauth model aliases: %w", err)
 			}
 		}
@@ -77,7 +78,7 @@ func (h *Handler) removeChannelReferences(oldNames []string) error {
 		}
 		if removeOAuthModelAliasChannels(h.cfg, oldNameSet) {
 			configChanged = true
-			if err := usage.UpsertRuntimeSetting(usage.RuntimeSettingOAuthModelAlias, h.cfg.OAuthModelAlias); err != nil {
+			if err := settingsstore.UpsertRuntimeSetting(settingsstore.RuntimeSettingOAuthModelAlias, h.cfg.OAuthModelAlias); err != nil {
 				return fmt.Errorf("failed to persist oauth model aliases: %w", err)
 			}
 		}

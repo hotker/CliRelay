@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -371,9 +372,8 @@ func (s *Service) applyConfigReload(newCfg *config.Config, refreshRegisteredMode
 	internalusage.ApplyStoredRoutingConfig(newCfg)
 	internalusage.MigrateProxyPoolFromConfig(newCfg, s.configPath)
 	internalusage.ApplyStoredProxyPool(newCfg)
-	internalusage.MigrateRuntimeSettingsFromConfig(newCfg, s.configPath)
-	internalusage.ApplyStoredRuntimeSettings(newCfg)
-
+	settingsstore.MigrateRuntimeSettingsFromConfig(newCfg, s.configPath)
+	settingsstore.ApplyStoredRuntimeSettings(newCfg)
 	nextStrategy := strings.ToLower(strings.TrimSpace(newCfg.Routing.Strategy))
 	previousStrategy = config.NormalizeRoutingStrategy(previousStrategy)
 	nextStrategy = config.NormalizeRoutingStrategy(nextStrategy)

@@ -34,6 +34,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	internalrouting "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -316,8 +317,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 			usage.ApplyStoredRoutingConfig(updated)
 			usage.MigrateProxyPoolFromConfig(updated, configFilePath)
 			usage.ApplyStoredProxyPool(updated)
-			usage.MigrateRuntimeSettingsFromConfig(updated, configFilePath)
-			usage.ApplyStoredRuntimeSettings(updated)
+			settingsstore.MigrateRuntimeSettingsFromConfig(updated, configFilePath)
+			settingsstore.ApplyStoredRuntimeSettings(updated)
 			s.UpdateClients(updated)
 		})
 	}
@@ -1843,7 +1844,6 @@ func SystemPromptMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-
 		c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
 		c.Request.ContentLength = int64(len(newBody))
 		c.Next()

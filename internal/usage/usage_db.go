@@ -1155,7 +1155,7 @@ func getDB() *sql.DB {
 	defer usageDBMu.Unlock()
 	return usageDB
 }
-
+func GetDB() *sql.DB { return getDB() }
 func getUsageLocation() *time.Location {
 	usageDBMu.Lock()
 	defer usageDBMu.Unlock()

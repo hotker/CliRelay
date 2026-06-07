@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	oauthsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/oauth"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 )
 
 func oauthSettingsService(h *Handler) *oauthsettings.Service {
@@ -40,7 +40,7 @@ func (h *Handler) PutOAuthExcludedModels(c *gin.Context) {
 		entries = wrapper.Items
 	}
 	setting := oauthSettingsService(h).SetExcludedModels(entries)
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthExcludedModels, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthExcludedModels, setting)
 }
 
 func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
@@ -61,7 +61,7 @@ func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "provider not found"})
 		return
 	}
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthExcludedModels, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthExcludedModels, setting)
 }
 
 func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
@@ -74,7 +74,7 @@ func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "provider not found"})
 		return
 	}
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthExcludedModels, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthExcludedModels, setting)
 }
 
 // oauth-model-alias: map[string][]OAuthModelAlias
@@ -100,7 +100,7 @@ func (h *Handler) PutOAuthModelAlias(c *gin.Context) {
 		entries = wrapper.Items
 	}
 	setting := oauthSettingsService(h).SetModelAlias(entries)
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthModelAlias, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthModelAlias, setting)
 }
 
 func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
@@ -128,7 +128,7 @@ func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "channel not found"})
 		return
 	}
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthModelAlias, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthModelAlias, setting)
 }
 
 func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
@@ -145,5 +145,5 @@ func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "channel not found"})
 		return
 	}
-	h.persistRuntimeSetting(c, usage.RuntimeSettingOAuthModelAlias, setting)
+	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthModelAlias, setting)
 }

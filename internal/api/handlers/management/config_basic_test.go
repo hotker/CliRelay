@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -324,7 +325,7 @@ func TestPutConfigYAMLUpdatesExistingStoredPayloadRuntimeSetting(t *testing.T) {
 	}
 	t.Cleanup(usage.CloseDB)
 
-	if err := usage.UpsertRuntimeSetting(usage.RuntimeSettingPayload, config.PayloadConfig{
+	if err := settingsstore.UpsertRuntimeSetting(settingsstore.RuntimeSettingPayload, config.PayloadConfig{
 		Override: []config.PayloadRule{
 			{
 				Models: []config.PayloadModelRule{{Name: "old-model", Protocol: "codex"}},
@@ -365,7 +366,7 @@ logging-to-file: true
 	assertPayloadOverrideRule(t, h.cfg.Payload)
 
 	var stored config.Config
-	if !usage.ApplyStoredRuntimeSettings(&stored) {
+	if !settingsstore.ApplyStoredRuntimeSettings(&stored) {
 		t.Fatal("ApplyStoredRuntimeSettings returned false")
 	}
 	assertPayloadOverrideRule(t, stored.Payload)
@@ -388,7 +389,7 @@ func TestPutConfigYAMLNotifiesConfigMutationHookAfterPayloadRuntimeSettingUpdate
 	}
 	t.Cleanup(usage.CloseDB)
 
-	if err := usage.UpsertRuntimeSetting(usage.RuntimeSettingPayload, config.PayloadConfig{
+	if err := settingsstore.UpsertRuntimeSetting(settingsstore.RuntimeSettingPayload, config.PayloadConfig{
 		Override: []config.PayloadRule{
 			{
 				Models: []config.PayloadModelRule{{Name: "old-model", Protocol: "codex"}},

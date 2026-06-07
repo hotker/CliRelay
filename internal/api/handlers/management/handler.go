@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
@@ -329,7 +330,7 @@ func (h *Handler) persist(c *gin.Context) bool {
 	cfg := h.cfg
 	mutated := h.onConfigMutated
 	if usage.ConfigStoreAvailable() {
-		usage.PersistRuntimeSettingsFromConfig(cfg)
+		settingsstore.PersistRuntimeSettingsFromConfig(cfg)
 	}
 	// Preserve comments when writing
 	if err := config.SaveConfigPreserveComments(h.configFilePath, cfg); err != nil {
@@ -352,7 +353,7 @@ func (h *Handler) persistRuntimeSetting(c *gin.Context, key string, value any) b
 	if !usage.ConfigStoreAvailable() {
 		return h.persist(c)
 	}
-	if err := usage.UpsertRuntimeSetting(key, value); err != nil {
+	if err := settingsstore.UpsertRuntimeSetting(key, value); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save runtime setting: %v", err)})
 		return false
 	}

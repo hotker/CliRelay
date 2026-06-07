@@ -227,6 +227,7 @@
       ],
       "sdk/cliproxy/service.go": [
         "github.com/router-for-me/CLIProxyAPI/v6/internal/api",
+        "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/registry",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/usage",
@@ -255,17 +256,17 @@
     "allow": {
       "internal/api/handlers/management/channel_rename.go": {
         "config.SaveConfigPreserveComments": 2,
-        "usage.UpsertRuntimeSetting": 2,
+        "settingsstore.UpsertRuntimeSetting": 2,
         "usage.CleanDBBackedConfigFromYAML": 2
       },
       "internal/api/handlers/management/config_basic.go": {
-        "usage.MigrateRuntimeSettingsFromConfig": 1,
-        "usage.ApplyStoredRuntimeSettings": 1
+        "settingsstore.MigrateRuntimeSettingsFromConfig": 1,
+        "settingsstore.ApplyStoredRuntimeSettings": 1
       },
       "internal/api/handlers/management/handler.go": {
         "config.SaveConfigPreserveComments": 1,
-        "usage.UpsertRuntimeSetting": 1,
-        "usage.PersistRuntimeSettingsFromConfig": 1,
+        "settingsstore.UpsertRuntimeSetting": 1,
+        "settingsstore.PersistRuntimeSettingsFromConfig": 1,
         "usage.CleanDBBackedConfigFromYAML": 2
       }
     }

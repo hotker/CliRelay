@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
 	log "github.com/sirupsen/logrus"
@@ -62,8 +63,8 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 	usage.ApplyStoredRoutingConfig(cfg)
 	usage.MigrateProxyPoolFromConfig(cfg, configPath)
 	usage.ApplyStoredProxyPool(cfg)
-	usage.MigrateRuntimeSettingsFromConfig(cfg, configPath)
-	usage.ApplyStoredRuntimeSettings(cfg)
+	settingsstore.MigrateRuntimeSettingsFromConfig(cfg, configPath)
+	settingsstore.ApplyStoredRuntimeSettings(cfg)
 	middleware.InitQuotaUsageFuncs(usage.CountTodayByKey, usage.CountTotalByKey, usage.QueryTotalCostByKey)
 	usage.SetTokenUsageCallback(middleware.RecordTokenUsage)
 	usage.InitRedis(cfg.Redis)
@@ -134,8 +135,8 @@ func StartServiceBackground(cfg *config.Config, configPath string, localPassword
 	usage.ApplyStoredRoutingConfig(cfg)
 	usage.MigrateProxyPoolFromConfig(cfg, configPath)
 	usage.ApplyStoredProxyPool(cfg)
-	usage.MigrateRuntimeSettingsFromConfig(cfg, configPath)
-	usage.ApplyStoredRuntimeSettings(cfg)
+	settingsstore.MigrateRuntimeSettingsFromConfig(cfg, configPath)
+	settingsstore.ApplyStoredRuntimeSettings(cfg)
 	middleware.InitQuotaUsageFuncs(usage.CountTodayByKey, usage.CountTotalByKey, usage.QueryTotalCostByKey)
 	usage.SetTokenUsageCallback(middleware.RecordTokenUsage)
 	usage.InitRedis(cfg.Redis)

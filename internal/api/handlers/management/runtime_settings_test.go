@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 )
 
 func TestPutIdentityFingerprintPersistsToSQLite(t *testing.T) {
@@ -39,7 +39,7 @@ func TestPutIdentityFingerprintPersistsToSQLite(t *testing.T) {
 	}
 
 	var stored config.Config
-	if !usage.ApplyStoredRuntimeSettings(&stored) {
+	if !settingsstore.ApplyStoredRuntimeSettings(&stored) {
 		t.Fatal("ApplyStoredRuntimeSettings returned false")
 	}
 	if !stored.IdentityFingerprint.Codex.Enabled || stored.IdentityFingerprint.Codex.UserAgent != "codex_cli_rs/0.125.0" {
@@ -81,7 +81,7 @@ func TestPutOAuthModelAliasPersistsToSQLite(t *testing.T) {
 	}
 
 	var stored config.Config
-	if !usage.ApplyStoredRuntimeSettings(&stored) {
+	if !settingsstore.ApplyStoredRuntimeSettings(&stored) {
 		t.Fatal("ApplyStoredRuntimeSettings returned false")
 	}
 	aliases := stored.OAuthModelAlias["codex"]
@@ -124,7 +124,7 @@ func TestPutProviderCredentialsPersistToSQLite(t *testing.T) {
 	}
 
 	var stored config.Config
-	if !usage.ApplyStoredRuntimeSettings(&stored) {
+	if !settingsstore.ApplyStoredRuntimeSettings(&stored) {
 		t.Fatal("ApplyStoredRuntimeSettings returned false")
 	}
 	if len(stored.CodexKey) != 1 || stored.CodexKey[0].APIKey != "sk-codex-db" || stored.CodexKey[0].BaseURL != "https://codex.example.com" {

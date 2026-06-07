@@ -1,12 +1,14 @@
-package usage
+package store
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 func TestRuntimeSettingsMigrationMovesConfigIntoSQLiteAndCleansYAML(t *testing.T) {
@@ -177,5 +179,31 @@ func TestRuntimeSettingsSQLiteWinsOverStaleYAML(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "logging-to-file: true") {
 		t.Fatalf("ordinary config should remain in YAML:\n%s", string(data))
+	}
+}
+
+func setupConfigMigrationTestDB(t *testing.T) func() {
+	t.Helper()
+
+	usage.CloseDB()
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	if err := usage.InitDB(dbPath, config.RequestLogStorageConfig{}, time.UTC); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	return func() {
+		usage.CloseDB()
+	}
+}
+
+func assertMigrationBackupMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat migration backup: %v", err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("migration backup mode = %o, want %o", got, want)
 	}
 }
