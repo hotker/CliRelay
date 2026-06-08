@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -58,7 +59,7 @@ func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 		return
 	}
 
-	row := usage.GetAPIKey(apiKey)
+	row := apikeysettings.NewService(nil).GetRow(apiKey)
 	found := row != nil && !row.Disabled
 
 	resp := usageSummaryResponse{

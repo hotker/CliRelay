@@ -57,12 +57,12 @@ func TestModelConfigHandlersCreateListAndDelete(t *testing.T) {
 			"price_per_call": 0.12
 		}
 	}`)
-	createRec := performModelsRequest(http.MethodPost, "/model-configs", createBody, h.PostModelConfig)
+	createRec := performModelsRequest(http.MethodPost, "/model-configs", createBody, h.Models().PostModelConfig)
 	if createRec.Code != http.StatusOK {
 		t.Fatalf("PostModelConfig status = %d body = %s", createRec.Code, createRec.Body.String())
 	}
 
-	listRec := performModelsRequest(http.MethodGet, "/model-configs", nil, h.GetModelConfigs)
+	listRec := performModelsRequest(http.MethodGet, "/model-configs", nil, h.Models().GetModelConfigs)
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("GetModelConfigs status = %d body = %s", listRec.Code, listRec.Body.String())
 	}
@@ -100,7 +100,7 @@ func TestModelConfigHandlersCreateListAndDelete(t *testing.T) {
 
 	deleteRec := performModelsRequest(http.MethodDelete, "/model-configs/custom-image", nil, func(c *gin.Context) {
 		c.Params = gin.Params{{Key: "id", Value: "custom-image"}}
-		h.DeleteModelConfig(c)
+		h.Models().DeleteModelConfig(c)
 	})
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("DeleteModelConfig status = %d body = %s", deleteRec.Code, deleteRec.Body.String())
@@ -125,7 +125,7 @@ func TestModelConfigHandlersScopeFiltering(t *testing.T) {
 			"output_price_per_million": 2
 		}
 	}`)
-	createRec := performModelsRequest(http.MethodPost, "/model-configs", createBody, h.PostModelConfig)
+	createRec := performModelsRequest(http.MethodPost, "/model-configs", createBody, h.Models().PostModelConfig)
 	if createRec.Code != http.StatusOK {
 		t.Fatalf("PostModelConfig status = %d body = %s", createRec.Code, createRec.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestModelConfigHandlersScopeFiltering(t *testing.T) {
 			"output_price_per_million": 4
 		}
 	}`)
-	createLibraryRec := performModelsRequest(http.MethodPost, "/model-configs?scope=library", createLibraryBody, h.PostModelConfig)
+	createLibraryRec := performModelsRequest(http.MethodPost, "/model-configs?scope=library", createLibraryBody, h.Models().PostModelConfig)
 	if createLibraryRec.Code != http.StatusOK {
 		t.Fatalf("PostModelConfig library status = %d body = %s", createLibraryRec.Code, createLibraryRec.Body.String())
 	}
@@ -179,7 +179,7 @@ func TestModelConfigHandlersScopeFiltering(t *testing.T) {
 		return sources
 	}
 
-	activeSources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs", nil, h.GetModelConfigs))
+	activeSources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs", nil, h.Models().GetModelConfigs))
 	if activeSources["custom-active"] != "user" {
 		t.Fatal("expected custom-active in default active scope")
 	}
@@ -193,7 +193,7 @@ func TestModelConfigHandlersScopeFiltering(t *testing.T) {
 		t.Fatal("did not expect openrouter-synced model in default active scope")
 	}
 
-	librarySources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs?scope=library", nil, h.GetModelConfigs))
+	librarySources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs?scope=library", nil, h.Models().GetModelConfigs))
 	if _, ok := librarySources["gpt-image-2"]; !ok {
 		t.Fatal("expected gpt-image-2 in library scope")
 	}
@@ -207,7 +207,7 @@ func TestModelConfigHandlersScopeFiltering(t *testing.T) {
 		t.Fatalf("openrouter model source = %q, want openrouter", librarySources["openai/gpt-5.3-codex"])
 	}
 
-	allSources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs?scope=all", nil, h.GetModelConfigs))
+	allSources := decodeSources(performModelsRequest(http.MethodGet, "/model-configs?scope=all", nil, h.Models().GetModelConfigs))
 	if _, ok := allSources["gpt-image-2"]; !ok {
 		t.Fatal("expected all scope to include gpt-image-2")
 	}
@@ -229,12 +229,12 @@ func TestModelOwnerPresetHandlersReplacePresets(t *testing.T) {
 			{"value": "acme-ai", "label": "Acme AI", "description": "Internal models", "enabled": true}
 		]
 	}`)
-	putRec := performModelsRequest(http.MethodPut, "/model-owner-presets", body, h.PutModelOwnerPresets)
+	putRec := performModelsRequest(http.MethodPut, "/model-owner-presets", body, h.Models().PutModelOwnerPresets)
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("PutModelOwnerPresets status = %d body = %s", putRec.Code, putRec.Body.String())
 	}
 
-	getRec := performModelsRequest(http.MethodGet, "/model-owner-presets", nil, h.GetModelOwnerPresets)
+	getRec := performModelsRequest(http.MethodGet, "/model-owner-presets", nil, h.Models().GetModelOwnerPresets)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GetModelOwnerPresets status = %d body = %s", getRec.Code, getRec.Body.String())
 	}
@@ -261,7 +261,7 @@ func TestGetModelPathAvailabilityIncludesRootAndConfiguredPath(t *testing.T) {
 		},
 	}, "", nil)
 
-	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.GetModelPathAvailability)
+	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.Models().GetModelPathAvailability)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetModelPathAvailability status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -380,7 +380,7 @@ func TestGetModelPathAvailabilityFiltersConfiguredPathByRouteGroup(t *testing.T)
 	}
 
 	h := NewHandler(cfg, "", manager)
-	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.GetModelPathAvailability)
+	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.Models().GetModelPathAvailability)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetModelPathAvailability status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -454,7 +454,7 @@ func TestGetModelPathAvailabilityFiltersRootByDefaultAllowedModels(t *testing.T)
 	}
 
 	h := NewHandler(cfg, "", manager)
-	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.GetModelPathAvailability)
+	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.Models().GetModelPathAvailability)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetModelPathAvailability status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -547,7 +547,7 @@ func TestGetModelPathAvailabilityExcludesIsolatedGroupFromRoot(t *testing.T) {
 	}
 
 	h := NewHandler(cfg, "", manager)
-	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.GetModelPathAvailability)
+	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.Models().GetModelPathAvailability)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetModelPathAvailability status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -636,7 +636,7 @@ func TestGetModelPathAvailabilityIncludesCcSwitchRoutePaths(t *testing.T) {
 	}
 
 	h := NewHandler(cfg, "", manager)
-	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.GetModelPathAvailability)
+	rec := performModelsRequest(http.MethodGet, "/model-path-availability", nil, h.Models().GetModelPathAvailability)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GetModelPathAvailability status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -702,7 +702,7 @@ func TestOpenRouterModelSyncHandlersConfigureAndRun(t *testing.T) {
 	defer restoreFetcher()
 
 	putBody := []byte(`{"enabled": true, "interval_minutes": 120}`)
-	putRec := performModelsRequest(http.MethodPut, "/model-openrouter-sync", putBody, h.PutOpenRouterModelSync)
+	putRec := performModelsRequest(http.MethodPut, "/model-openrouter-sync", putBody, h.Models().PutOpenRouterModelSync)
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("PutOpenRouterModelSync status = %d body = %s", putRec.Code, putRec.Body.String())
 	}
@@ -717,7 +717,7 @@ func TestOpenRouterModelSyncHandlersConfigureAndRun(t *testing.T) {
 		t.Fatalf("unexpected sync settings response: %+v", putPayload)
 	}
 
-	runRec := performModelsRequest(http.MethodPost, "/model-openrouter-sync/run", nil, h.PostOpenRouterModelSyncRun)
+	runRec := performModelsRequest(http.MethodPost, "/model-openrouter-sync/run", nil, h.Models().PostOpenRouterModelSyncRun)
 	if runRec.Code != http.StatusOK {
 		t.Fatalf("PostOpenRouterModelSyncRun status = %d body = %s", runRec.Code, runRec.Body.String())
 	}
@@ -749,7 +749,7 @@ func TestOpenRouterModelSyncHandlersConfigureAndRun(t *testing.T) {
 		t.Fatal("did not expect OpenRouter provider prefix to be stored in model id")
 	}
 
-	getRec := performModelsRequest(http.MethodGet, "/model-openrouter-sync", nil, h.GetOpenRouterModelSync)
+	getRec := performModelsRequest(http.MethodGet, "/model-openrouter-sync", nil, h.Models().GetOpenRouterModelSync)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GetOpenRouterModelSync status = %d body = %s", getRec.Code, getRec.Body.String())
 	}

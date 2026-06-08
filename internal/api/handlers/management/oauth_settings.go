@@ -10,7 +10,7 @@ import (
 	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 )
 
-func oauthSettingsService(h *Handler) *oauthsettings.Service {
+func oauthSettingsService(h *ProviderKeysHandler) *oauthsettings.Service {
 	if h == nil {
 		return oauthsettings.NewService(nil)
 	}
@@ -18,11 +18,11 @@ func oauthSettingsService(h *Handler) *oauthsettings.Service {
 }
 
 // oauth-excluded-models: map[string][]string
-func (h *Handler) GetOAuthExcludedModels(c *gin.Context) {
+func (h *ProviderKeysHandler) GetOAuthExcludedModels(c *gin.Context) {
 	c.JSON(200, gin.H{"oauth-excluded-models": oauthSettingsService(h).ExcludedModels()})
 }
 
-func (h *Handler) PutOAuthExcludedModels(c *gin.Context) {
+func (h *ProviderKeysHandler) PutOAuthExcludedModels(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -43,7 +43,7 @@ func (h *Handler) PutOAuthExcludedModels(c *gin.Context) {
 	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthExcludedModels, setting)
 }
 
-func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchOAuthExcludedModels(c *gin.Context) {
 	var body struct {
 		Provider *string  `json:"provider"`
 		Models   []string `json:"models"`
@@ -64,7 +64,7 @@ func (h *Handler) PatchOAuthExcludedModels(c *gin.Context) {
 	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthExcludedModels, setting)
 }
 
-func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteOAuthExcludedModels(c *gin.Context) {
 	setting, err := oauthSettingsService(h).DeleteExcludedModels(c.Query("provider"))
 	if err == oauthsettings.ErrInvalidProvider {
 		c.JSON(400, gin.H{"error": "missing provider"})
@@ -78,11 +78,11 @@ func (h *Handler) DeleteOAuthExcludedModels(c *gin.Context) {
 }
 
 // oauth-model-alias: map[string][]OAuthModelAlias
-func (h *Handler) GetOAuthModelAlias(c *gin.Context) {
+func (h *ProviderKeysHandler) GetOAuthModelAlias(c *gin.Context) {
 	c.JSON(200, gin.H{"oauth-model-alias": oauthSettingsService(h).ModelAlias()})
 }
 
-func (h *Handler) PutOAuthModelAlias(c *gin.Context) {
+func (h *ProviderKeysHandler) PutOAuthModelAlias(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -103,7 +103,7 @@ func (h *Handler) PutOAuthModelAlias(c *gin.Context) {
 	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthModelAlias, setting)
 }
 
-func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchOAuthModelAlias(c *gin.Context) {
 	var body struct {
 		Provider *string                  `json:"provider"`
 		Channel  *string                  `json:"channel"`
@@ -131,7 +131,7 @@ func (h *Handler) PatchOAuthModelAlias(c *gin.Context) {
 	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingOAuthModelAlias, setting)
 }
 
-func (h *Handler) DeleteOAuthModelAlias(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteOAuthModelAlias(c *gin.Context) {
 	channel := strings.ToLower(strings.TrimSpace(c.Query("channel")))
 	if channel == "" {
 		channel = strings.ToLower(strings.TrimSpace(c.Query("provider")))

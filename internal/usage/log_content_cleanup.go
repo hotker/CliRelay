@@ -9,6 +9,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Request log content cleanup contract:
+// - Owner: usage/request log persistence boundary.
+// - Responsibility: trimming oversized stored content, retention cleanup, and reclaim-oriented content pruning.
+// - Non-goals: request log file retention and forced error-log cleanup in internal/logging.
 type logContentQuerier interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	Query(query string, args ...any) (*sql.Rows, error)

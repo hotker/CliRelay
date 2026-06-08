@@ -94,6 +94,14 @@ func (s *Service) EnabledKeys() []string {
 	return keys
 }
 
+func (s *Service) ListRows() []usage.APIKeyRow {
+	return usage.ListAPIKeys()
+}
+
+func (s *Service) GetRow(key string) *usage.APIKeyRow {
+	return usage.GetAPIKey(strings.TrimSpace(key))
+}
+
 func (s *Service) ReplaceKeys(keys []string) error {
 	rows := make([]usage.APIKeyRow, 0, len(keys))
 	for _, key := range keys {

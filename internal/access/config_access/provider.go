@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -31,38 +32,36 @@ func Register(cfg *sdkconfig.SDKConfig) {
 }
 
 // buildKeyConfigMap builds a map from API key to its full configuration.
-// Primary source: SQLite api_keys table (via usage.ListAPIKeys).
+// Primary source: management/settings/apikey service backed by SQLite.
 // Fallback: legacy APIKeys and APIKeyEntries from YAML config.
 func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 	result := make(map[string]keyConfig)
 
-	// Primary: load from SQLite
-	rows := usage.ListAPIKeys()
-	profiles := usage.ListAPIKeyPermissionProfiles()
-	for _, row := range rows {
-		row = usage.EffectiveAPIKeyRowWithProfiles(row, profiles)
-		trimmed := strings.TrimSpace(row.Key)
-		if trimmed == "" || row.Disabled {
+	// Primary: load from DB-backed management settings service.
+	for _, entry := range apikeysettings.NewService(nil).ListEntries() {
+		trimmed := strings.TrimSpace(entry.Key)
+		if trimmed == "" || entry.Disabled {
 			continue
 		}
 		if _, exists := result[trimmed]; exists {
 			continue
 		}
 		result[trimmed] = keyConfig{
-			allowedModels:        row.AllowedModels,
-			allowedChannels:      row.AllowedChannels,
-			allowedChannelGroups: row.AllowedChannelGroups,
-			dailyLimit:           row.DailyLimit,
-			totalQuota:           row.TotalQuota,
-			spendingLimit:        row.SpendingLimit,
-			concurrencyLimit:     row.ConcurrencyLimit,
-			rpmLimit:             row.RPMLimit,
-			tpmLimit:             row.TPMLimit,
-			systemPrompt:         row.SystemPrompt,
+			allowedModels:        entry.AllowedModels,
+			allowedChannels:      entry.AllowedChannels,
+			allowedChannelGroups: entry.AllowedChannelGroups,
+			dailyLimit:           entry.DailyLimit,
+			totalQuota:           entry.TotalQuota,
+			spendingLimit:        entry.SpendingLimit,
+			concurrencyLimit:     entry.ConcurrencyLimit,
+			rpmLimit:             entry.RPMLimit,
+			tpmLimit:             entry.TPMLimit,
+			systemPrompt:         entry.SystemPrompt,
 		}
 	}
 
 	// Fallback: YAML config (for backward compatibility during migration)
+	profiles := usage.ListAPIKeyPermissionProfiles()
 	for _, entry := range cfg.APIKeyEntries {
 		row := usage.EffectiveAPIKeyRowWithProfiles(usage.APIKeyRowFromConfig(entry), profiles)
 		trimmed := strings.TrimSpace(entry.Key)

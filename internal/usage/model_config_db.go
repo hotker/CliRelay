@@ -8,6 +8,11 @@ import (
 	sqlmodelconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlite/modelconfig"
 )
 
+// Compatibility bridge contract:
+// - Owner: model catalog / model settings boundary.
+// - Real implementation: internal/storage/sqlite/modelconfig and internal/management/settings/modelconfig.
+// - Allowed callers: legacy adapters still being migrated; new management/runtime code should use modelconfig settings first.
+// - Exit condition: remaining callers move to modelconfig settings or narrower bridges; do not add new imports here.
 type ModelConfigRow = sqlmodelconfig.ModelConfigRow
 type ModelOwnerPresetRow = sqlmodelconfig.ModelOwnerPresetRow
 

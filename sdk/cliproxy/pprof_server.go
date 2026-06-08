@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -25,7 +25,7 @@ func newPprofServer() *pprofServer {
 	return &pprofServer{}
 }
 
-func (s *Service) applyPprofConfig(cfg *config.Config) {
+func (s *Service) applyPprofConfig(cfg *sdkconfig.Config) {
 	if s == nil || cfg == nil {
 		return
 	}
@@ -42,13 +42,13 @@ func (s *Service) shutdownPprof(ctx context.Context) error {
 	return s.pprofServer.Shutdown(ctx)
 }
 
-func (p *pprofServer) Apply(cfg *config.Config) {
+func (p *pprofServer) Apply(cfg *sdkconfig.Config) {
 	if p == nil || cfg == nil {
 		return
 	}
 	addr := strings.TrimSpace(cfg.Pprof.Addr)
 	if addr == "" {
-		addr = config.DefaultPprofAddr
+		addr = sdkconfig.DefaultPprofAddr
 	}
 	addr = sanitizePprofAddr(addr, cfg.Pprof.AllowRemote)
 	enabled := cfg.Pprof.Enable
@@ -167,7 +167,7 @@ func newPprofMux() *http.ServeMux {
 func sanitizePprofAddr(addr string, allowRemote bool) string {
 	trimmed := strings.TrimSpace(addr)
 	if trimmed == "" {
-		return config.DefaultPprofAddr
+		return sdkconfig.DefaultPprofAddr
 	}
 	if allowRemote {
 		return trimmed
@@ -179,7 +179,7 @@ func sanitizePprofAddr(addr string, allowRemote bool) string {
 		if strings.HasPrefix(trimmed, ":") {
 			return "127.0.0.1" + trimmed
 		}
-		return config.DefaultPprofAddr
+		return sdkconfig.DefaultPprofAddr
 	}
 
 	host = strings.TrimSpace(host)

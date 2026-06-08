@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	proxypoolsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/proxypool"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -210,7 +211,7 @@ func (h *Handler) resolveUsageLogEgressProxyURL(authIndex string, meta usageLogE
 }
 
 func resolveUsageLogProxyPoolURL(cfg *config.Config, proxyID string, fallbackURL string) string {
-	if entry := usage.GetProxyPoolEntry(proxyID); entry != nil && entry.Enabled {
+	if entry := proxypoolsettings.Get(proxyID); entry != nil && entry.Enabled {
 		if proxyURL := strings.TrimSpace(entry.URL); proxyURL != "" {
 			return proxyURL
 		}

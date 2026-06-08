@@ -25,7 +25,7 @@ func TestOpenCodeGoKeyManagementPutGetPatchDelete(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/opencode-go-api-key", bytes.NewReader(putBody))
-	h.PutOpenCodeGoKeys(c)
+	h.ProviderKeys().PutOpenCodeGoKeys(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d body=%s", w.Code, w.Body.String())
 	}
@@ -37,7 +37,7 @@ func TestOpenCodeGoKeyManagementPutGetPatchDelete(t *testing.T) {
 	w = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/opencode-go-api-key", bytes.NewReader(patchBody))
-	h.PatchOpenCodeGoKey(c)
+	h.ProviderKeys().PatchOpenCodeGoKey(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d body=%s", w.Code, w.Body.String())
 	}
@@ -48,7 +48,7 @@ func TestOpenCodeGoKeyManagementPutGetPatchDelete(t *testing.T) {
 	w = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v0/management/opencode-go-api-key", nil)
-	h.GetOpenCodeGoKeys(c)
+	h.ProviderKeys().GetOpenCodeGoKeys(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET status = %d body=%s", w.Code, w.Body.String())
 	}
@@ -65,7 +65,7 @@ func TestOpenCodeGoKeyManagementPutGetPatchDelete(t *testing.T) {
 	w = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/opencode-go-api-key?name=secondary", nil)
-	h.DeleteOpenCodeGoKey(c)
+	h.ProviderKeys().DeleteOpenCodeGoKey(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE status = %d body=%s", w.Code, w.Body.String())
 	}

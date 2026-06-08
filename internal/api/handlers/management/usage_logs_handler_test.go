@@ -67,7 +67,7 @@ func TestGetUsageLogsResolvesLegacySourceChannelName(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50", nil)
 
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -141,7 +141,7 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50", nil)
 
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -171,7 +171,7 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 	rec = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel=tabcode-plus", nil)
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -185,7 +185,7 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 	rec = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel=tabcode-pro", nil)
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("mismatched filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -264,7 +264,7 @@ func TestGetUsageLogsResolvesGenericKimiChannelByAuthIndex(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50", nil)
 
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -296,7 +296,7 @@ func TestGetUsageLogsResolvesGenericKimiChannelByAuthIndex(t *testing.T) {
 	rec = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel=kimi-b", nil)
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -334,7 +334,7 @@ func TestGetUsageLogs_EmptyDB_DoesNotReturnNullSlices(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50", nil)
 
-	h.GetUsageLogs(c)
+	h.UsageLogs().GetUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -410,7 +410,7 @@ func TestGetLogContent_ReturnsRequestDetailsPart(t *testing.T) {
 	c.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(result.Items[0].ID, 10)}}
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs/1/content?part=details&format=json", nil)
 
-	h.GetLogContent(c)
+	h.UsageLogs().GetLogContent(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -453,7 +453,7 @@ func TestGetPublicLogContent_RejectsRequestDetailsPart(t *testing.T) {
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.GetPublicLogContent(c)
+	h.UsageLogs().GetPublicLogContent(c)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusForbidden, rec.Code, rec.Body.String())
@@ -520,7 +520,7 @@ func TestGetAuthFileGroupTrendAggregatesByProvider(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/auth-file-group-trend?group=codex&days=7", nil)
 
-	h.GetAuthFileGroupTrend(c)
+	h.UsageLogs().GetAuthFileGroupTrend(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -591,7 +591,7 @@ func TestGetEntityUsageStatsScopesAuthIndexesAndSources(t *testing.T) {
 		nil,
 	)
 
-	h.GetEntityUsageStats(c)
+	h.UsageLogs().GetEntityUsageStats(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -694,7 +694,7 @@ func TestGetAuthFileTrendUsesWeeklyResetCycleForRequestTotal(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/auth-file-trend?auth_index="+auth.Index+"&days=7&hours=5", nil)
 
-	h.GetAuthFileTrend(c)
+	h.UsageLogs().GetAuthFileTrend(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -841,7 +841,7 @@ func TestGetPublicUsageLogs_EmptyDB_DoesNotReturnNullModels(t *testing.T) {
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.GetPublicUsageLogs(c)
+	h.UsageLogs().GetPublicUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -889,7 +889,7 @@ func TestGetPublicUsageLogs_AcceptsPOSTBody(t *testing.T) {
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.GetPublicUsageLogs(c)
+	h.UsageLogs().GetPublicUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -935,7 +935,7 @@ func TestGetPublicUsageLogs_DoesNotReadAPIKeyFromQuery(t *testing.T) {
 		nil,
 	)
 
-	h.GetPublicUsageLogs(c)
+	h.UsageLogs().GetPublicUsageLogs(c)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
@@ -974,7 +974,7 @@ func TestGetPublicUsageLogs_RejectsOversizedPOSTBody(t *testing.T) {
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.GetPublicUsageLogs(c)
+	h.UsageLogs().GetPublicUsageLogs(c)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
@@ -1014,7 +1014,7 @@ func TestDeleteUsageLogsClearsRequestLogDatabase(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodDelete, "/usage/logs", nil)
 
-	h.DeleteUsageLogs(c)
+	h.UsageLogs().DeleteUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1074,7 +1074,7 @@ func TestDeleteUsageLogsSupportsSelectiveBodyCleanup(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodDelete, "/usage/logs", strings.NewReader(`{"clear_body_content":true,"clear_detail_content":true}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.DeleteUsageLogs(c)
+	h.UsageLogs().DeleteUsageLogs(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())

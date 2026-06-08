@@ -12,7 +12,18 @@ import (
 	providersettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/providers"
 )
 
-func providerSettingsService(h *Handler) *providersettings.Service {
+type ProviderKeysHandler struct {
+	*Handler
+}
+
+func (h *Handler) ProviderKeys() *ProviderKeysHandler {
+	if h == nil {
+		return nil
+	}
+	return &ProviderKeysHandler{Handler: h}
+}
+
+func providerSettingsService(h *ProviderKeysHandler) *providersettings.Service {
 	if h == nil {
 		return providersettings.NewService(nil, nil)
 	}
@@ -20,11 +31,11 @@ func providerSettingsService(h *Handler) *providersettings.Service {
 }
 
 // gemini-api-key: []GeminiKey
-func (h *Handler) GetGeminiKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetGeminiKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"gemini-api-key": providerSettingsService(h).GeminiKeys()})
 }
 
-func (h *Handler) PutGeminiKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutGeminiKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -48,7 +59,7 @@ func (h *Handler) PutGeminiKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchGeminiKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchGeminiKey(c *gin.Context) {
 	var body struct {
 		Index *int                             `json:"index"`
 		Match *string                          `json:"match"`
@@ -69,7 +80,7 @@ func (h *Handler) PatchGeminiKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteGeminiKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteGeminiKey(c *gin.Context) {
 	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		if providerSettingsService(h).DeleteGeminiKeyByAPIKey(val) {
 			h.persist(c)
@@ -89,11 +100,11 @@ func (h *Handler) DeleteGeminiKey(c *gin.Context) {
 }
 
 // claude-api-key: []ClaudeKey
-func (h *Handler) GetClaudeKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetClaudeKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"claude-api-key": providerSettingsService(h).ClaudeKeys()})
 }
 
-func (h *Handler) PutClaudeKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutClaudeKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -117,7 +128,7 @@ func (h *Handler) PutClaudeKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchClaudeKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchClaudeKey(c *gin.Context) {
 	var body struct {
 		Index *int                             `json:"index"`
 		Match *string                          `json:"match"`
@@ -138,7 +149,7 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteClaudeKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteClaudeKey(c *gin.Context) {
 	if val := c.Query("api-key"); val != "" {
 		providerSettingsService(h).DeleteClaudeKeyByAPIKey(val)
 		h.persist(c)
@@ -156,11 +167,11 @@ func (h *Handler) DeleteClaudeKey(c *gin.Context) {
 }
 
 // bedrock-api-key: []BedrockKey
-func (h *Handler) GetBedrockKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetBedrockKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"bedrock-api-key": providerSettingsService(h).BedrockKeys()})
 }
 
-func (h *Handler) PutBedrockKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutBedrockKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -184,7 +195,7 @@ func (h *Handler) PutBedrockKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchBedrockKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchBedrockKey(c *gin.Context) {
 	var body struct {
 		Index *int                              `json:"index"`
 		Match *string                           `json:"match"`
@@ -205,7 +216,7 @@ func (h *Handler) PatchBedrockKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteBedrockKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteBedrockKey(c *gin.Context) {
 	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		if providerSettingsService(h).DeleteBedrockKeyByAPIKey(val) {
 			h.persist(c)
@@ -241,11 +252,11 @@ func (h *Handler) DeleteBedrockKey(c *gin.Context) {
 }
 
 // opencode-go-api-key: []OpenCodeGoKey
-func (h *Handler) GetOpenCodeGoKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetOpenCodeGoKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"opencode-go-api-key": providerSettingsService(h).OpenCodeGoKeys()})
 }
 
-func (h *Handler) PutOpenCodeGoKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutOpenCodeGoKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -269,7 +280,7 @@ func (h *Handler) PutOpenCodeGoKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchOpenCodeGoKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchOpenCodeGoKey(c *gin.Context) {
 	var body struct {
 		APIKey *string                           `json:"api-key"`
 		Name   *string                           `json:"name"`
@@ -291,7 +302,7 @@ func (h *Handler) PatchOpenCodeGoKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteOpenCodeGoKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteOpenCodeGoKey(c *gin.Context) {
 	if apiKey := strings.TrimSpace(c.Query("api-key")); apiKey != "" {
 		if providerSettingsService(h).DeleteOpenCodeGoKeyByAPIKey(apiKey) {
 			h.persist(c)
@@ -319,11 +330,11 @@ func (h *Handler) DeleteOpenCodeGoKey(c *gin.Context) {
 }
 
 // openai-compatibility: []OpenAICompatibility
-func (h *Handler) GetOpenAICompat(c *gin.Context) {
+func (h *ProviderKeysHandler) GetOpenAICompat(c *gin.Context) {
 	c.JSON(200, gin.H{"openai-compatibility": providerSettingsService(h).OpenAICompatibility()})
 }
 
-func (h *Handler) PutOpenAICompat(c *gin.Context) {
+func (h *ProviderKeysHandler) PutOpenAICompat(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -347,7 +358,7 @@ func (h *Handler) PutOpenAICompat(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchOpenAICompat(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchOpenAICompat(c *gin.Context) {
 	var body struct {
 		Name  *string                                    `json:"name"`
 		Index *int                                       `json:"index"`
@@ -368,7 +379,7 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteOpenAICompat(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteOpenAICompat(c *gin.Context) {
 	if name := c.Query("name"); name != "" {
 		providerSettingsService(h).DeleteOpenAICompatibilityByName(name)
 		h.persist(c)
@@ -386,11 +397,11 @@ func (h *Handler) DeleteOpenAICompat(c *gin.Context) {
 }
 
 // vertex-api-key: []VertexCompatKey
-func (h *Handler) GetVertexCompatKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetVertexCompatKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"vertex-api-key": providerSettingsService(h).VertexCompatKeys()})
 }
 
-func (h *Handler) PutVertexCompatKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutVertexCompatKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -411,7 +422,7 @@ func (h *Handler) PutVertexCompatKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchVertexCompatKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchVertexCompatKey(c *gin.Context) {
 	var body struct {
 		Index *int                                `json:"index"`
 		Match *string                             `json:"match"`
@@ -428,7 +439,7 @@ func (h *Handler) PatchVertexCompatKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteVertexCompatKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteVertexCompatKey(c *gin.Context) {
 	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
 		providerSettingsService(h).DeleteVertexCompatKeyByAPIKey(val)
 		h.persist(c)
@@ -446,11 +457,11 @@ func (h *Handler) DeleteVertexCompatKey(c *gin.Context) {
 }
 
 // codex-api-key: []CodexKey
-func (h *Handler) GetCodexKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) GetCodexKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"codex-api-key": providerSettingsService(h).CodexKeys()})
 }
 
-func (h *Handler) PutCodexKeys(c *gin.Context) {
+func (h *ProviderKeysHandler) PutCodexKeys(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -474,7 +485,7 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) PatchCodexKey(c *gin.Context) {
+func (h *ProviderKeysHandler) PatchCodexKey(c *gin.Context) {
 	var body struct {
 		Index *int                            `json:"index"`
 		Match *string                         `json:"match"`
@@ -495,7 +506,7 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	h.persist(c)
 }
 
-func (h *Handler) DeleteCodexKey(c *gin.Context) {
+func (h *ProviderKeysHandler) DeleteCodexKey(c *gin.Context) {
 	if val := c.Query("api-key"); val != "" {
 		providerSettingsService(h).DeleteCodexKeyByAPIKey(val)
 		h.persist(c)

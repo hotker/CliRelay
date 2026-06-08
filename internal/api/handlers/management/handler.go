@@ -3,6 +3,7 @@
 package management
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	imagegeneration "github.com/router-for-me/CLIProxyAPI/v6/internal/management/imagegeneration"
 	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -57,8 +59,7 @@ type Handler struct {
 	accessManager       *sdkaccess.Manager
 	trendCacheMu        sync.Mutex
 	trendCache          map[string]trendCacheEntry
-	imageTasksMu        sync.Mutex
-	imageTasks          map[string]*imageGenerationTask
+	imageGeneration     *imagegeneration.Service
 }
 
 type trendCacheEntry struct {
@@ -83,10 +84,31 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		startTime:           time.Now(),
 		attemptCleanupStop:  make(chan struct{}),
 		trendCache:          make(map[string]trendCacheEntry),
-		imageTasks:          make(map[string]*imageGenerationTask),
 	}
+	h.imageGeneration = h.newImageGenerationService()
 	h.startAttemptCleanup()
 	return h
+}
+
+func (h *Handler) newImageGenerationService() *imagegeneration.Service {
+	if h == nil {
+		return nil
+	}
+	return imagegeneration.NewService(func(ctx context.Context, payload []byte, alt string) ([]byte, error) {
+		return h.executeImageGenerationTest(ctx, payload, alt)
+	}, imageGenerationSystemAPIKey)
+}
+
+func (h *Handler) ensureImageGenerationService() *imagegeneration.Service {
+	if h == nil || h.authManager == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.imageGeneration == nil {
+		h.imageGeneration = h.newImageGenerationService()
+	}
+	return h.imageGeneration
 }
 
 // startAttemptCleanup launches a background goroutine that periodically
@@ -143,7 +165,10 @@ func NewHandlerWithoutConfigFilePath(cfg *config.Config, manager *coreauth.Manag
 func (h *Handler) SetConfig(cfg *config.Config) { h.cfg = cfg }
 
 // SetAuthManager updates the auth manager reference used by management endpoints.
-func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = manager }
+func (h *Handler) SetAuthManager(manager *coreauth.Manager) {
+	h.authManager = manager
+	h.ensureImageGenerationService()
+}
 
 func (h *Handler) SetConfigMutatedHook(fn func(*config.Config)) { h.onConfigMutated = fn }
 

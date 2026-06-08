@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -138,7 +139,7 @@ func (h *Handler) GetPublicCcSwitchImportConfigs(c *gin.Context) {
 		return
 	}
 
-	row := usage.GetAPIKey(apiKey)
+	row := apikeysettings.NewService(nil).GetRow(apiKey)
 	if row == nil {
 		items := []usage.CcSwitchImportConfigRow{}
 		c.JSON(http.StatusOK, gin.H{

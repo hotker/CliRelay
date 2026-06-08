@@ -5,7 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
+	routingconfigsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/routingconfig"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
@@ -17,12 +18,7 @@ func currentRoutingConfig(cfg *config.Config) config.RoutingConfig {
 }
 
 func sqliteAPIKeyEntries() []config.APIKeyEntry {
-	rows := usage.ListAPIKeys()
-	entries := make([]config.APIKeyEntry, 0, len(rows))
-	for _, row := range rows {
-		entries = append(entries, row.ToConfigEntry())
-	}
-	return entries
+	return apikeysettings.NewService(nil).ListEntries()
 }
 
 func (h *Handler) GetRoutingConfig(c *gin.Context) {
@@ -64,7 +60,7 @@ func (h *Handler) PutRoutingConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := usage.UpsertRoutingConfig(candidate.Routing); err != nil {
+	if err := routingconfigsettings.Upsert(candidate.Routing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

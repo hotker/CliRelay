@@ -75,7 +75,7 @@ func TestPutOAuthModelAliasPersistsToSQLite(t *testing.T) {
 		"codex": [
 			{"name": "gpt-5.3-codex", "alias": "codex-latest", "fork": true}
 		]
-	}`), h.PutOAuthModelAlias)
+	}`), h.ProviderKeys().PutOAuthModelAlias)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PutOAuthModelAlias status = %d body = %s", rec.Code, rec.Body.String())
 	}
@@ -112,13 +112,13 @@ func TestPutProviderCredentialsPersistToSQLite(t *testing.T) {
 
 	codexRec := performModelsRequest(http.MethodPut, "/codex-api-key", []byte(`[
 		{"api-key": "sk-codex-db", "base-url": "https://codex.example.com"}
-	]`), h.PutCodexKeys)
+	]`), h.ProviderKeys().PutCodexKeys)
 	if codexRec.Code != http.StatusOK {
 		t.Fatalf("PutCodexKeys status = %d body = %s", codexRec.Code, codexRec.Body.String())
 	}
 	claudeRec := performModelsRequest(http.MethodPut, "/claude-api-key", []byte(`[
 		{"api-key": "sk-claude-db", "name": "claude-db", "base-url": "https://claude.example.com"}
-	]`), h.PutClaudeKeys)
+	]`), h.ProviderKeys().PutClaudeKeys)
 	if claudeRec.Code != http.StatusOK {
 		t.Fatalf("PutClaudeKeys status = %d body = %s", claudeRec.Code, claudeRec.Body.String())
 	}

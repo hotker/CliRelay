@@ -2,11 +2,6 @@
   "large_files": {
     "allow_above_1200": [
       {
-        "path": "internal/logging/request_logger.go",
-        "max_lines": 1268,
-        "reason": "Legacy request logging debt; keep stable while request-log storage and retention are separated in Phase 3."
-      },
-      {
         "path": "internal/registry/model_definitions_static_data.go",
         "max_lines": 1233,
         "reason": "Static model definition data exception; keep out of business-logic large-file goals unless generation/storage changes."
@@ -62,15 +57,6 @@
         "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/util"
       ],
-      "sdk/api/handlers/stream_forwarder.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
-      ],
-      "sdk/api/management.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
-      ],
-      "sdk/api/options.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/api"
-      ],
       "sdk/auth/antigravity.go": [
         "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/antigravity",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/browser",
@@ -97,9 +83,6 @@
         "github.com/router-for-me/CLIProxyAPI/v6/internal/browser",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/config",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-      ],
-      "sdk/auth/errors.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
       ],
       "sdk/auth/filestore.go": [
         "github.com/router-for-me/CLIProxyAPI/v6/internal/auth",
@@ -131,79 +114,10 @@
         "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/browser",
         "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-      ],
-      "sdk/cliproxy/auth/conductor.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/config",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/logging",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/registry",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/thinking",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-      ],
-      "sdk/cliproxy/auth/oauth_model_alias.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/config",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
-      ],
-      "sdk/cliproxy/auth/quota_reconcile.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-      ],
-      "sdk/cliproxy/auth/routing_groups.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/config",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/registry",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
-      ],
-      "sdk/cliproxy/auth/selector.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
-      ],
-      "sdk/cliproxy/auth/types.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/auth"
-      ],
-      "sdk/cliproxy/builder.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/access/config_access",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/api"
-      ],
-      "sdk/cliproxy/model_registry.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-      ],
-      "sdk/cliproxy/pprof_server.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-      ],
-      "sdk/cliproxy/providers.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
-      ],
-      "sdk/cliproxy/service.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/api",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/registry",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/usage",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/watcher",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/synthesizer",
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
-      ],
-      "sdk/cliproxy/types.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
-      ],
-      "sdk/cliproxy/watcher.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
-      ],
-      "sdk/config/config.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-      ],
-      "sdk/logging/request_logger.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
-      ],
-      "sdk/translator/builtin/builtin.go": [
-        "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
       ]
     }
   },
   "management_persistence_calls": {
-    "allow": {
-      "internal/api/handlers/management/channel_rename.go": {
-        "config.SaveConfigPreserveComments": 2,
-        "settingsstore.UpsertRuntimeSetting": 2,
-        "usage.CleanDBBackedConfigFromYAML": 2
-      }
-    }
+    "allow": {}
   }
 }

@@ -13,6 +13,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Request log content storage contract:
+// - Owner: usage/request log persistence boundary.
+// - Responsibility: compressed request/response/detail content writes, runtime storage policy, and maintenance scheduling.
+// - Non-goals: human-readable file log formatting and transport-level request log orchestration.
 const requestLogContentCompression = "zstd"
 
 const (

@@ -131,7 +131,7 @@ func TestResolveTokenForAuth_Antigravity_RefreshesExpiredToken(t *testing.T) {
 		},
 		authManager: manager,
 	}
-	token, err := h.resolveTokenForAuth(context.Background(), auth)
+	token, err := h.APITools().resolveTokenForAuth(context.Background(), auth)
 	if err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestResolveTokenForAuth_Antigravity_SkipsRefreshWhenTokenValid(t *testing.T
 		},
 	}
 	h := &Handler{}
-	token, err := h.resolveTokenForAuth(context.Background(), auth)
+	token, err := h.APITools().resolveTokenForAuth(context.Background(), auth)
 	if err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestResolveTokenForAuth_Claude_RefreshesExpiredToken(t *testing.T) {
 	}
 
 	h := &Handler{cfg: &config.Config{}, authManager: manager}
-	token, err := h.resolveTokenForAuth(context.Background(), auth)
+	token, err := h.APITools().resolveTokenForAuth(context.Background(), auth)
 	if err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestResolveTokenForAuth_Claude_RefreshUsesAuthProxyURL(t *testing.T) {
 	}
 	h := &Handler{cfg: &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "http://global-proxy.local:8080"}}}
 
-	if _, err := h.resolveTokenForAuth(context.Background(), auth); err != nil {
+	if _, err := h.APITools().resolveTokenForAuth(context.Background(), auth); err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
 	if gotProxyURL != "http://auth-proxy.local:8080" {
@@ -341,7 +341,7 @@ func TestResolveTokenForAuth_Claude_RefreshUsesProxyIDBeforeProxyURL(t *testing.
 		},
 	}}
 
-	if _, err := h.resolveTokenForAuth(context.Background(), auth); err != nil {
+	if _, err := h.APITools().resolveTokenForAuth(context.Background(), auth); err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
 	if gotProxyURL != "http://pool-proxy.local:8080" {
@@ -371,7 +371,7 @@ func TestResolveTokenForAuth_Claude_SkipsRefreshWhenTokenValid(t *testing.T) {
 		},
 	}
 	h := &Handler{cfg: &config.Config{}}
-	token, err := h.resolveTokenForAuth(context.Background(), auth)
+	token, err := h.APITools().resolveTokenForAuth(context.Background(), auth)
 	if err != nil {
 		t.Fatalf("resolveTokenForAuth: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestAPICallReconcilesCodexWhamUsagePlanType(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/api-call", bytes.NewReader(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	h.APICall(c)
+	h.APITools().APICall(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -488,7 +488,7 @@ func TestAPICallRejectsOversizedUpstreamResponse(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	c.Request = req
 
-	h.APICall(c)
+	h.APITools().APICall(c)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected status %d, got %d, body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())

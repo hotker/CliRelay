@@ -53,7 +53,7 @@ func TestBedrockKeyManagementHandlers(t *testing.T) {
 		}
 	]`)
 
-	putRec := performBedrockConfigRequest(http.MethodPut, "/bedrock-api-key", payload, h.PutBedrockKeys)
+	putRec := performBedrockConfigRequest(http.MethodPut, "/bedrock-api-key", payload, h.ProviderKeys().PutBedrockKeys)
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d body=%s", putRec.Code, putRec.Body.String())
 	}
@@ -62,7 +62,7 @@ func TestBedrockKeyManagementHandlers(t *testing.T) {
 	}
 
 	patchPayload := []byte(`{"index":1,"value":{"name":"renamed sigv4","region":"ap-southeast-2","session-token":"SESSION"}}`)
-	patchRec := performBedrockConfigRequest(http.MethodPatch, "/bedrock-api-key", patchPayload, h.PatchBedrockKey)
+	patchRec := performBedrockConfigRequest(http.MethodPatch, "/bedrock-api-key", patchPayload, h.ProviderKeys().PatchBedrockKey)
 	if patchRec.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d body=%s", patchRec.Code, patchRec.Body.String())
 	}
@@ -70,7 +70,7 @@ func TestBedrockKeyManagementHandlers(t *testing.T) {
 		t.Fatalf("unexpected patched key: %+v", cfg.BedrockKey[1])
 	}
 
-	getRec := performBedrockConfigRequest(http.MethodGet, "/bedrock-api-key", nil, h.GetBedrockKeys)
+	getRec := performBedrockConfigRequest(http.MethodGet, "/bedrock-api-key", nil, h.ProviderKeys().GetBedrockKeys)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GET status = %d body=%s", getRec.Code, getRec.Body.String())
 	}
@@ -82,7 +82,7 @@ func TestBedrockKeyManagementHandlers(t *testing.T) {
 		t.Fatalf("expected 2 keys from GET, got %+v", got)
 	}
 
-	deleteRec := performBedrockConfigRequest(http.MethodDelete, "/bedrock-api-key?index=0", nil, h.DeleteBedrockKey)
+	deleteRec := performBedrockConfigRequest(http.MethodDelete, "/bedrock-api-key?index=0", nil, h.ProviderKeys().DeleteBedrockKey)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("DELETE status = %d body=%s", deleteRec.Code, deleteRec.Body.String())
 	}

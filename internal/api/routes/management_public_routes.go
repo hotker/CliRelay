@@ -19,17 +19,18 @@ func registerPublicManagementRoutes(engine *gin.Engine, h *managementhandlers.Ha
 
 	pub := engine.Group("/v0/management/public")
 	pub.Use(publicMiddlewares...)
+	usageLogs := h.UsageLogs()
 	{
 		pub.GET("/usage", h.GetPublicUsageByAPIKey)
 		pub.POST("/usage", h.GetPublicUsageByAPIKey)
 		pub.GET("/ccswitch-import-configs", h.GetPublicCcSwitchImportConfigs)
 		pub.POST("/ccswitch-import-configs", h.GetPublicCcSwitchImportConfigs)
-		pub.GET("/usage/logs", h.GetPublicUsageLogs)
-		pub.POST("/usage/logs", h.GetPublicUsageLogs)
-		pub.GET("/usage/logs/:id/content", h.GetPublicLogContent)
-		pub.POST("/usage/logs/:id/content", h.GetPublicLogContent)
-		pub.GET("/usage/chart-data", h.GetPublicUsageChartData)
-		pub.POST("/usage/chart-data", h.GetPublicUsageChartData)
+		pub.GET("/usage/logs", usageLogs.GetPublicUsageLogs)
+		pub.POST("/usage/logs", usageLogs.GetPublicUsageLogs)
+		pub.GET("/usage/logs/:id/content", usageLogs.GetPublicLogContent)
+		pub.POST("/usage/logs/:id/content", usageLogs.GetPublicLogContent)
+		pub.GET("/usage/chart-data", usageLogs.GetPublicUsageChartData)
+		pub.POST("/usage/chart-data", usageLogs.GetPublicUsageChartData)
 		pub.POST("/usage/summary", h.GetPublicUsageSummary)
 	}
 }

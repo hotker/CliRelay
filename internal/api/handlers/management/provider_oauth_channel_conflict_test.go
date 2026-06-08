@@ -49,7 +49,7 @@ func TestPutClaudeKeysDropsOAuthDisplayRowsBeforeChannelValidation(t *testing.T)
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/claude-api-key", bytes.NewReader(body))
 
-	h.PutClaudeKeys(c)
+	h.ProviderKeys().PutClaudeKeys(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d body=%s", rec.Code, rec.Body.String())
@@ -75,7 +75,7 @@ func TestPutOpenCodeGoKeysIgnoresStaleEmptyClaudeRowsDuringChannelValidation(t *
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/opencode-go-api-key", bytes.NewReader(body))
 
-	h.PutOpenCodeGoKeys(c)
+	h.ProviderKeys().PutOpenCodeGoKeys(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d body=%s", rec.Code, rec.Body.String())
@@ -123,7 +123,7 @@ func TestPutOpenCodeGoKeysIgnoresDuplicateOAuthEmailAliases(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/opencode-go-api-key", bytes.NewReader(body))
 
-	h.PutOpenCodeGoKeys(c)
+	h.ProviderKeys().PutOpenCodeGoKeys(c)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d body=%s", rec.Code, rec.Body.String())

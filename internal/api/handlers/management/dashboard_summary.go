@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	log "github.com/sirupsen/logrus"
 )
@@ -35,7 +36,7 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 		vertexCount = len(cfg.VertexCompatAPIKey)
 		openaiCount = len(cfg.OpenAICompatibility)
 	}
-	apiKeyCount = len(usage.ListAPIKeys())
+	apiKeyCount = len(apikeysettings.NewService(nil).ListRows())
 
 	if h.authManager != nil {
 		authFileCount = len(managementauthfiles.ListEntries(h.authManager.List(), managementauthfiles.EntryOptions{

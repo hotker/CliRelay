@@ -4,64 +4,66 @@
 // embed CLIProxyAPI without importing internal packages.
 package config
 
-import internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+import bridgeconfig "github.com/router-for-me/CLIProxyAPI/v6/sdkbridge/config"
 
-type SDKConfig = internalconfig.SDKConfig
+type SDKConfig = bridgeconfig.SDKConfig
 
-type Config = internalconfig.Config
-type APIKeyEntry = internalconfig.APIKeyEntry
+type Config = bridgeconfig.Config
+type APIKeyEntry = bridgeconfig.APIKeyEntry
 
-type StreamingConfig = internalconfig.StreamingConfig
-type RoutingConfig = internalconfig.RoutingConfig
-type RoutingChannelGroup = internalconfig.RoutingChannelGroup
-type RoutingPathRoute = internalconfig.RoutingPathRoute
-type ChannelGroupMatch = internalconfig.ChannelGroupMatch
-type TLSConfig = internalconfig.TLSConfig
-type RemoteManagement = internalconfig.RemoteManagement
-type AmpCode = internalconfig.AmpCode
-type OAuthModelAlias = internalconfig.OAuthModelAlias
-type PayloadConfig = internalconfig.PayloadConfig
-type PayloadRule = internalconfig.PayloadRule
-type PayloadFilterRule = internalconfig.PayloadFilterRule
-type PayloadModelRule = internalconfig.PayloadModelRule
+type StreamingConfig = bridgeconfig.StreamingConfig
+type RoutingConfig = bridgeconfig.RoutingConfig
+type RoutingChannelGroup = bridgeconfig.RoutingChannelGroup
+type RoutingPathRoute = bridgeconfig.RoutingPathRoute
+type ChannelGroupMatch = bridgeconfig.ChannelGroupMatch
+type TLSConfig = bridgeconfig.TLSConfig
+type PprofConfig = bridgeconfig.PprofConfig
+type RemoteManagement = bridgeconfig.RemoteManagement
+type AmpCode = bridgeconfig.AmpCode
+type OAuthModelAlias = bridgeconfig.OAuthModelAlias
+type PayloadConfig = bridgeconfig.PayloadConfig
+type PayloadRule = bridgeconfig.PayloadRule
+type PayloadFilterRule = bridgeconfig.PayloadFilterRule
+type PayloadModelRule = bridgeconfig.PayloadModelRule
 
-type GeminiKey = internalconfig.GeminiKey
-type CodexKey = internalconfig.CodexKey
-type ClaudeKey = internalconfig.ClaudeKey
-type BedrockKey = internalconfig.BedrockKey
-type BedrockModel = internalconfig.BedrockModel
-type OpenCodeGoKey = internalconfig.OpenCodeGoKey
-type VertexCompatKey = internalconfig.VertexCompatKey
-type VertexCompatModel = internalconfig.VertexCompatModel
-type OpenAICompatibility = internalconfig.OpenAICompatibility
-type OpenAICompatibilityAPIKey = internalconfig.OpenAICompatibilityAPIKey
-type OpenAICompatibilityModel = internalconfig.OpenAICompatibilityModel
+type GeminiKey = bridgeconfig.GeminiKey
+type CodexKey = bridgeconfig.CodexKey
+type ClaudeKey = bridgeconfig.ClaudeKey
+type BedrockKey = bridgeconfig.BedrockKey
+type BedrockModel = bridgeconfig.BedrockModel
+type OpenCodeGoKey = bridgeconfig.OpenCodeGoKey
+type VertexCompatKey = bridgeconfig.VertexCompatKey
+type VertexCompatModel = bridgeconfig.VertexCompatModel
+type OpenAICompatibility = bridgeconfig.OpenAICompatibility
+type OpenAICompatibilityAPIKey = bridgeconfig.OpenAICompatibilityAPIKey
+type OpenAICompatibilityModel = bridgeconfig.OpenAICompatibilityModel
 
-type TLS = internalconfig.TLSConfig
+type TLS = bridgeconfig.TLSConfig
 
 const (
-	DefaultPanelGitHubRepository = internalconfig.DefaultPanelGitHubRepository
-	DefaultBedrockRegion         = internalconfig.DefaultBedrockRegion
+	DefaultPanelGitHubRepository = bridgeconfig.DefaultPanelGitHubRepository
+	DefaultBedrockRegion         = bridgeconfig.DefaultBedrockRegion
+	DefaultPprofAddr             = bridgeconfig.DefaultPprofAddr
 )
 
-func LoadConfig(configFile string) (*Config, error) { return internalconfig.LoadConfig(configFile) }
+func LoadConfig(configFile string) (*Config, error) { return bridgeconfig.LoadConfig(configFile) }
 
 func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
-	return internalconfig.LoadConfigOptional(configFile, optional)
+	return bridgeconfig.LoadConfigOptional(configFile, optional)
 }
 
 func SaveConfigPreserveComments(configFile string, cfg *Config) error {
-	return internalconfig.SaveConfigPreserveComments(configFile, cfg)
+	return bridgeconfig.SaveConfigPreserveComments(configFile, cfg)
 }
 
 func SaveConfigPreserveCommentsUpdateNestedScalar(configFile string, path []string, value string) error {
-	return internalconfig.SaveConfigPreserveCommentsUpdateNestedScalar(configFile, path, value)
+	return bridgeconfig.SaveConfigPreserveCommentsUpdateNestedScalar(configFile, path, value)
 }
 
 func NormalizeCommentIndentation(data []byte) []byte {
-	return internalconfig.NormalizeCommentIndentation(data)
+	return bridgeconfig.NormalizeCommentIndentation(data)
 }
 
 func NormalizeRoutingStrategy(strategy string) string {
-	return internalconfig.NormalizeRoutingStrategy(strategy)
+	return bridgeconfig.NormalizeRoutingStrategy(strategy)
 }

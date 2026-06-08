@@ -7,6 +7,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	oauthsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/oauth"
+	routingconfigsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/routingconfig"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -36,7 +37,7 @@ func (h *Handler) renameChannelReferences(oldNames []string, newName string) err
 	}
 
 	if routingChanged && h.cfg != nil {
-		if err := usage.UpsertRoutingConfig(h.cfg.Routing); err != nil {
+		if err := routingconfigsettings.Upsert(h.cfg.Routing); err != nil {
 			return fmt.Errorf("failed to persist routing config: %w", err)
 		}
 	}
@@ -82,7 +83,7 @@ func (h *Handler) removeChannelReferences(oldNames []string) error {
 	}
 
 	if routingChanged && h.cfg != nil {
-		if err := usage.UpsertRoutingConfig(h.cfg.Routing); err != nil {
+		if err := routingconfigsettings.Upsert(h.cfg.Routing); err != nil {
 			return fmt.Errorf("failed to persist routing config: %w", err)
 		}
 	}

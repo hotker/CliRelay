@@ -4,6 +4,7 @@ import (
 	"context"
 
 	configaccess "github.com/router-for-me/CLIProxyAPI/v6/internal/access/config_access"
+	modelconfigsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/modelconfig"
 	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -19,7 +20,7 @@ type OAuthProviderModelConfigRow struct {
 }
 
 func ListOAuthProviderModelConfigRows() []OAuthProviderModelConfigRow {
-	rows := internalusage.ListModelConfigs()
+	rows := modelconfigsettings.ListAllConfigs()
 	if len(rows) == 0 {
 		return nil
 	}

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	bridgeinterfaces "github.com/router-for-me/CLIProxyAPI/v6/sdkbridge/interfaces"
 )
 
 type StreamForwardOptions struct {
@@ -18,7 +18,7 @@ type StreamForwardOptions struct {
 
 	// WriteTerminalError writes an error payload to the response body when streaming fails
 	// after headers have already been committed. It should not flush.
-	WriteTerminalError func(errMsg *interfaces.ErrorMessage)
+	WriteTerminalError func(errMsg *bridgeinterfaces.ErrorMessage)
 
 	// WriteDone optionally writes a terminal marker when the upstream data channel closes
 	// without an error (e.g. OpenAI's `[DONE]`). It should not flush.
@@ -29,7 +29,7 @@ type StreamForwardOptions struct {
 	WriteKeepAlive func()
 }
 
-func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage, opts StreamForwardOptions) {
+func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *bridgeinterfaces.ErrorMessage, opts StreamForwardOptions) {
 	if c == nil {
 		return
 	}
@@ -61,7 +61,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 		keepAliveC = keepAlive.C
 	}
 
-	var terminalErr *interfaces.ErrorMessage
+	var terminalErr *bridgeinterfaces.ErrorMessage
 	for {
 		select {
 		case <-c.Request.Context().Done():

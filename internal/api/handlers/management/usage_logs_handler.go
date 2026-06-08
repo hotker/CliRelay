@@ -2,36 +2,42 @@ package management
 
 import (
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
+	managementusagelogs "github.com/router-for-me/CLIProxyAPI/v6/internal/management/usagelogs"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 const authFileGroupTrendCacheTTL = 30 * time.Second
 
-type authFileGroupTrendResponse struct {
-	Days        int                     `json:"days"`
-	Group       string                  `json:"group"`
-	Points      []usage.DailyCountPoint `json:"points"`
-	QuotaPoints []usage.DailyQuotaPoint `json:"quota_points"`
+type UsageLogsHandler struct {
+	*Handler
 }
 
-type authFileTrendResponse struct {
-	AuthIndex         string                      `json:"auth_index"`
-	Days              int                         `json:"days"`
-	Hours             int                         `json:"hours"`
-	RequestTotal      int64                       `json:"request_total"`
-	CycleRequestTotal int64                       `json:"cycle_request_total"`
-	CycleCostTotal    float64                     `json:"cycle_cost_total"`
-	CycleStart        string                      `json:"cycle_start"`
-	DailyUsage        []usage.DailyCountPoint     `json:"daily_usage"`
-	HourlyUsage       []usage.HourlyCountPoint    `json:"hourly_usage"`
-	QuotaSeries       []usage.QuotaSnapshotSeries `json:"quota_series"`
+func (h *Handler) UsageLogs() *UsageLogsHandler {
+	if h == nil {
+		return nil
+	}
+	return &UsageLogsHandler{Handler: h}
+}
+
+func (h *UsageLogsHandler) service() *managementusagelogs.Service {
+	if h == nil {
+		return managementusagelogs.New(nil, nil)
+	}
+	return managementusagelogs.New(h.cfg, h.authManager)
+}
+
+// clearTrendCache remains on the root handler as a narrow compatibility bridge
+// while quota-related endpoints still invalidate usage trend cache directly.
+func (h *Handler) clearTrendCache() {
+	if h == nil {
+		return
+	}
+	h.UsageLogs().clearTrendCache()
 }
 
 type deleteUsageLogsRequest struct {
@@ -41,24 +47,14 @@ type deleteUsageLogsRequest struct {
 }
 
 // GetUsageLogs returns paginated, filterable request log entries from SQLite.
-// It enriches each log item with resolved api_key_name and channel_name
-// from the in-memory config, eliminating the need for multiple frontend API calls.
-func (h *Handler) GetUsageLogs(c *gin.Context) {
-	// Build name maps from config and auth store first so channel filtering can resolve
-	// to stable auth_index values (and reflect renamed OAuth channels).
-	keyNameMap, channelNameMap, authIndexChannelMap, ambiguousAuthIndexChannelMap := h.buildNameMaps()
-
-	// Read channel multi-value: support repeated ?channel=x&channel=y,
-	// plural ?channels=x,y, and legacy alias ?channel_name=x / ?channel-name=x.
+func (h *UsageLogsHandler) GetUsageLogs(c *gin.Context) {
 	channelValues := queryStringListMulti(c, "channel", "channels")
-	// Merge legacy aliases (channel_name, channel-name) into channelValues.
 	if raw := strings.TrimSpace(c.Query("channel_name")); raw != "" {
 		channelValues = append(channelValues, raw)
 	}
 	if raw := strings.TrimSpace(c.Query("channel-name")); raw != "" {
 		channelValues = append(channelValues, raw)
 	}
-	// Deduplicate after merging legacy aliases
 	chanSeen := make(map[string]struct{}, len(channelValues))
 	deduped := make([]string, 0, len(channelValues))
 	for _, v := range channelValues {
@@ -72,170 +68,26 @@ func (h *Handler) GetUsageLogs(c *gin.Context) {
 		chanSeen[lower] = struct{}{}
 		deduped = append(deduped, v)
 	}
-	channelValues = deduped
 
-	selectedChannelKeys := make(map[string]struct{})
-	for _, part := range channelValues {
-		key := strings.ToLower(strings.TrimSpace(part))
-		if key == "" {
-			continue
-		}
-		selectedChannelKeys[key] = struct{}{}
-	}
-	var authIndexes []string
-	var channelNames []string
-	authIndexChannelNames := make(map[string][]string)
-	if len(selectedChannelKeys) > 0 {
-		for key := range selectedChannelKeys {
-			channelNames = append(channelNames, key)
-		}
-		for raw, name := range channelNameMap {
-			key := strings.ToLower(strings.TrimSpace(name))
-			if key == "" {
-				continue
-			}
-			if _, ok := selectedChannelKeys[key]; ok {
-				channelNames = append(channelNames, raw)
-			}
-		}
-		for idx, name := range authIndexChannelMap {
-			key := strings.ToLower(strings.TrimSpace(name))
-			if key == "" {
-				continue
-			}
-			if _, ok := selectedChannelKeys[key]; ok {
-				authIndexes = append(authIndexes, idx)
-				if legacyChannels := ambiguousAuthIndexChannelMap[idx]; len(legacyChannels) > 0 {
-					authIndexChannelNames[idx] = append(authIndexChannelNames[idx], legacyChannels...)
-				}
-			}
-		}
-		// No matches should yield an empty result set rather than "no filter".
-		if len(authIndexes) == 0 && len(channelNames) == 0 {
-			authIndexes = []string{""}
-		}
-	}
-
-	params := usage.LogQueryParams{
-		Page:                  intQueryDefault(c, "page", 1),
-		Size:                  intQueryDefault(c, "size", 50),
-		Days:                  intQueryDefault(c, "days", 7),
-		APIKeys:               queryStringListMulti(c, "api_key", "api_keys"),
-		Models:                queryStringListMulti(c, "model", "models"),
-		Statuses:              queryStringListMulti(c, "status", "statuses"),
-		AuthIndexes:           authIndexes,
-		ChannelNames:          channelNames,
-		AuthIndexChannelNames: authIndexChannelNames,
-	}
-
-	result, err := usage.QueryLogs(params)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	filters, err := usage.QueryFilters(params.Days)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	stats, err := usage.QueryStats(params)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Enrich log items with resolved names
-	for i := range result.Items {
-		item := &result.Items[i]
-		if item.APIKeyName == "" {
-			if name, ok := keyNameMap[item.APIKey]; ok {
-				item.APIKeyName = name
-			}
-		}
-		// Keep the channel captured at request time. Only translate legacy
-		// source identifiers (email/API key) into display names.
-		if item.ChannelName != "" {
-			if name, ok := authIndexChannelMap[item.AuthIndex]; ok && strings.TrimSpace(name) != "" {
-				if _, legacy := channelNameMap[item.ChannelName]; legacy || containsFold(ambiguousAuthIndexChannelMap[item.AuthIndex], item.ChannelName) {
-					item.ChannelName = name
-					continue
-				}
-			}
-			if name, ok := channelNameMap[item.ChannelName]; ok && strings.TrimSpace(name) != "" {
-				item.ChannelName = name
-			}
-			continue
-		}
-		if name, ok := authIndexChannelMap[item.AuthIndex]; ok && strings.TrimSpace(name) != "" {
-			item.ChannelName = name
-			continue
-		}
-		if name, ok := channelNameMap[item.Source]; ok {
-			item.ChannelName = name
-		}
-	}
-
-	// Enrich filter options with key names
-	filters.APIKeyNames = make(map[string]string, len(filters.APIKeys))
-	for _, key := range filters.APIKeys {
-		if name, ok := keyNameMap[key]; ok {
-			filters.APIKeyNames[key] = name
-		}
-	}
-	if len(filters.Channels) > 0 {
-		seen := make(map[string]struct{})
-		channels := make([]string, 0, len(filters.Channels))
-		for _, value := range filters.Channels {
-			trimmed := strings.TrimSpace(value)
-			if name, ok := channelNameMap[trimmed]; ok && strings.TrimSpace(name) != "" {
-				trimmed = strings.TrimSpace(name)
-			}
-			key := strings.ToLower(trimmed)
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			channels = append(channels, trimmed)
-		}
-		sort.Slice(channels, func(i, j int) bool { return strings.ToLower(channels[i]) < strings.ToLower(channels[j]) })
-		filters.Channels = channels
-	}
-
-	// Defensive: ensure JSON arrays are never encoded as null.
-	if result.Items == nil {
-		result.Items = make([]usage.LogRow, 0)
-	}
-	if filters.APIKeys == nil {
-		filters.APIKeys = make([]string, 0)
-	}
-	if filters.Models == nil {
-		filters.Models = make([]string, 0)
-	}
-	if filters.Channels == nil {
-		filters.Channels = make([]string, 0)
-	}
-	if filters.APIKeyNames == nil {
-		filters.APIKeyNames = make(map[string]string)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items":   result.Items,
-		"total":   result.Total,
-		"page":    result.Page,
-		"size":    result.Size,
-		"filters": filters,
-		"stats":   stats,
+	payload, err := h.service().ManagementLogs(managementusagelogs.ManagementLogQueryInput{
+		Page:     intQueryDefault(c, "page", 1),
+		Size:     intQueryDefault(c, "size", 50),
+		Days:     intQueryDefault(c, "days", 7),
+		APIKeys:  queryStringListMulti(c, "api_key", "api_keys"),
+		Models:   queryStringListMulti(c, "model", "models"),
+		Statuses: queryStringListMulti(c, "status", "statuses"),
+		Channels: deduped,
 	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
-func (h *Handler) DeleteUsageLogs(c *gin.Context) {
+func (h *UsageLogsHandler) DeleteUsageLogs(c *gin.Context) {
 	if c.Request.ContentLength == 0 {
-		result, err := usage.ClearAllRequestLogs()
+		result, err := h.service().ClearAllRequestLogs()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -249,537 +101,118 @@ func (h *Handler) DeleteUsageLogs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	result, err := usage.ClearRequestLogs(usage.ClearRequestLogsOptions{
+	status, payload, err := h.service().ClearRequestLogs(usage.ClearRequestLogsOptions{
 		ClearBodyContent:    req.ClearBodyContent,
 		ClearDetailContent:  req.ClearDetailContent,
 		ClearRequestRecords: req.ClearRequestRecords,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "at least one cleanup option") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(status, payload)
 		return
 	}
-	c.JSON(http.StatusOK, result)
-}
-
-// buildNameMaps builds three maps from the current config/auth store:
-//  1. keyNameMap:          user-facing api_key → display name
-//  2. channelNameMap:      source/api_key/email → channel name
-//  3. authIndexChannelMap: auth_index → current channel name
-func (h *Handler) buildNameMaps() (keyNameMap, channelNameMap, authIndexChannelMap map[string]string, ambiguousAuthIndexChannelMap map[string][]string) {
-	keyNameMap = make(map[string]string)
-	channelNameMap = make(map[string]string)
-	authIndexChannelMap = make(map[string]string)
-	ambiguousAuthIndexChannelMap = make(map[string][]string)
-
-	// User-facing API key names from SQLite
-	for _, row := range usage.ListAPIKeys() {
-		if row.Key != "" && row.Name != "" {
-			keyNameMap[row.Key] = row.Name
-		}
-	}
-
-	cfg := h.cfg
-	if cfg != nil {
-		for _, k := range cfg.GeminiKey {
-			if k.APIKey != "" && k.Name != "" {
-				channelNameMap[k.APIKey] = k.Name
-			}
-		}
-		for _, k := range cfg.ClaudeKey {
-			if k.APIKey != "" && k.Name != "" {
-				channelNameMap[k.APIKey] = k.Name
-			}
-		}
-		for _, k := range cfg.CodexKey {
-			if k.APIKey != "" && k.Name != "" {
-				channelNameMap[k.APIKey] = k.Name
-			}
-		}
-		// Vertex keys: no Name field, skip
-
-		// OpenAI compatibility: provider name applies to all its API keys
-		for _, provider := range cfg.OpenAICompatibility {
-			if provider.Name == "" {
-				continue
-			}
-			for _, entry := range provider.APIKeyEntries {
-				if entry.APIKey != "" {
-					channelNameMap[entry.APIKey] = provider.Name
-				}
-			}
-		}
-	}
-
-	type legacyChannelCandidate struct {
-		key       string
-		channel   string
-		authIndex string
-	}
-	var legacyCandidates []legacyChannelCandidate
-
-	if h.authManager != nil {
-		for _, auth := range h.authManager.List() {
-			if auth == nil {
-				continue
-			}
-			channel := strings.TrimSpace(auth.ChannelName())
-			if channel == "" {
-				continue
-			}
-			auth.EnsureIndex()
-			if idx := strings.TrimSpace(auth.Index); idx != "" {
-				authIndexChannelMap[idx] = channel
-			}
-			if accountType, account := auth.AccountInfo(); strings.EqualFold(accountType, "oauth") {
-				if source := strings.TrimSpace(account); source != "" {
-					legacyCandidates = append(legacyCandidates, legacyChannelCandidate{
-						key:       source,
-						channel:   channel,
-						authIndex: strings.TrimSpace(auth.Index),
-					})
-				}
-			}
-			if email := strings.TrimSpace(managementauthfiles.Email(auth)); email != "" {
-				legacyCandidates = append(legacyCandidates, legacyChannelCandidate{
-					key:       email,
-					channel:   channel,
-					authIndex: strings.TrimSpace(auth.Index),
-				})
-			}
-		}
-	}
-
-	legacyChannelsByKey := make(map[string]map[string]struct{})
-	for _, candidate := range legacyCandidates {
-		key := strings.TrimSpace(candidate.key)
-		channel := strings.TrimSpace(candidate.channel)
-		if key == "" || channel == "" {
-			continue
-		}
-		if legacyChannelsByKey[key] == nil {
-			legacyChannelsByKey[key] = make(map[string]struct{})
-		}
-		legacyChannelsByKey[key][strings.ToLower(channel)] = struct{}{}
-	}
-	for _, candidate := range legacyCandidates {
-		key := strings.TrimSpace(candidate.key)
-		if key == "" {
-			continue
-		}
-		if len(legacyChannelsByKey[key]) > 1 {
-			if candidate.authIndex != "" {
-				ambiguousAuthIndexChannelMap[candidate.authIndex] = append(ambiguousAuthIndexChannelMap[candidate.authIndex], key)
-			}
-			continue
-		}
-		channelNameMap[key] = strings.TrimSpace(candidate.channel)
-	}
-
-	return
-}
-
-func containsFold(values []string, needle string) bool {
-	needle = strings.TrimSpace(needle)
-	if needle == "" {
-		return false
-	}
-	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(value), needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func intQueryDefault(c *gin.Context, key string, def int) int {
-	v := strings.TrimSpace(c.Query(key))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
-		return def
-	}
-	return n
-}
-
-func normalizeLogContentFormatValue(format string) string {
-	format = strings.ToLower(strings.TrimSpace(format))
-	if format == "" {
-		return "json"
-	}
-	switch format {
-	case "json", "text":
-		return format
-	default:
-		return "json"
-	}
-}
-
-func normalizeLogContentFormat(c *gin.Context) string {
-	return normalizeLogContentFormatValue(c.Query("format"))
-}
-
-func normalizeLogContentPartValue(part string) string {
-	part = strings.ToLower(strings.TrimSpace(part))
-	if part == "" {
-		return "both"
-	}
-	switch part {
-	case "both", "input", "output", "details":
-		return part
-	default:
-		return "both"
-	}
-}
-
-func normalizeLogContentPartQuery(c *gin.Context) string {
-	return normalizeLogContentPartValue(c.Query("part"))
+	c.JSON(status, payload)
 }
 
 // GetLogContent returns the stored request/response content for a single log entry.
-func (h *Handler) GetLogContent(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
-	if err != nil || id < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log id"})
+func (h *UsageLogsHandler) GetLogContent(c *gin.Context) {
+	id, ok := parseLogID(c)
+	if !ok {
 		return
 	}
-
-	part := normalizeLogContentPartQuery(c)
-	format := normalizeLogContentFormat(c)
-
-	if format == "text" && part == "both" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "format=text requires part=input, part=output, or part=details"})
-		return
-	}
-
-	if part == "both" {
-		result, err := usage.QueryLogContent(id)
-		if err != nil {
-			if strings.Contains(err.Error(), "no rows") {
-				c.JSON(http.StatusNotFound, gin.H{"error": "log entry not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, result)
-		return
-	}
-
-	result, err := usage.QueryLogContentPart(id, part)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "log entry not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if format == "text" {
-		c.Header("Content-Type", "text/plain; charset=utf-8")
-		c.Header("X-Log-Id", strconv.FormatInt(result.ID, 10))
-		c.Header("X-Log-Part", result.Part)
-		if strings.TrimSpace(result.Model) != "" {
-			c.Header("X-Model", result.Model)
-		}
-		c.String(http.StatusOK, result.Content)
-		return
-	}
-
-	c.JSON(http.StatusOK, result)
+	renderLogContentResponse(c, h.service().LogContent(
+		id,
+		managementusagelogs.NormalizeLogContentPartValue(c.Query("part")),
+		managementusagelogs.NormalizeLogContentFormatValue(c.Query("format")),
+	))
 }
 
 // GetPublicUsageLogs returns paginated request log entries for a specific API key.
-// This is a public endpoint (no management key required) that strips sensitive
-// fields (source/auth_index/channel_name) before returning.
-func (h *Handler) GetPublicUsageLogs(c *gin.Context) {
+func (h *UsageLogsHandler) GetPublicUsageLogs(c *gin.Context) {
 	req, status, message := readPublicLookupRequest(c)
 	if message != "" {
 		c.JSON(status, gin.H{"error": message})
 		return
 	}
-
-	apiKey := req.APIKey
-	if apiKey == "" {
+	if req.APIKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "api_key parameter is required"})
 		return
 	}
-
-	params := usage.LogQueryParams{
+	payload, err := h.service().PublicUsageLogs(managementusagelogs.PublicLogQueryInput{
+		APIKey: req.APIKey,
+		Model:  req.Model,
+		Status: req.Status,
 		Page:   req.Page,
 		Size:   req.Size,
 		Days:   req.Days,
-		APIKey: apiKey,
-		Model:  req.Model,
-		Status: req.Status,
-	}
-
-	result, err := usage.QueryLogs(params)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	stats, err := usage.QueryStats(params)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// SECURITY: Strip sensitive fields from public response
-	for i := range result.Items {
-		result.Items[i].Source = ""
-		result.Items[i].AuthIndex = ""
-		result.Items[i].ChannelName = ""
-		result.Items[i].APIKey = ""
-		result.Items[i].APIKeyName = ""
-	}
-
-	// Model filter options (scoped to this api_key via QueryFilters with key filter)
-	models, _ := usage.QueryModelsForKey(apiKey, params.Days)
-	if models == nil {
-		models = make([]string, 0)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": result.Items,
-		"total": result.Total,
-		"page":  result.Page,
-		"size":  result.Size,
-		"stats": stats,
-		"filters": gin.H{
-			"models": models,
-		},
 	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 // GetPublicUsageChartData returns pre-aggregated chart data for a specific API key.
-// This is a public endpoint (no management key required) that provides lightweight
-// daily series and model distribution data for rendering charts.
-func (h *Handler) GetPublicUsageChartData(c *gin.Context) {
+func (h *UsageLogsHandler) GetPublicUsageChartData(c *gin.Context) {
 	req, status, message := readPublicLookupRequest(c)
 	if message != "" {
 		c.JSON(status, gin.H{"error": message})
 		return
 	}
-
-	apiKey := req.APIKey
-	if apiKey == "" {
+	if req.APIKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "api_key parameter is required"})
 		return
 	}
-
-	days := req.Days
-
-	daily, err := usage.QueryDailySeries(apiKey, days)
+	payload, err := h.service().PublicChartData(req.APIKey, req.Days)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if daily == nil {
-		daily = []usage.DailySeriesPoint{}
-	}
-
-	models, err := usage.QueryModelDistribution(apiKey, days)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if models == nil {
-		models = []usage.ModelDistributionPoint{}
-	}
-
-	// Also fetch stats for KPI cards
-	stats, err := usage.QueryStats(usage.LogQueryParams{APIKey: apiKey, Days: days})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"daily_series":       daily,
-		"model_distribution": models,
-		"stats":              stats,
-	})
+	c.JSON(http.StatusOK, payload)
 }
 
 // GetPublicLogContent returns the stored request/response content for a single log entry,
 // but only if it belongs to the specified API key. This is a public endpoint.
-func (h *Handler) GetPublicLogContent(c *gin.Context) {
+func (h *UsageLogsHandler) GetPublicLogContent(c *gin.Context) {
 	req, status, message := readPublicLookupRequest(c)
 	if message != "" {
 		c.JSON(status, gin.H{"error": message})
 		return
 	}
-
-	apiKey := req.APIKey
-	if apiKey == "" {
+	if req.APIKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "api_key parameter is required"})
 		return
 	}
-
-	idStr := c.Param("id")
-	id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
-	if err != nil || id < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log id"})
+	id, ok := parseLogID(c)
+	if !ok {
 		return
 	}
-
-	part := req.Part
-	format := req.Format
-	if part == "details" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "request details are only available in the management API"})
-		return
-	}
-
-	if format == "text" && part == "both" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "format=text requires part=input or part=output"})
-		return
-	}
-
-	if part == "both" {
-		result, err := usage.QueryLogContentForKey(id, apiKey)
-		if err != nil {
-			if strings.Contains(err.Error(), "no rows") {
-				c.JSON(http.StatusNotFound, gin.H{"error": "log entry not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, result)
-		return
-	}
-
-	result, err := usage.QueryLogContentPartForKey(id, apiKey, part)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			c.JSON(http.StatusNotFound, gin.H{"error": "log entry not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if format == "text" {
-		c.Header("Content-Type", "text/plain; charset=utf-8")
-		c.Header("X-Log-Id", strconv.FormatInt(result.ID, 10))
-		c.Header("X-Log-Part", result.Part)
-		if strings.TrimSpace(result.Model) != "" {
-			c.Header("X-Model", result.Model)
-		}
-		c.String(http.StatusOK, result.Content)
-		return
-	}
-
-	c.JSON(http.StatusOK, result)
+	renderLogContentResponse(c, h.service().PublicLogContent(id, req.APIKey, req.Part, req.Format))
 }
 
 // GetUsageChartData returns pre-aggregated chart data for the management portal.
-// It applies an optional apiKey filter.
-func (h *Handler) GetUsageChartData(c *gin.Context) {
-	apiKey := strings.TrimSpace(c.Query("api_key"))
-	days := intQueryDefault(c, "days", 7)
-
-	daily, err := usage.QueryDailySeries(apiKey, days)
+func (h *UsageLogsHandler) GetUsageChartData(c *gin.Context) {
+	payload, err := h.service().UsageChartData(strings.TrimSpace(c.Query("api_key")), intQueryDefault(c, "days", 7))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if daily == nil {
-		daily = []usage.DailySeriesPoint{}
-	}
-
-	models, err := usage.QueryModelDistribution(apiKey, days)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if models == nil {
-		models = []usage.ModelDistributionPoint{}
-	}
-
-	hourlyTokens, hourlyModels, err := usage.QueryHourlySeries(apiKey, 24)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if hourlyTokens == nil {
-		hourlyTokens = []usage.HourlyTokenPoint{}
-	}
-	if hourlyModels == nil {
-		hourlyModels = []usage.HourlyModelPoint{}
-	}
-
-	// API Key distribution (only when not filtered by a single key)
-	var apikeyDist []usage.APIKeyDistributionPoint
-	if apiKey == "" {
-		apikeyDist, err = usage.QueryAPIKeyDistribution(days)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		// Fallback: for older logs where api_key_name was not yet stored,
-		// enrich with display names from the current config.
-		keyNameMap, _, _, _ := h.buildNameMaps()
-		for i := range apikeyDist {
-			if apikeyDist[i].Name == "" {
-				if name, ok := keyNameMap[apikeyDist[i].APIKey]; ok {
-					apikeyDist[i].Name = name
-				}
-			}
-		}
-	}
-	if apikeyDist == nil {
-		apikeyDist = []usage.APIKeyDistributionPoint{}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"daily_series":        daily,
-		"model_distribution":  models,
-		"hourly_tokens":       hourlyTokens,
-		"hourly_models":       hourlyModels,
-		"apikey_distribution": apikeyDist,
-	})
+	c.JSON(http.StatusOK, payload)
 }
 
 // GetEntityUsageStats returns aggregated statistics grouped by source or auth_index
-func (h *Handler) GetEntityUsageStats(c *gin.Context) {
-	apiKey := strings.TrimSpace(c.Query("api_key"))
-	days := intQueryDefault(c, "days", 7)
-	authIndexes := queryStringList(c, "auth_index")
-	sources := queryStringList(c, "source")
-
-	sourceStats, err := usage.QueryEntityStats(apiKey, days, "source", sources)
+func (h *UsageLogsHandler) GetEntityUsageStats(c *gin.Context) {
+	payload, err := h.service().EntityUsageStats(
+		strings.TrimSpace(c.Query("api_key")),
+		intQueryDefault(c, "days", 7),
+		queryStringList(c, "auth_index"),
+		queryStringList(c, "source"),
+	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if sourceStats == nil {
-		sourceStats = []usage.EntityStatPoint{}
-	}
-
-	authIndexStats, err := usage.QueryEntityStats(apiKey, days, "auth_index", authIndexes)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if authIndexStats == nil {
-		authIndexStats = []usage.EntityStatPoint{}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"source":     sourceStats,
-		"auth_index": authIndexStats,
-	})
+	c.JSON(http.StatusOK, payload)
 }
 
 func queryStringList(c *gin.Context, key string) []string {
@@ -805,23 +238,15 @@ func queryStringList(c *gin.Context, key string) []string {
 	return values
 }
 
-// queryStringListMulti parses query parameters that can be provided as:
-//  1. Repeated singular keys: ?api_key=a&api_key=b
-//  2. Plural comma-separated key: ?api_keys=a,b
-//  3. Single value: ?api_key=a
 func queryStringListMulti(c *gin.Context, singular, plural string) []string {
 	values := make([]string, 0)
-	// 1. Repeated singular keys: QueryArray handles ?key=a&key=b
 	values = append(values, c.QueryArray(singular)...)
-	// 2. Plural comma-separated key
 	if raw := strings.TrimSpace(c.Query(plural)); raw != "" {
 		values = append(values, strings.Split(raw, ",")...)
 	}
-	// 3. Single singular value (QueryArray already covered this, but be safe)
 	if raw := strings.TrimSpace(c.Query(singular)); raw != "" {
 		values = append(values, raw)
 	}
-	// Normalize: trim, deduplicate, remove empties
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, raw := range values {
@@ -839,7 +264,7 @@ func queryStringListMulti(c *gin.Context, singular, plural string) []string {
 	return result
 }
 
-func (h *Handler) GetAuthFileGroupTrend(c *gin.Context) {
+func (h *UsageLogsHandler) GetAuthFileGroupTrend(c *gin.Context) {
 	group := strings.ToLower(strings.TrimSpace(c.Query("group")))
 	if group == "" {
 		group = "all"
@@ -855,187 +280,69 @@ func (h *Handler) GetAuthFileGroupTrend(c *gin.Context) {
 		return
 	}
 
-	authIndexes := h.authIndexesForProviderGroup(group)
-	points, err := usage.QueryDailyCallsByAuthIndexes(authIndexes, days)
+	payload, err := h.service().AuthFileGroupTrend(group, days)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if points == nil {
-		points = []usage.DailyCountPoint{}
-	}
-	quotaPoints, err := usage.QueryDailyQuotaByAuthIndexes(authIndexes, "code_week", days)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if quotaPoints == nil {
-		quotaPoints = []usage.DailyQuotaPoint{}
-	}
-	payload := authFileGroupTrendResponse{Days: days, Group: group, Points: points, QuotaPoints: quotaPoints}
 	h.setTrendCache(cacheKey, payload)
 	c.JSON(http.StatusOK, payload)
 }
 
-func (h *Handler) GetAuthFileTrend(c *gin.Context) {
+func (h *UsageLogsHandler) GetAuthFileTrend(c *gin.Context) {
 	authIndex := strings.TrimSpace(c.Query("auth_index"))
 	if authIndex == "" {
 		authIndex = strings.TrimSpace(c.Query("authIndex"))
 	}
-	if authIndex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "auth_index is required"})
-		return
-	}
-	if h != nil && h.authManager != nil && h.authByIndex(authIndex) == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "auth not found"})
-		return
-	}
-
 	days := intQueryDefault(c, "days", 7)
-	if days < 1 {
-		days = 7
-	}
 	if days > 7 {
 		days = 7
 	}
 	hours := intQueryDefault(c, "hours", 5)
-	if hours < 1 {
-		hours = 5
-	}
 	if hours > 24 {
 		hours = 24
 	}
-
-	dailyRaw, err := usage.QueryDailyCallsByAuthIndexes([]string{authIndex}, days)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	daily := fillDailyCountPoints(dailyRaw, days)
-
-	hourly, err := usage.QueryHourlyCallsByAuthIndex(authIndex, hours)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if hourly == nil {
-		hourly = []usage.HourlyCountPoint{}
-	}
-
-	cutoff := usage.CutoffStartUTC(days)
-	requestTotal, err := usage.QueryRequestCountByAuthIndexSince(authIndex, cutoff)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	trendStart := time.Now().AddDate(0, 0, -7)
-	trendEnd := time.Now().Add(time.Minute)
-	series, err := usage.QueryQuotaSnapshotSeries(authIndex, trendStart, trendEnd)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if series == nil {
-		series = []usage.QuotaSnapshotSeries{}
-	}
-
-	cycleStart := cutoff
-	if weeklyCycleStart, ok := latestWeeklyQuotaCycleStart(series); ok && weeklyCycleStart.After(cutoff) {
-		cycleStart = weeklyCycleStart
-	}
-	cycleRequestTotal, err := usage.QueryRequestCountByAuthIndexSince(authIndex, cycleStart)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	cycleCostTotal, err := usage.QueryCostByAuthIndexSince(authIndex, cycleStart)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, authFileTrendResponse{
-		AuthIndex:         authIndex,
-		Days:              days,
-		Hours:             hours,
-		RequestTotal:      requestTotal,
-		CycleRequestTotal: cycleRequestTotal,
-		CycleCostTotal:    cycleCostTotal,
-		CycleStart:        cycleStart.UTC().Format(time.RFC3339),
-		DailyUsage:        daily,
-		HourlyUsage:       hourly,
-		QuotaSeries:       series,
-	})
+	status, payload := h.service().AuthFileTrend(authIndex, days, hours)
+	c.JSON(status, payload)
 }
 
-func fillDailyCountPoints(points []usage.DailyCountPoint, days int) []usage.DailyCountPoint {
-	if days < 1 {
-		days = 7
-	}
-	byDate := make(map[string]int64, len(points))
-	for _, point := range points {
-		byDate[point.Date] += point.Requests
-	}
-	start := usage.CutoffStartUTC(days)
-	result := make([]usage.DailyCountPoint, 0, days)
-	for i := 0; i < days; i++ {
-		date := usage.LocalDayKeyAt(start.AddDate(0, 0, i))
-		result = append(result, usage.DailyCountPoint{Date: date, Requests: byDate[date]})
-	}
-	return result
+func intQueryDefault(c *gin.Context, key string, def int) int {
+	return managementusagelogs.IntQueryDefault(c.Query(key), def)
 }
 
-func latestWeeklyQuotaCycleStart(series []usage.QuotaSnapshotSeries) (time.Time, bool) {
-	var latestPoint *usage.QuotaSnapshotSeriesPoint
-	var latestWindow int64
-	for i := range series {
-		if series[i].WindowSeconds < 604800 {
-			continue
-		}
-		windowSeconds := series[i].WindowSeconds
-		for j := range series[i].Points {
-			point := &series[i].Points[j]
-			if point.ResetAt == nil || point.ResetAt.IsZero() {
-				continue
-			}
-			if latestPoint == nil || point.Timestamp.After(latestPoint.Timestamp) {
-				latestPoint = point
-				latestWindow = windowSeconds
-			}
-		}
-	}
-	if latestPoint == nil || latestWindow <= 0 {
-		return time.Time{}, false
-	}
-	return latestPoint.ResetAt.Add(-time.Duration(latestWindow) * time.Second).UTC(), true
+func normalizeLogContentFormatValue(format string) string {
+	return managementusagelogs.NormalizeLogContentFormatValue(format)
 }
 
-func (h *Handler) authIndexesForProviderGroup(group string) []string {
-	if h == nil || h.authManager == nil {
-		return []string{}
-	}
-	auths := h.authManager.List()
-	indexes := make([]string, 0, len(auths))
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
-		if group != "all" && provider != group {
-			continue
-		}
-		auth.EnsureIndex()
-		if idx := strings.TrimSpace(auth.Index); idx != "" {
-			indexes = append(indexes, idx)
-		}
-	}
-	return indexes
+func normalizeLogContentPartValue(part string) string {
+	return managementusagelogs.NormalizeLogContentPartValue(part)
 }
 
-func (h *Handler) getTrendCache(key string) (authFileGroupTrendResponse, bool) {
+func parseLogID(c *gin.Context) (int64, bool) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+	if err != nil || id < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log id"})
+		return 0, false
+	}
+	return id, true
+}
+
+func renderLogContentResponse(c *gin.Context, response managementusagelogs.LogContentResponse) {
+	if response.ContentType != "" {
+		c.Header("Content-Type", response.ContentType)
+		for key, value := range response.Headers {
+			c.Header(key, value)
+		}
+		c.String(response.Status, response.Text)
+		return
+	}
+	c.JSON(response.Status, response.Payload)
+}
+
+func (h *UsageLogsHandler) getTrendCache(key string) (managementusagelogs.AuthFileGroupTrendResponse, bool) {
 	if h == nil {
-		return authFileGroupTrendResponse{}, false
+		return managementusagelogs.AuthFileGroupTrendResponse{}, false
 	}
 	h.trendCacheMu.Lock()
 	defer h.trendCacheMu.Unlock()
@@ -1044,13 +351,13 @@ func (h *Handler) getTrendCache(key string) (authFileGroupTrendResponse, bool) {
 		if ok {
 			delete(h.trendCache, key)
 		}
-		return authFileGroupTrendResponse{}, false
+		return managementusagelogs.AuthFileGroupTrendResponse{}, false
 	}
-	payload, ok := entry.payload.(authFileGroupTrendResponse)
+	payload, ok := entry.payload.(managementusagelogs.AuthFileGroupTrendResponse)
 	return payload, ok
 }
 
-func (h *Handler) setTrendCache(key string, payload authFileGroupTrendResponse) {
+func (h *UsageLogsHandler) setTrendCache(key string, payload managementusagelogs.AuthFileGroupTrendResponse) {
 	if h == nil {
 		return
 	}
@@ -1068,7 +375,7 @@ func (h *Handler) setTrendCache(key string, payload authFileGroupTrendResponse) 
 	h.trendCache[key] = trendCacheEntry{expiresAt: now.Add(authFileGroupTrendCacheTTL), payload: payload}
 }
 
-func (h *Handler) clearTrendCache() {
+func (h *UsageLogsHandler) clearTrendCache() {
 	if h == nil {
 		return
 	}

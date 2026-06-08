@@ -3,13 +3,13 @@ package auth
 import (
 	"fmt"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	bridgeinterfaces "github.com/router-for-me/CLIProxyAPI/v6/sdkbridge/interfaces"
 )
 
 // ProjectSelectionError indicates that the user must choose a specific project ID.
 type ProjectSelectionError struct {
 	Email    string
-	Projects []interfaces.GCPProjectProjects
+	Projects []bridgeinterfaces.GCPProjectProjects
 }
 
 func (e *ProjectSelectionError) Error() string {
@@ -20,7 +20,7 @@ func (e *ProjectSelectionError) Error() string {
 }
 
 // ProjectsDisplay returns the projects list for caller presentation.
-func (e *ProjectSelectionError) ProjectsDisplay() []interfaces.GCPProjectProjects {
+func (e *ProjectSelectionError) ProjectsDisplay() []bridgeinterfaces.GCPProjectProjects {
 	if e == nil {
 		return nil
 	}

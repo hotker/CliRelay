@@ -10,6 +10,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Compatibility bridge contract:
+// - Owner: API key settings / config-access boundary.
+// - Real implementation: internal/storage/sqlite/apikey and internal/management/settings/apikey.
+// - Allowed callers: legacy adapters still being migrated; new management/config-access code should use apikey service first.
+// - Exit condition: remaining callers move to apikey service or sqlite store bridge; do not add new imports here.
 type APIKeyRow = sqlapikey.APIKeyRow
 
 func APIKeyRowFromConfig(entry config.APIKeyEntry) APIKeyRow {
