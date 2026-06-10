@@ -24,7 +24,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 208; got != want {
+	if got, want := len(routes), 209; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 
@@ -41,6 +41,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		"POST /v0/management/opencode-go-api-key/usage",
 		"GET /v0/management/auth-files/models",
 		"POST /v0/management/oauth-callback",
+		"GET /v0/management/public/ping",
 		"GET /v0/management/public/usage/logs/:id/content",
 		"POST /v0/management/public/usage/summary",
 	}

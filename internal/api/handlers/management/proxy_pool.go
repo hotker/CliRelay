@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	defaultProxyCheckURL     = "https://www.gstatic.com/generate_204"
-	defaultProxyCheckTimeout = 8 * time.Second
+	defaultProxyCheckFallbackURL = "https://www.gstatic.com/generate_204"
+	defaultProxyCheckPublicPath  = "/v0/management/public/ping"
+	defaultProxyCheckTimeout     = 8 * time.Second
 )
 
 type proxyPoolAPIEntry struct {
@@ -93,7 +94,12 @@ func (h *Handler) PutProxyPool(c *gin.Context) {
 	h.persist(c)
 }
 
-// PostProxyPoolCheck checks whether a proxy can reach a test URL.
+// GetPublicPing returns a lightweight public 204 endpoint for proxy latency probes.
+func (h *Handler) GetPublicPing(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+
+// PostProxyPoolCheck checks whether a proxy can reach the deployed server.
 func (h *Handler) PostProxyPoolCheck(c *gin.Context) {
 	var body struct {
 		ID      string `json:"id"`
@@ -121,7 +127,7 @@ func (h *Handler) PostProxyPoolCheck(c *gin.Context) {
 
 	testURL := strings.TrimSpace(body.TestURL)
 	if testURL == "" {
-		testURL = defaultProxyCheckURL
+		testURL = defaultProxyCheckURL(c.Request)
 	}
 	if _, err := url.ParseRequestURI(testURL); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid test_url"})
@@ -145,12 +151,12 @@ func (h *Handler) PostProxyPoolCheck(c *gin.Context) {
 	}
 
 	ok := statusCode >= 200 && statusCode < 400
-	c.JSON(http.StatusOK, gin.H{
+	payload := gin.H{
 		"ok":         ok,
 		"statusCode": statusCode,
 		"latencyMs":  latencyMs,
-		"message":    fmt.Sprintf("status %d", statusCode),
-	})
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 func checkProxyConnectivity(ctx context.Context, proxyURL string, testURL string, sdkCfg *config.SDKConfig) (int, error) {
@@ -176,6 +182,37 @@ func checkProxyConnectivity(ctx context.Context, proxyURL string, testURL string
 	}()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	return resp.StatusCode, nil
+}
+
+func defaultProxyCheckURL(r *http.Request) string {
+	if r == nil {
+		return defaultProxyCheckFallbackURL
+	}
+
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if idx := strings.IndexByte(host, ','); idx >= 0 {
+		host = host[:idx]
+	}
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		return defaultProxyCheckFallbackURL
+	}
+
+	scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if idx := strings.IndexByte(scheme, ','); idx >= 0 {
+		scheme = scheme[:idx]
+	}
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+
+	return scheme + "://" + host + defaultProxyCheckPublicPath
 }
 
 func maskProxyPoolURL(raw string) string {

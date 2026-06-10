@@ -129,6 +129,21 @@ func TestPostProxyPoolCheckUsesConfiguredProxy(t *testing.T) {
 	if !body.OK || body.StatusCode != http.StatusNoContent {
 		t.Fatalf("check response = %#v", body)
 	}
+	if body.Message != "" {
+		t.Fatalf("success message = %q, want empty", body.Message)
+	}
+}
+
+func TestDefaultProxyCheckURLPrefersForwardedOrigin(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodPost, "/proxy-pool/check", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-Forwarded-Host", "panel.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if got, want := defaultProxyCheckURL(req), "https://panel.example.com/v0/management/public/ping"; got != want {
+		t.Fatalf("defaultProxyCheckURL = %q, want %q", got, want)
+	}
 }
 
 func TestProxyPoolHandlersUseSQLiteWhenAvailable(t *testing.T) {

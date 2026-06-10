@@ -21,6 +21,7 @@ func registerPublicManagementRoutes(engine *gin.Engine, h *managementhandlers.Ha
 	pub.Use(publicMiddlewares...)
 	usageLogs := h.UsageLogs()
 	{
+		pub.GET("/ping", h.GetPublicPing)
 		pub.GET("/usage", h.GetPublicUsageByAPIKey)
 		pub.POST("/usage", h.GetPublicUsageByAPIKey)
 		pub.GET("/ccswitch-import-configs", h.GetPublicCcSwitchImportConfigs)
