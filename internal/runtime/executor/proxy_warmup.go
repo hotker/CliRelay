@@ -300,9 +300,7 @@ func (m *ProxyWarmManager) isHostAllowed(host string) bool {
 		if suffix == "" {
 			continue
 		}
-		if strings.HasPrefix(suffix, "*.") {
-			suffix = strings.TrimPrefix(suffix, "*.")
-		}
+		suffix = strings.TrimPrefix(suffix, "*.")
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return true
 		}
