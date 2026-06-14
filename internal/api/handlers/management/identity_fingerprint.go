@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 type identityFingerprintResponse struct {
@@ -67,6 +68,18 @@ func (h *Handler) PutIdentityFingerprint(c *gin.Context) {
 	h.mu.Unlock()
 
 	h.persistRuntimeSetting(c, settingsstore.RuntimeSettingIdentityFingerprint, body)
+}
+
+func (h *Handler) GetCodexFingerprintRecommendations(c *gin.Context) {
+	result, err := usage.QueryCodexFingerprintRecommendations(usage.CodexFingerprintRecommendationQuery{
+		Days:  intQueryDefault(c, "days", 7),
+		Limit: intQueryDefault(c, "limit", 200),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func validateCodexIdentityFingerprint(fp config.CodexIdentityFingerprintConfig) error {
