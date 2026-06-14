@@ -1,8 +1,6 @@
 package amp
 
 import (
-	"bytes"
-	"io"
 	"net/http/httputil"
 	"strings"
 	"time"
@@ -190,7 +188,7 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 			if mappedModel, mappedProviders := resolveMappedModel(); mappedModel != "" {
 				// Mapping found and provider available - rewrite the model in request body
 				bodyBytes = rewriteModelInRequest(bodyBytes, mappedModel)
-				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				bodyutil.SetRequestBody(c, bodyBytes)
 				// Store mapped model in context for handlers that check it (like gemini bridge)
 				c.Set(MappedModelContextKey, mappedModel)
 				resolvedModel = mappedModel
@@ -211,7 +209,7 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 				if mappedModel, mappedProviders := resolveMappedModel(); mappedModel != "" {
 					// Mapping found and provider available - rewrite the model in request body
 					bodyBytes = rewriteModelInRequest(bodyBytes, mappedModel)
-					c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+					bodyutil.SetRequestBody(c, bodyBytes)
 					// Store mapped model in context for handlers that check it (like gemini bridge)
 					c.Set(MappedModelContextKey, mappedModel)
 					resolvedModel = mappedModel
@@ -229,7 +227,7 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 				logAmpRouting(RouteTypeAmpCredits, modelName, "", "", requestPath)
 
 				// Restore body again for the proxy
-				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				bodyutil.SetRequestBody(c, bodyBytes)
 
 				// Forward to ampcode.com
 				proxy.ServeHTTP(c.Writer, c.Request)
@@ -254,7 +252,7 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 			c.Writer = rewriter
 			// Filter Anthropic-Beta header only for local handling paths
 			filterAntropicBetaHeader(c)
-			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			bodyutil.SetRequestBody(c, bodyBytes)
 			handler(c)
 			rewriter.Flush()
 			log.Debugf("amp model mapping: response %s -> %s", resolvedModel, modelName)
@@ -263,11 +261,11 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 			logAmpRouting(RouteTypeLocalProvider, modelName, resolvedModel, providerName, requestPath)
 			// Filter Anthropic-Beta header only for local handling paths
 			filterAntropicBetaHeader(c)
-			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			bodyutil.SetRequestBody(c, bodyBytes)
 			handler(c)
 		} else {
 			// No provider, no mapping, no proxy: fall back to the wrapped handler so it can return an error response
-			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			bodyutil.SetRequestBody(c, bodyBytes)
 			handler(c)
 		}
 	}

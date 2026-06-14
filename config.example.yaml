@@ -30,6 +30,12 @@ main-api-read-timeout-seconds: 120
 # upload endpoints keep narrower endpoint-specific limits.
 request-body:
   model-max-mb: 128
+  # Decoded request bodies at or above this size are cached in a temporary file
+  # for downstream reuse instead of being retained in memory for the whole request.
+  disk-threshold-mb: 8
+  # Optional dedicated directory for large reusable request-body temp files.
+  # Empty uses the OS temp directory under a CliRelay-specific subdirectory.
+  cache-dir: ""
 
 # Project timezone (IANA name). Affects "today" boundaries and day-based aggregation in monitoring/usage pages.
 # Examples: "Asia/Shanghai", "UTC", "America/Los_Angeles"

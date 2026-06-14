@@ -63,6 +63,7 @@ func TestResponsesBodyChainAllowsPayloadAboveLegacyLimitWithRequestLogging(t *te
 
 	r := gin.New()
 	r.Use(middleware.DecompressRequestMiddleware())
+	r.Use(middleware.RequestBodyCleanupMiddleware())
 	r.Use(middleware.RequestLoggingMiddleware(chainRequestLogger{}))
 	r.POST("/v1/responses", func(c *gin.Context) {
 		body, ok := sdkhandlers.ReadJSONRequestBody(c)
@@ -95,6 +96,7 @@ func TestResponsesBodyChainDecodesZstdAndRefreshesBodyAfterSystemPrompt(t *testi
 	raw := []byte(`{"model":"gpt-5.5","input":"hello","stream":true}`)
 	r := gin.New()
 	r.Use(middleware.DecompressRequestMiddleware())
+	r.Use(middleware.RequestBodyCleanupMiddleware())
 	r.Use(middleware.RequestLoggingMiddleware(chainRequestLogger{}))
 	r.Use(func(c *gin.Context) {
 		c.Set("accessMetadata", map[string]string{"system-prompt": "system from metadata"})
@@ -137,6 +139,7 @@ func TestResponsesBodyChainRejectsOversizedDecodedZstdBody(t *testing.T) {
 
 	r := gin.New()
 	r.Use(middleware.DecompressRequestMiddleware())
+	r.Use(middleware.RequestBodyCleanupMiddleware())
 	r.Use(middleware.RequestLoggingMiddleware(chainRequestLogger{}))
 	r.POST("/v1/responses", func(c *gin.Context) {
 		_, _ = sdkhandlers.ReadJSONRequestBody(c)

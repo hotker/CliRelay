@@ -68,6 +68,19 @@ func (s *Server) applyRequestBodyConfig(oldCfg, cfg *config.Config) {
 	if oldCfg == nil || oldCfg.ModelRequestBodyLimitBytes() != cfg.ModelRequestBodyLimitBytes() {
 		bodyutil.SetModelRequestBodyLimit(cfg.ModelRequestBodyLimitBytes())
 	}
+	if oldCfg == nil || oldCfg.RequestBodyDiskThresholdBytes() != cfg.RequestBodyDiskThresholdBytes() {
+		bodyutil.SetRequestBodyDiskThreshold(cfg.RequestBodyDiskThresholdBytes())
+	}
+	if oldCfg == nil || oldCfg.RequestBodyCacheDir() != cfg.RequestBodyCacheDir() {
+		if cfg.RequestBodyCacheDir() == "" {
+			bodyutil.ResetRequestBodyCacheDir()
+		} else {
+			bodyutil.SetRequestBodyCacheDir(cfg.RequestBodyCacheDir())
+		}
+		if err := bodyutil.CleanupOldRequestBodyCacheFiles(5 * time.Minute); err != nil {
+			log.Warnf("failed to cleanup request body cache files: %v", err)
+		}
+	}
 }
 
 func (s *Server) oldConfigSnapshot() *config.Config {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gin "github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	internalrouting "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
@@ -448,6 +449,57 @@ func TestRouteAllowedModelsApplyWithoutAccessMetadata(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "model_not_allowed") {
 		t.Fatalf("expected model_not_allowed in body, got %s", rr.Body.String())
+	}
+}
+
+func TestRouteAllowedModelsReadsDiskBackedBodyAndRestores(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousThreshold := bodyutil.RequestBodyDiskThreshold()
+	t.Cleanup(func() {
+		bodyutil.SetRequestBodyDiskThreshold(previousThreshold)
+		bodyutil.ResetRequestBodyCacheDir()
+	})
+	bodyutil.SetRequestBodyDiskThreshold(8)
+	bodyutil.SetRequestBodyCacheDir(t.TempDir())
+
+	cfg := &proxyconfig.Config{
+		Routing: proxyconfig.RoutingConfig{
+			ChannelGroups: []proxyconfig.RoutingChannelGroup{
+				{
+					Name:          "pro",
+					AllowedModels: []string{"gpt-5.5"},
+				},
+			},
+		},
+	}
+	cfg.SanitizeRouting()
+	server := &Server{cfg: cfg}
+
+	payload := `{"model":"gpt-5.5","input":"` + strings.Repeat("x", 64) + `"}`
+	router := gin.New()
+	router.POST("/test", func(c *gin.Context) {
+		attachPathRouteContext(c, &internalrouting.PathRouteContext{Group: "pro"})
+		c.Next()
+	}, server.modelRestrictionMiddleware(), func(c *gin.Context) {
+		defer bodyutil.CleanupRequestBody(c)
+		body, err := bodyutil.ReadRequestBody(c, bodyutil.ModelRequestBodyLimit())
+		if err != nil {
+			t.Fatalf("ReadRequestBody: %v", err)
+		}
+		if string(body) != payload {
+			t.Fatalf("restored body = %s", body)
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
 }
 

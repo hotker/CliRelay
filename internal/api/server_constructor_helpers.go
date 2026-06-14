@@ -41,7 +41,10 @@ func configureServerMode(cfg *config.Config) {
 
 func newServerEngine(cfg *config.Config, optionState *serverOptionConfig) *gin.Engine {
 	engine := gin.New()
-	bodyutil.SetModelRequestBodyLimit(configModelRequestBodyLimitBytes(cfg))
+	applyBodyUtilRequestBodyConfig(cfg)
+	if err := bodyutil.CleanupOldRequestBodyCacheFiles(5 * time.Minute); err != nil {
+		log.Warnf("failed to cleanup request body cache files: %v", err)
+	}
 	if cfg != nil {
 		configureTrustedProxies(engine, cfg.TrustedProxies)
 	}
@@ -52,6 +55,7 @@ func newServerEngine(cfg *config.Config, optionState *serverOptionConfig) *gin.E
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
 	engine.Use(middleware.DecompressRequestMiddleware())
+	engine.Use(middleware.RequestBodyCleanupMiddleware())
 	if optionState != nil {
 		for _, mw := range optionState.extraMiddleware {
 			engine.Use(mw)
@@ -137,7 +141,7 @@ func (s *Server) applyInitialRuntimeConfig(cfg *config.Config, authManager *auth
 	if s == nil || cfg == nil {
 		return
 	}
-	bodyutil.SetModelRequestBodyLimit(configModelRequestBodyLimitBytes(cfg))
+	applyBodyUtilRequestBodyConfig(cfg)
 	if s.handlers != nil {
 		s.handlers.AuthManager = authManager
 	}
@@ -157,6 +161,23 @@ func configModelRequestBodyLimitBytes(cfg *config.Config) int64 {
 		return int64(config.DefaultModelRequestBodyMB) << 20
 	}
 	return cfg.ModelRequestBodyLimitBytes()
+}
+
+func configRequestBodyDiskThresholdBytes(cfg *config.Config) int64 {
+	if cfg == nil {
+		return int64(config.DefaultRequestBodyDiskThresholdMB) << 20
+	}
+	return cfg.RequestBodyDiskThresholdBytes()
+}
+
+func applyBodyUtilRequestBodyConfig(cfg *config.Config) {
+	bodyutil.SetModelRequestBodyLimit(configModelRequestBodyLimitBytes(cfg))
+	bodyutil.SetRequestBodyDiskThreshold(configRequestBodyDiskThresholdBytes(cfg))
+	if cfg == nil || cfg.RequestBodyCacheDir() == "" {
+		bodyutil.ResetRequestBodyCacheDir()
+		return
+	}
+	bodyutil.SetRequestBodyCacheDir(cfg.RequestBodyCacheDir())
 }
 
 func (s *Server) configureManagementHandler(

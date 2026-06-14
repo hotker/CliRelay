@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -121,6 +122,35 @@ func TestReadJSONRequestBodyRestoresRequestBody(t *testing.T) {
 	}
 	if string(bodyAgain) != string(body) {
 		t.Fatalf("expected restored body %q, got %q", string(body), string(bodyAgain))
+	}
+}
+
+func TestRequestNeedsWriteTimeoutBypassDecodesDiskBackedStreamFlag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousThreshold := bodyutil.RequestBodyDiskThreshold()
+	t.Cleanup(func() {
+		bodyutil.SetRequestBodyDiskThreshold(previousThreshold)
+		bodyutil.ResetRequestBodyCacheDir()
+	})
+	bodyutil.SetRequestBodyDiskThreshold(8)
+	bodyutil.SetRequestBodyCacheDir(t.TempDir())
+
+	payload := `{"model":"gpt-5.5","input":"` + strings.Repeat("x", 64) + `","stream":true}`
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	if !requestNeedsWriteTimeoutBypass(c) {
+		t.Fatal("expected stream:true request to bypass write timeout")
+	}
+	restored, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if string(restored) != payload {
+		t.Fatalf("restored body = %s", restored)
 	}
 }
 

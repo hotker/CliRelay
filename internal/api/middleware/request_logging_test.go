@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 )
@@ -185,6 +187,35 @@ func (stubRequestLogger) LogStreamingRequest(string, string, map[string][]string
 
 func (stubRequestLogger) IsEnabled() bool { return true }
 
+type captureRequestLogger struct {
+	requestBody []byte
+}
+
+func (l *captureRequestLogger) LogRequest(_ string, _ string, _ map[string][]string, requestBody []byte, _ int, _ map[string][]string, _ []byte, _ []byte, _ []byte, _ []*interfaces.ErrorMessage, _ string, _ time.Time, _ time.Time) error {
+	l.requestBody = bytes.Clone(requestBody)
+	return nil
+}
+
+func (l *captureRequestLogger) LogStreamingRequest(_ string, _ string, _ map[string][]string, requestBody []byte, _ string) (logging.StreamingLogWriter, error) {
+	l.requestBody = bytes.Clone(requestBody)
+	return stubStreamingLogWriter{}, nil
+}
+
+func (l *captureRequestLogger) IsEnabled() bool { return true }
+
+func gzipBodyForRequestLoggingTest(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	if _, err := writer.Write(raw); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
 func TestRequestLoggingMiddlewareDoesNotRejectOversizedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -208,5 +239,48 @@ func TestRequestLoggingMiddlewareDoesNotRejectOversizedBody(t *testing.T) {
 	}
 	if !reachedHandler {
 		t.Fatal("request should reach handler; logging must not enforce API body limits")
+	}
+}
+
+func TestRequestLoggingMiddlewareUsesCachedDecodedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousLimit := bodyutil.ModelRequestBodyLimit()
+	previousThreshold := bodyutil.RequestBodyDiskThreshold()
+	t.Cleanup(func() {
+		bodyutil.SetModelRequestBodyLimit(previousLimit)
+		bodyutil.SetRequestBodyDiskThreshold(previousThreshold)
+	})
+	bodyutil.SetModelRequestBodyLimit(1 << 20)
+	bodyutil.SetRequestBodyDiskThreshold(1 << 20)
+
+	raw := []byte(`{"model":"gpt-5.5","input":"hello","stream":false}`)
+	logger := &captureRequestLogger{}
+	r := gin.New()
+	r.Use(DecompressRequestMiddleware())
+	r.Use(RequestBodyCleanupMiddleware())
+	r.Use(RequestLoggingMiddleware(logger))
+	r.POST("/v1/responses", func(c *gin.Context) {
+		body, err := bodyutil.ReadRequestBody(c, bodyutil.ModelRequestBodyLimit())
+		if err != nil {
+			t.Fatalf("ReadRequestBody: %v", err)
+		}
+		if string(body) != string(raw) {
+			t.Fatalf("decoded body = %s", body)
+		}
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(gzipBodyForRequestLoggingTest(t, raw)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusNoContent, w.Code, w.Body.String())
+	}
+	if string(logger.requestBody) != string(raw) {
+		t.Fatalf("logged request body = %s, want %s", logger.requestBody, raw)
 	}
 }

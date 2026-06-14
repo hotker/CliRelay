@@ -57,7 +57,7 @@ func TestLoadConfigReadsRequestBodyModelLimit(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("request-body:\n  model-max-mb: 64\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("request-body:\n  model-max-mb: 64\n  disk-threshold-mb: 4\n  cache-dir: /tmp/clirelay-body-cache\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -71,6 +71,15 @@ func TestLoadConfigReadsRequestBodyModelLimit(t *testing.T) {
 	}
 	if cfg.ModelRequestBodyLimitBytes() != 64<<20 {
 		t.Fatalf("ModelRequestBodyLimitBytes = %d, want %d", cfg.ModelRequestBodyLimitBytes(), int64(64<<20))
+	}
+	if cfg.RequestBody.DiskThresholdMB != 4 {
+		t.Fatalf("RequestBody.DiskThresholdMB = %d, want 4", cfg.RequestBody.DiskThresholdMB)
+	}
+	if cfg.RequestBodyDiskThresholdBytes() != 4<<20 {
+		t.Fatalf("RequestBodyDiskThresholdBytes = %d, want %d", cfg.RequestBodyDiskThresholdBytes(), int64(4<<20))
+	}
+	if cfg.RequestBodyCacheDir() != "/tmp/clirelay-body-cache" {
+		t.Fatalf("RequestBodyCacheDir = %q, want /tmp/clirelay-body-cache", cfg.RequestBodyCacheDir())
 	}
 }
 
@@ -89,6 +98,9 @@ func TestLoadConfigDefaultsRequestBodyModelLimit(t *testing.T) {
 
 	if cfg.RequestBody.ModelMaxMB != DefaultModelRequestBodyMB {
 		t.Fatalf("RequestBody.ModelMaxMB = %d, want %d", cfg.RequestBody.ModelMaxMB, DefaultModelRequestBodyMB)
+	}
+	if cfg.RequestBody.DiskThresholdMB != DefaultRequestBodyDiskThresholdMB {
+		t.Fatalf("RequestBody.DiskThresholdMB = %d, want %d", cfg.RequestBody.DiskThresholdMB, DefaultRequestBodyDiskThresholdMB)
 	}
 }
 

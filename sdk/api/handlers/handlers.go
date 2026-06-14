@@ -27,7 +27,6 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // ErrorResponse represents a standard error response format for the API.
@@ -80,6 +79,11 @@ func ReadJSONRequestBody(c *gin.Context) ([]byte, bool) {
 		status = http.StatusRequestEntityTooLarge
 		message = "Request body too large"
 		code = "request_body_too_large"
+	} else if bodyutil.IsStorageUnavailable(err) {
+		status = http.StatusInsufficientStorage
+		message = "Request body temporary storage unavailable"
+		errType = "server_error"
+		code = "request_body_storage_unavailable"
 	} else if bodyutil.IsTimeout(err) {
 		status = http.StatusRequestTimeout
 		message = "Request timed out while reading the request body"
@@ -434,11 +438,32 @@ func requestNeedsWriteTimeoutBypass(c *gin.Context) bool {
 	default:
 		return false
 	}
-	body, err := bodyutil.ReadRequestBody(c, bodyutil.ModelRequestBodyLimit())
-	if err != nil || len(body) == 0 {
+	var request struct {
+		Stream flexibleJSONBool `json:"stream"`
+	}
+	if err := bodyutil.DecodeJSONRequestBody(c, bodyutil.ModelRequestBodyLimit(), &request); err != nil {
 		return false
 	}
-	return gjson.GetBytes(body, "stream").Bool()
+	return request.Stream.Bool()
+}
+
+type flexibleJSONBool bool
+
+func (b *flexibleJSONBool) UnmarshalJSON(data []byte) error {
+	value := strings.TrimSpace(strings.ToLower(string(data)))
+	value = strings.Trim(value, `"`)
+	value = strings.TrimSpace(value)
+	switch value {
+	case "true", "1":
+		*b = true
+	default:
+		*b = false
+	}
+	return nil
+}
+
+func (b flexibleJSONBool) Bool() bool {
+	return bool(b)
 }
 
 func clearWriteDeadlineForLongLivedRequest(c *gin.Context) {

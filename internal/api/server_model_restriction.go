@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -78,20 +77,23 @@ func (s *Server) modelRestrictionMiddleware() gin.HandlerFunc {
 			}
 		}
 
-		bodyBytes, err := bodyutil.ReadRequestBody(c, bodyutil.ModelRequestBodyLimit())
+		var bodyObj struct {
+			Model string `json:"model"`
+		}
+		err := bodyutil.DecodeJSONRequestBody(c, bodyutil.ModelRequestBodyLimit(), &bodyObj)
 		if err != nil {
 			if bodyutil.IsTooLarge(err) {
 				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
 				return
 			}
+			if bodyutil.IsStorageUnavailable(err) {
+				c.AbortWithStatusJSON(http.StatusInsufficientStorage, gin.H{"error": "request body temporary storage unavailable"})
+				return
+			}
 			c.Next()
 			return
 		}
-
-		var bodyObj struct {
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal(bodyBytes, &bodyObj); err != nil || bodyObj.Model == "" {
+		if bodyObj.Model == "" {
 			c.Next()
 			return
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/bodyutil"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -154,6 +155,7 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 
 	// Capture response headers using the new method
 	w.captureCurrentHeaders()
+	w.hydrateRequestInfoBody(w.ginCtx)
 
 	// Detect streaming based on Content-Type
 	contentType := w.ResponseWriter.Header().Get("Content-Type")
@@ -161,11 +163,12 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 
 	// If streaming, initialize streaming log writer
 	if w.isStreaming && w.logger.IsEnabled() {
+		requestBody := w.extractRequestBody(w.ginCtx)
 		streamWriter, err := w.logger.LogStreamingRequest(
 			w.requestInfo.URL,
 			w.requestInfo.Method,
 			w.requestInfo.Headers,
-			w.requestInfo.Body,
+			requestBody,
 			w.requestInfo.RequestID,
 		)
 		if err == nil {
@@ -175,7 +178,7 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 			w.streamDone = doneChan
 
 			// Start async chunk processor
-			go w.processStreamingChunks(doneChan)
+			go w.processStreamingChunks(doneChan, streamWriter, w.chunkChannel)
 
 			// Write status immediately
 			_ = streamWriter.WriteStatus(statusCode, w.headers)
@@ -248,19 +251,19 @@ func (w *ResponseWriterWrapper) detectStreaming(contentType string) bool {
 
 // processStreamingChunks runs in a separate goroutine to process response chunks from the chunkChannel.
 // It asynchronously writes each chunk to the streaming log writer.
-func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
+func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}, streamWriter logging.StreamingLogWriter, chunkChannel <-chan []byte) {
 	if done == nil {
 		return
 	}
 
 	defer close(done)
 
-	if w.streamWriter == nil || w.chunkChannel == nil {
+	if streamWriter == nil || chunkChannel == nil {
 		return
 	}
 
-	for chunk := range w.chunkChannel {
-		w.streamWriter.WriteChunkAsync(chunk)
+	for chunk := range chunkChannel {
+		streamWriter.WriteChunkAsync(chunk)
 	}
 }
 
@@ -392,8 +395,25 @@ func (w *ResponseWriterWrapper) extractRequestBody(c *gin.Context) []byte {
 			}
 		}
 	}
+	if body := w.hydrateRequestInfoBody(c); len(body) > 0 {
+		return body
+	}
 	if w.requestInfo != nil && len(w.requestInfo.Body) > 0 {
 		return w.requestInfo.Body
+	}
+	return nil
+}
+
+func (w *ResponseWriterWrapper) hydrateRequestInfoBody(c *gin.Context) []byte {
+	if w == nil || w.requestInfo == nil {
+		return nil
+	}
+	if len(w.requestInfo.Body) > 0 {
+		return w.requestInfo.Body
+	}
+	if body, ok := bodyutil.CachedRequestBody(c, maxErrorOnlyCapturedRequestBodyBytes); ok && len(body) > 0 {
+		w.requestInfo.Body = body
+		return body
 	}
 	return nil
 }
