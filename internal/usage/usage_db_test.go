@@ -554,7 +554,7 @@ func TestQueryLogContentPartReturnsStoredRequestDetails(t *testing.T) {
 	}
 }
 
-func TestInitDBMigratesFirstTokenColumn(t *testing.T) {
+func TestInitDBMigratesFirstTokenAndStreamingColumns(t *testing.T) {
 	CloseDB()
 	dbPath := filepath.Join(t.TempDir(), "usage.db")
 
@@ -597,7 +597,7 @@ func TestInitDBMigratesFirstTokenColumn(t *testing.T) {
 	t.Cleanup(CloseDB)
 
 	db := getDB()
-	var found bool
+	found := map[string]bool{}
 	rows, err := db.Query("PRAGMA table_info(request_logs)")
 	if err != nil {
 		t.Fatalf("PRAGMA table_info(request_logs): %v", err)
@@ -612,13 +612,15 @@ func TestInitDBMigratesFirstTokenColumn(t *testing.T) {
 		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
 			t.Fatalf("scan table info: %v", err)
 		}
-		if name == "first_token_ms" {
-			found = true
-			break
+		if name == "first_token_ms" || name == "streaming" {
+			found[name] = true
 		}
 	}
-	if !found {
+	if !found["first_token_ms"] {
 		t.Fatalf("expected first_token_ms column to exist after InitDB migration")
+	}
+	if !found["streaming"] {
+		t.Fatalf("expected streaming column to exist after InitDB migration")
 	}
 }
 
@@ -750,6 +752,9 @@ func TestInsertLogStoresCompressedContentOutsideMainTable(t *testing.T) {
 	if result.Items[0].FirstTokenMs != 45 {
 		t.Fatalf("FirstTokenMs = %d, want %d", result.Items[0].FirstTokenMs, 45)
 	}
+	if result.Items[0].Streaming {
+		t.Fatalf("Streaming = true, want false for non-stream request")
+	}
 	if !result.Items[0].HasContent {
 		t.Fatalf("expected HasContent to be true")
 	}
@@ -786,6 +791,86 @@ func TestInsertLogStoresCompressedContentOutsideMainTable(t *testing.T) {
 	}
 	if len(compressedInput) == 0 || len(compressedOutput) == 0 {
 		t.Fatalf("expected compressed content blobs to be present")
+	}
+}
+
+func TestQueryLogsMarksStreamingRequests(t *testing.T) {
+	initTestUsageDB(t, config.RequestLogStorageConfig{})
+
+	timestamp := time.Now().UTC()
+	InsertLog("sk-test", "", "gpt-test", "source", "channel", "auth-1", false, timestamp, 123, 45, TokenStats{
+		InputTokens:  10,
+		OutputTokens: 20,
+		TotalTokens:  30,
+	}, `{"model":"gpt-test","stream":true}`, "")
+
+	result, err := QueryLogs(LogQueryParams{Page: 1, Size: 10, Days: 1})
+	if err != nil {
+		t.Fatalf("QueryLogs() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 log row, got %d", len(result.Items))
+	}
+	if !result.Items[0].Streaming {
+		t.Fatalf("Streaming = false, want true")
+	}
+}
+
+func TestQueryLogsHydratesLegacyStreamingFlagFromContent(t *testing.T) {
+	initTestUsageDB(t, config.RequestLogStorageConfig{})
+
+	timestamp := time.Now().UTC()
+	InsertLog("sk-test", "", "gpt-test", "source", "channel", "auth-1", false, timestamp, 123, 45, TokenStats{
+		InputTokens:  10,
+		OutputTokens: 20,
+		TotalTokens:  30,
+	}, `{"model":"gpt-test","stream":true}`, "")
+
+	db := getDB()
+	if _, err := db.Exec("UPDATE request_logs SET streaming = 0"); err != nil {
+		t.Fatalf("reset streaming flag: %v", err)
+	}
+
+	result, err := QueryLogs(LogQueryParams{Page: 1, Size: 10, Days: 1})
+	if err != nil {
+		t.Fatalf("QueryLogs() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 log row, got %d", len(result.Items))
+	}
+	if !result.Items[0].Streaming {
+		t.Fatalf("Streaming = false, want true from stored content")
+	}
+}
+
+func TestQueryLogsHydratesLegacyStreamingFlagFromInlineContent(t *testing.T) {
+	initTestUsageDB(t, config.RequestLogStorageConfig{})
+
+	db := getDB()
+	timestamp := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO request_logs
+			(timestamp, api_key, model, source, channel_name, auth_index,
+			 failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
+			 cost, input_content)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		timestamp.Format(time.RFC3339Nano),
+		"sk-legacy", "gpt-test", "source", "channel", "auth-legacy",
+		0, 123, 10, 20, 0, 0, 30, 0, `{"model":"gpt-test","stream":true}`,
+	)
+	if err != nil {
+		t.Fatalf("insert legacy inline row: %v", err)
+	}
+
+	result, err := QueryLogs(LogQueryParams{Page: 1, Size: 10, Days: 1})
+	if err != nil {
+		t.Fatalf("QueryLogs() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 log row, got %d", len(result.Items))
+	}
+	if !result.Items[0].Streaming {
+		t.Fatalf("Streaming = false, want true from inline content")
 	}
 }
 

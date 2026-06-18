@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ type LogRow struct {
 	ChannelName     string    `json:"channel_name"`
 	AuthIndex       string    `json:"auth_index"`
 	Failed          bool      `json:"failed"`
+	Streaming       bool      `json:"streaming"`
 	LatencyMs       int64     `json:"latency_ms"`
 	FirstTokenMs    int64     `json:"first_token_ms"`
 	InputTokens     int64     `json:"input_tokens"`
@@ -126,6 +128,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
   channel_name     TEXT NOT NULL DEFAULT '',
   auth_index       TEXT NOT NULL DEFAULT '',
   failed           INTEGER NOT NULL DEFAULT 0,
+  streaming        INTEGER NOT NULL DEFAULT 0,
   latency_ms       INTEGER NOT NULL DEFAULT 0,
   first_token_ms   INTEGER NOT NULL DEFAULT 0,
   input_tokens     INTEGER NOT NULL DEFAULT 0,
@@ -302,6 +305,15 @@ func migrateFirstTokenColumn(db *sql.DB) {
 	}
 }
 
+func migrateStreamingColumn(db *sql.DB) {
+	_, err := db.Exec("ALTER TABLE request_logs ADD COLUMN streaming INTEGER NOT NULL DEFAULT 0")
+	if err != nil {
+		if !strings.Contains(err.Error(), "duplicate") {
+			log.Warnf("usage: migrate column streaming: %v", err)
+		}
+	}
+}
+
 func migrateRequestLogDetailColumn(db *sql.DB) {
 	_, err := db.Exec("ALTER TABLE request_log_content ADD COLUMN detail_content BLOB NOT NULL DEFAULT X''")
 	if err != nil {
@@ -392,6 +404,8 @@ func InitDB(dbPath string, storageCfg config.RequestLogStorageConfig, loc *time.
 	migrateAuthSubjectIDColumns(db)
 	log.Debugf("usage: running first_token_ms column migration")
 	migrateFirstTokenColumn(db)
+	log.Debugf("usage: running streaming column migration")
+	migrateStreamingColumn(db)
 	log.Debugf("usage: running request log detail column migration")
 	migrateRequestLogDetailColumn(db)
 	log.Debugf("usage: ensuring request log detail indexes")
@@ -471,6 +485,10 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, sourc
 	if failed {
 		failedInt = 1
 	}
+	streamingInt := 0
+	if isStreamingRequestContent(inputContent) {
+		streamingInt = 1
+	}
 
 	// Calculate cost based on model pricing using semantic cache read/write
 	cost := CalculateCostV2(model, tokens)
@@ -498,11 +516,11 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, sourc
 	result, err := tx.Exec(
 		`INSERT INTO request_logs
 			(timestamp, api_key, api_key_id, auth_subject_id, api_key_name, model, source, channel_name, auth_index,
-			 failed, latency_ms, first_token_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 failed, streaming, latency_ms, first_token_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		timestamp.UTC().Format(time.RFC3339Nano),
 		apiKey, apiKeyID, authSubjectID, apiKeyName, model, source, channelName, authIndex,
-		failedInt, latencyMs, firstTokenMs,
+		failedInt, streamingInt, latencyMs, firstTokenMs,
 		tokens.InputTokens, tokens.OutputTokens, tokens.ReasoningTokens,
 		tokens.CachedTokens, tokens.TotalTokens, cost,
 	)
@@ -535,6 +553,16 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, sourc
 	if tokenUsageCallback != nil && tokens.TotalTokens > 0 {
 		tokenUsageCallback(apiKey, tokens.TotalTokens)
 	}
+}
+
+func isStreamingRequestContent(content string) bool {
+	var payload struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	return payload.Stream
 }
 
 // tokenUsageCallback is set by SetTokenUsageCallback to notify external

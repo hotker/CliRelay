@@ -48,7 +48,7 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 	// Fetch page
 	offset := (params.Page - 1) * params.Size
 	querySQL := "SELECT id, timestamp, api_key, api_key_name, model, source, channel_name, auth_index, " +
-		"failed, latency_ms, first_token_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, " +
+		"failed, streaming, latency_ms, first_token_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, " +
 		"cost, " +
 		"(CASE WHEN EXISTS (SELECT 1 FROM request_log_content content WHERE content.log_id = request_logs.id) " +
 		"OR length(input_content) > 0 OR length(output_content) > 0 THEN 1 ELSE 0 END) as has_content " +
@@ -66,10 +66,10 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 	for rows.Next() {
 		var row LogRow
 		var ts string
-		var failedInt, hasContentInt int
+		var failedInt, streamingInt, hasContentInt int
 		if err := rows.Scan(
 			&row.ID, &ts, &row.APIKey, &row.APIKeyName, &row.Model, &row.Source, &row.ChannelName,
-			&row.AuthIndex, &failedInt, &row.LatencyMs, &row.FirstTokenMs,
+			&row.AuthIndex, &failedInt, &streamingInt, &row.LatencyMs, &row.FirstTokenMs,
 			&row.InputTokens, &row.OutputTokens, &row.ReasoningTokens,
 			&row.CachedTokens, &row.TotalTokens, &row.Cost, &hasContentInt,
 		); err != nil {
@@ -77,9 +77,11 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 		}
 		row.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
 		row.Failed = failedInt != 0
+		row.Streaming = streamingInt != 0
 		row.HasContent = hasContentInt != 0
 		items = append(items, row)
 	}
+	hydrateStreamingFromContent(db, items)
 
 	return LogQueryResult{
 		Items: items,
@@ -87,6 +89,73 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 		Page:  params.Page,
 		Size:  params.Size,
 	}, nil
+}
+
+func hydrateStreamingFromContent(db *sql.DB, items []LogRow) {
+	if db == nil || len(items) == 0 {
+		return
+	}
+
+	indexByID := make(map[int64]int, len(items))
+	ids := make([]int64, 0, len(items))
+	for i := range items {
+		if items[i].Streaming {
+			continue
+		}
+		indexByID[items[i].ID] = i
+		ids = append(ids, items[i].ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := db.Query(
+		`SELECT logs.id, logs.input_content, content.compression, content.input_content
+		FROM request_logs logs
+		LEFT JOIN request_log_content content ON content.log_id = logs.id
+		WHERE logs.id IN (`+placeholders+`) AND (length(logs.input_content) > 0 OR length(content.input_content) > 0)`,
+		args...,
+	)
+	if err != nil {
+		log.Warnf("usage: query request log content for streaming flag: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var legacyInput string
+		var compression sql.NullString
+		var storedInput []byte
+		if err := rows.Scan(&id, &legacyInput, &compression, &storedInput); err != nil {
+			log.Warnf("usage: scan request log content for streaming flag: %v", err)
+			continue
+		}
+		streaming := isStreamingRequestContent(legacyInput)
+		if !streaming && len(storedInput) > 0 {
+			compressionName := "zstd"
+			if compression.Valid {
+				compressionName = compression.String
+			}
+			input, err := decompressLogContent(compressionName, storedInput)
+			if err != nil {
+				log.Warnf("usage: decompress request log content for streaming flag: %v", err)
+				continue
+			}
+			streaming = isStreamingRequestContent(input)
+		}
+		if index, ok := indexByID[id]; ok && streaming {
+			items[index].Streaming = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Warnf("usage: iterate request log content for streaming flag: %v", err)
+	}
 }
 
 // QueryFilters returns the distinct API keys and models within the time range.

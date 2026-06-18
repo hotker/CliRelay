@@ -77,6 +77,7 @@ func TestGetUsageLogsResolvesLegacySourceChannelName(t *testing.T) {
 		Items []struct {
 			ChannelName  string `json:"channel_name"`
 			AuthIndex    string `json:"auth_index"`
+			Streaming    bool   `json:"streaming"`
 			FirstTokenMs int64  `json:"first_token_ms"`
 		} `json:"items"`
 	}
@@ -94,6 +95,9 @@ func TestGetUsageLogsResolvesLegacySourceChannelName(t *testing.T) {
 	}
 	if payload.Items[0].FirstTokenMs != 45 {
 		t.Fatalf("first_token_ms = %d, want %d", payload.Items[0].FirstTokenMs, 45)
+	}
+	if payload.Items[0].Streaming {
+		t.Fatalf("streaming = true, want false")
 	}
 }
 
