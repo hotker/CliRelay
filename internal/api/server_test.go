@@ -593,13 +593,13 @@ func TestGroupedV1RouteUnknownGroupReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestNewServerSetsMainNonStreamingWriteTimeout(t *testing.T) {
+func TestNewServerSetsMainWriteTimeout(t *testing.T) {
 	server := newTestServer(t)
 	if server.server == nil {
 		t.Fatal("expected http server to be initialized")
 	}
-	if got := server.server.WriteTimeout; got != mainAPINonStreamingWriteTimeout {
-		t.Fatalf("WriteTimeout = %s, want %s", got, mainAPINonStreamingWriteTimeout)
+	if got := server.server.WriteTimeout; got != mainAPIServerWriteTimeout {
+		t.Fatalf("WriteTimeout = %s, want %s", got, mainAPIServerWriteTimeout)
 	}
 	if got := server.server.ReadTimeout; got != proxyconfig.DefaultMainAPIReadTimeout {
 		t.Fatalf("ReadTimeout = %s, want %s", got, proxyconfig.DefaultMainAPIReadTimeout)
