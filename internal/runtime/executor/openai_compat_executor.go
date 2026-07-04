@@ -17,6 +17,7 @@ import (
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -321,6 +322,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		var param any
 		var lastUsage coreusage.Detail
 		hasUsage := false
+		var pendingResponsesCompleted []byte
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			recorder.AppendResponseChunk(line)
@@ -332,6 +334,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			if detail, ok := parseOpenAIStreamUsage(line); ok {
 				lastUsage = detail
 				hasUsage = true
+				if len(pendingResponsesCompleted) > 0 && isOpenAIStreamUsageOnly(line) {
+					out <- cliproxyexecutor.StreamChunk{Payload: patchResponsesCompletedUsage(pendingResponsesCompleted, lastUsage)}
+					pendingResponsesCompleted = nil
+				}
 			}
 			if len(line) == 0 {
 				continue
@@ -345,8 +351,18 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			// Pass through translator; it yields one or more chunks for the target schema.
 			chunks := sdktranslator.TranslateStream(execCtx.Context, to, execCtx.SourceFormat, req.Model, opts.OriginalRequest, translated, bytes.Clone(line), &param)
 			for i := range chunks {
+				if shouldHoldResponsesCompleted(execCtx.SourceFormat, line, []byte(chunks[i])) {
+					pendingResponsesCompleted = []byte(chunks[i])
+					continue
+				}
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
 			}
+		}
+		if len(pendingResponsesCompleted) > 0 {
+			if hasUsage {
+				pendingResponsesCompleted = patchResponsesCompletedUsage(pendingResponsesCompleted, lastUsage)
+			}
+			out <- cliproxyexecutor.StreamChunk{Payload: pendingResponsesCompleted}
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			recorder.RecordResponseError(errScan)
@@ -364,6 +380,89 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		result = opencodeGoRewriteFallbackStreamResult(result, fallback.OriginalModel)
 	}
 	return result, nil
+}
+
+func shouldHoldResponsesCompleted(sourceFormat sdktranslator.Format, line, chunk []byte) bool {
+	return sourceFormat == sdktranslator.FormatOpenAIResponse &&
+		isOpenAIStreamFinish(line) &&
+		!openAIStreamHasCachedTokens(line) &&
+		isResponsesCompletedChunk(chunk)
+}
+
+func isOpenAIStreamFinish(line []byte) bool {
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return false
+	}
+	for _, choice := range gjson.GetBytes(payload, "choices").Array() {
+		if strings.TrimSpace(choice.Get("finish_reason").String()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIStreamHasCachedTokens(line []byte) bool {
+	payload := jsonPayload(line)
+	return len(payload) > 0 && gjson.GetBytes(payload, "usage.prompt_tokens_details.cached_tokens").Exists()
+}
+
+func isOpenAIStreamUsageOnly(line []byte) bool {
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.GetBytes(payload, "usage").Exists() {
+		return false
+	}
+	choices := gjson.GetBytes(payload, "choices")
+	return !choices.Exists() || len(choices.Array()) == 0
+}
+
+func isResponsesCompletedChunk(chunk []byte) bool {
+	payload := responsesSSEData(chunk)
+	return len(payload) > 0 && gjson.GetBytes(payload, "type").String() == "response.completed"
+}
+
+func patchResponsesCompletedUsage(chunk []byte, detail coreusage.Detail) []byte {
+	payload := responsesSSEData(chunk)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return chunk
+	}
+	updated, err := sjson.SetBytes(payload, "response.usage.input_tokens", detail.InputTokens)
+	if err != nil {
+		return chunk
+	}
+	cachedTokens := detail.CacheReadTokens
+	if cachedTokens == 0 {
+		cachedTokens = detail.CachedTokens
+	}
+	updated, _ = sjson.SetBytes(updated, "response.usage.input_tokens_details.cached_tokens", cachedTokens)
+	updated, _ = sjson.SetBytes(updated, "response.usage.output_tokens", detail.OutputTokens)
+	if detail.ReasoningTokens > 0 {
+		updated, _ = sjson.SetBytes(updated, "response.usage.output_tokens_details.reasoning_tokens", detail.ReasoningTokens)
+	}
+	totalTokens := detail.TotalTokens
+	if totalTokens == 0 {
+		totalTokens = detail.InputTokens + detail.OutputTokens
+	}
+	updated, _ = sjson.SetBytes(updated, "response.usage.total_tokens", totalTokens)
+
+	lines := strings.Split(string(chunk), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "data:") {
+			lines[i] = "data: " + string(updated)
+			break
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func responsesSSEData(chunk []byte) []byte {
+	for _, line := range bytes.Split(chunk, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("data:")) {
+			return bytes.TrimSpace(trimmed[len("data:"):])
+		}
+	}
+	return nil
 }
 
 func (e *OpenAICompatExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
