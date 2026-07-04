@@ -117,6 +117,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 			return resp, err
 		}
 	}
+	if e.provider == openCodeGoProvider && execCtx.SourceFormat == sdktranslator.FormatClaude && endpoint == "/chat/completions" {
+		translated = opencodeGoPreserveClaudeCacheControl(translated, req.Payload)
+	}
 
 	// OpenCode-Go: the translator drops reasoning_content when converting
 	// from Responses API. Inject it here into translated payload so it survives.
@@ -241,6 +244,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		if err != nil {
 			return nil, err
 		}
+	}
+	if e.provider == openCodeGoProvider && execCtx.SourceFormat == sdktranslator.FormatClaude {
+		translated = opencodeGoPreserveClaudeCacheControl(translated, req.Payload)
 	}
 
 	// Inject reasoning_content for OpenCode-Go after Responses API translation.

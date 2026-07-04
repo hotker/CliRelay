@@ -504,17 +504,15 @@ func TestOpenCodeGoExecutorRoutesMiniMaxModelsToMessages(t *testing.T) {
 	}
 }
 
-func TestOpenCodeGoExecutorRoutesGLM52ClaudeStreamToMessagesWithCacheControl(t *testing.T) {
-	var gotPath, gotAuth, gotAnthropicVersion string
+func TestOpenCodeGoExecutorRoutesGLM52ClaudeToChatCompletionsWithCacheControl(t *testing.T) {
+	var gotPath, gotAuth string
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
-		gotAnthropicVersion = r.Header.Get("Anthropic-Version")
 		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":101,"output_tokens":2,"cache_read_input_tokens":10}}` + "\n\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_glm","object":"chat.completion","created":1,"model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":101,"completion_tokens":2,"total_tokens":103,"prompt_tokens_details":{"cached_tokens":10}}}`))
 	}))
 	defer server.Close()
 
@@ -524,28 +522,20 @@ func TestOpenCodeGoExecutorRoutesGLM52ClaudeStreamToMessagesWithCacheControl(t *
 
 	exec := NewOpenCodeGoExecutor(&config.Config{})
 	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test-key"}}
-	payload := []byte(`{"model":"glm-5.2","max_tokens":32,"stream":true,"system":[{"type":"text","text":"system prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"cached context","cache_control":{"type":"ephemeral"}},{"type":"text","text":"hi"}]}]}`)
-	result, err := exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+	payload := []byte(`{"model":"glm-5.2","max_tokens":32,"system":[{"type":"text","text":"system prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"cached context","cache_control":{"type":"ephemeral"}},{"type":"text","text":"hi"}]}]}`)
+	resp, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
 		Model:   "glm-5.2",
 		Payload: payload,
-	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, Stream: true})
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
 	if err != nil {
-		t.Fatalf("ExecuteStream returned error: %v", err)
-	}
-	for chunk := range result.Chunks {
-		if chunk.Err != nil {
-			t.Fatalf("stream chunk error: %v", chunk.Err)
-		}
+		t.Fatalf("Execute returned error: %v", err)
 	}
 
-	if gotPath != "/zen/go/v1/messages" {
-		t.Fatalf("path = %q, want /zen/go/v1/messages", gotPath)
+	if gotPath != "/zen/go/v1/chat/completions" {
+		t.Fatalf("path = %q, want /zen/go/v1/chat/completions", gotPath)
 	}
 	if gotAuth != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
-	}
-	if gotAnthropicVersion != "2023-06-01" {
-		t.Fatalf("Anthropic-Version = %q, want 2023-06-01", gotAnthropicVersion)
 	}
 	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "glm-5.2" {
 		t.Fatalf("upstream model = %q, want glm-5.2; body=%s", gotModel, string(gotBody))
@@ -555,6 +545,9 @@ func TestOpenCodeGoExecutorRoutesGLM52ClaudeStreamToMessagesWithCacheControl(t *
 	}
 	if count := strings.Count(string(gotBody), `"ephemeral"`); count != 2 {
 		t.Fatalf("ephemeral count = %d, want 2; body=%s", count, string(gotBody))
+	}
+	if gotText := gjson.GetBytes(resp.Payload, "content.0.text").String(); gotText != "ok" {
+		t.Fatalf("response text = %q, want ok; payload=%s", gotText, string(resp.Payload))
 	}
 }
 
