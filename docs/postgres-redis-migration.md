@@ -14,6 +14,38 @@ For Docker Compose, the bundled `docker-compose.yml` starts `postgres:15-alpine`
 
 For non-Compose deployments, set the same values in the environment or edit `postgres.dsn` and `redis.*` in `config.yaml`.
 
+For the native `relay.07230805.xyz` style deployment, prepare the local PostgreSQL/Redis stack with one reproducible script:
+
+```bash
+BASE_DIR=/opt/clirelay2 /opt/clirelay2/scripts/prepare-runtime-data-stack.sh
+```
+
+The default `up` action creates `/opt/clirelay2/runtime-data-stack/docker-compose.yml`, writes `/opt/clirelay2/runtime-data-stack/.env`, starts `postgres:15-alpine` and `redis:7-alpine`, waits for health checks, and verifies `psql`/`redis-cli`. PostgreSQL and Redis bind only to `127.0.0.1` by default.
+
+This preparation step does not write `/opt/clirelay2/.env`, does not restart CliRelay, does not import SQLite, and does not switch the running service to PostgreSQL/Redis.
+
+Only after local checks pass and the cutover is approved, activate the generated environment for CliRelay:
+
+```bash
+BASE_DIR=/opt/clirelay2 /opt/clirelay2/scripts/prepare-runtime-data-stack.sh activate-env
+```
+
+After `activate-env`, `scripts/deploy-blue-green.sh` can read `/opt/clirelay2/.env` and run the SQLite import during the approved deploy.
+
+To tear down an unneeded test stack without deleting data, run:
+
+```bash
+BASE_DIR=/opt/clirelay2 /opt/clirelay2/scripts/prepare-runtime-data-stack.sh down
+```
+
+To reset a disposable test stack and delete its generated PostgreSQL/Redis data directories:
+
+```bash
+CLIRELAY_RUNTIME_CONFIRM_RESET=YES_DELETE_CLIRELAY_RUNTIME_DATA \
+BASE_DIR=/tmp/clirelay2-test \
+./scripts/prepare-runtime-data-stack.sh reset
+```
+
 ## Docker Compose Auto Migration
 
 For Docker Compose deployments, the default path is:

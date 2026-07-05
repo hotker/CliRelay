@@ -52,13 +52,29 @@ read_config_scalar() {
 	' "$config_path" 2>/dev/null || true
 }
 
-postgres_dsn="${CLIRELAY_POSTGRES_DSN:-$(read_config_scalar postgres dsn)}"
+read_env_scalar() {
+	[ -f "$2" ] || return 0
+	awk -F= -v key="$1" '
+		$1 == key {
+			value = substr($0, length(key) + 2)
+			gsub(/^[[:space:]"'\'']+|[[:space:]"'\'']+$/, "", value)
+			print value
+			exit
+		}
+	' "$2" 2>/dev/null || true
+}
+
+env_path="${CLIRELAY_ENV_FILE:-${BASE_DIR}/.env}"
+postgres_dsn="${CLIRELAY_POSTGRES_DSN:-$(read_env_scalar CLIRELAY_POSTGRES_DSN "$env_path")}"
+postgres_dsn="${postgres_dsn:-$(read_config_scalar postgres dsn)}"
 [ -n "$postgres_dsn" ] || fail "postgres.dsn or CLIRELAY_POSTGRES_DSN is required before deploying this runtime data stack"
 
-redis_enable="${CLIRELAY_REDIS_ENABLE:-$(read_config_scalar redis enable)}"
+redis_enable="${CLIRELAY_REDIS_ENABLE:-$(read_env_scalar CLIRELAY_REDIS_ENABLE "$env_path")}"
+redis_enable="${redis_enable:-$(read_config_scalar redis enable)}"
 case "${redis_enable,,}" in
 	true|yes|1)
-		redis_addr="${CLIRELAY_REDIS_ADDR:-$(read_config_scalar redis addr)}"
+		redis_addr="${CLIRELAY_REDIS_ADDR:-$(read_env_scalar CLIRELAY_REDIS_ADDR "$env_path")}"
+		redis_addr="${redis_addr:-$(read_config_scalar redis addr)}"
 		[ -n "$redis_addr" ] || fail "redis.addr or CLIRELAY_REDIS_ADDR is required when redis is enabled"
 		;;
 esac
@@ -170,6 +186,7 @@ unit_file="/etc/systemd/system/${next_unit}.service"
 	echo "WorkingDirectory=${working_dir}"
 	[ -n "$user" ] && echo "User=${user}"
 	[ -n "$group" ] && echo "Group=${group}"
+	[ -f "$env_path" ] && echo "EnvironmentFile=${env_path}"
 	[ -n "$environment" ] && echo "Environment=${environment}"
 	# Keep the canonical config path; only override the listen port for this deploy slot.
 	echo "Environment=CLIRELAY_PORT=${next_port} PORT=${next_port}"
