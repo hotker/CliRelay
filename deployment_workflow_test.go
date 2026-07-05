@@ -18,8 +18,9 @@ func TestDeployWorkflowOnlyPublishesBackendBinary(t *testing.T) {
 
 	for _, want := range []string{
 		`Upload binary and deploy script`,
-		`source: "cli-proxy-api-new,scripts/deploy-blue-green.sh"`,
+		`source: "cli-proxy-api-new,scripts/deploy-blue-green.sh,scripts/migrate-sqlite-to-postgres.sh"`,
 		`scripts/deploy-blue-green.sh`,
+		`scripts/migrate-sqlite-to-postgres.sh`,
 		`target: "/opt/clirelay2/"`,
 	} {
 		if !strings.Contains(content, want) {

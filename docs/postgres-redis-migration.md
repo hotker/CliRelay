@@ -14,6 +14,41 @@ For Docker Compose, the bundled `docker-compose.yml` starts `postgres:15-alpine`
 
 For non-Compose deployments, set the same values in the environment or edit `postgres.dsn` and `redis.*` in `config.yaml`.
 
+## Docker Compose Auto Migration
+
+For Docker Compose deployments, the default path is:
+
+```bash
+docker compose up -d
+```
+
+Compose starts PostgreSQL 15 and Redis 7, waits for their health checks, then the CliRelay entrypoint runs `scripts/migrate-sqlite-to-postgres.sh` before starting the API server. The script looks for a legacy SQLite database in these paths unless `CLIRELAY_SQLITE_PATH` is set:
+
+- `/CLIProxyAPI/data/usage.db`
+- `/CLIProxyAPI/usage.db`
+- `/CLIProxyAPI/logs/usage.db`
+- `./data/usage.db`
+- `./usage.db`
+- `./logs/usage.db`
+
+If no legacy SQLite file exists, the container starts normally with PostgreSQL. If a legacy SQLite file exists, `CLIRELAY_POSTGRES_DSN` is required. The script runs read-only SQLite inventory, PostgreSQL import dry-run, then apply import by default. Set `CLIRELAY_SQLITE_AUTO_IMPORT=false` to stop after dry-run, or `CLIRELAY_SQLITE_AUTO_MIGRATE=false` to skip the startup migration hook.
+
+SQLite is never deleted, moved, or written by this migration path. PostgreSQL records a source fingerprint in `sqlite_import_runs` after a successful apply. Repeated container starts skip an already imported SQLite source, and PostgreSQL advisory locking ensures concurrent starts do not import the same source twice.
+
+If migration fails, the container exits instead of starting against an empty PostgreSQL database.
+
+## Non-Docker Migration Script
+
+For non-Docker deployments, build or download the new CliRelay binary, set `CLIRELAY_POSTGRES_DSN`, then run:
+
+```bash
+CLIRELAY_BIN=/opt/clirelay2/cli-proxy-api-new \
+CLIRELAY_POSTGRES_DSN='postgres://user:pass@127.0.0.1:5432/cliproxy?sslmode=disable' \
+./scripts/migrate-sqlite-to-postgres.sh /opt/clirelay2/usage.db
+```
+
+The same script performs inventory, dry-run, apply, idempotency marking, and leaves SQLite in place.
+
 ## Deploy Gate
 
 Pushes to `dev` build the Linux binary but do not deploy to the server unless repository variable `CLIRELAY_DEV_AUTO_DEPLOY` is set to `true`. Prefer leaving it disabled for this migration and running the deploy workflow manually after PostgreSQL, Redis, SQLite import dry-run/apply, and row-count/checksum checks are complete.
