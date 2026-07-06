@@ -179,9 +179,6 @@ func syncOllamaCloudConfigAuthModels(reg sdkmodelcatalog.Registry, cfg *config.C
 		return
 	}
 	models := sdkmodelcatalog.StaticModelDefinitionsByChannel("ollama-cloud")
-	if len(entry.Models) > 0 {
-		models = buildOllamaCloudConfigModels(entry.Models, models)
-	}
 	models = applyConfigModelExclusions(models, entry.ExcludedModels)
 	reg.RegisterClient(auth.ID, "ollama-cloud", applyConfigModelPrefixes(models, auth.Prefix, cfg.ForceModelPrefix))
 }

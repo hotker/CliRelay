@@ -225,9 +225,9 @@ func (cfg *Config) SanitizeOpenCodeGoKeys() {
 		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 		entry.Headers = NormalizeHeaders(entry.Headers)
-		entry.Models = NormalizeOpenCodeGoModels(entry.Models)
+		entry.Models = nil
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
-		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.VisionFallbackModel = ""
 		entry.WorkspaceID = strings.TrimSpace(entry.WorkspaceID)
 		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 		out = append(out, entry)
@@ -279,9 +279,9 @@ func (cfg *Config) SanitizeClineKeys() {
 		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 		entry.Headers = NormalizeHeaders(entry.Headers)
-		entry.Models = NormalizeClineModels(entry.Models)
+		entry.Models = nil
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
-		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.VisionFallbackModel = ""
 		out = append(out, entry)
 	}
 	cfg.ClineKey = out

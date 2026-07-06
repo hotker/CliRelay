@@ -555,9 +555,9 @@ func NormalizeOpenCodeGoKey(entry *config.OpenCodeGoKey) {
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 	entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
-	entry.Models = config.NormalizeOpenCodeGoModels(entry.Models)
+	entry.Models = nil
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
-	entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+	entry.VisionFallbackModel = ""
 	if workspaceID, err := normalizeOpenCodeGoWorkspaceID(entry.WorkspaceID); err == nil {
 		entry.WorkspaceID = workspaceID
 	} else {
@@ -592,9 +592,9 @@ func NormalizeClineKey(entry *config.ClineKey) {
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 	entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 	entry.Headers = config.NormalizeHeaders(entry.Headers)
-	entry.Models = config.NormalizeClineModels(entry.Models)
+	entry.Models = nil
 	entry.ExcludedModels = config.NormalizeExcludedModels(entry.ExcludedModels)
-	entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+	entry.VisionFallbackModel = ""
 }
 
 func NormalizedClineKeyEntries(entries []config.ClineKey) []config.ClineKey {

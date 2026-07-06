@@ -327,20 +327,6 @@ func buildCodexConfigModels(entry *config.CodexKey, resolveThinking staticThinki
 	return buildConfigModels(entry.Models, "openai", "openai", resolveThinking)
 }
 
-func buildOpenCodeGoConfigModels(entry *config.OpenCodeGoKey, staticModels []*ModelInfo) []*ModelInfo {
-	if entry == nil || len(entry.Models) == 0 {
-		return nil
-	}
-	return buildNamedConfigModels(entry.Models, staticModels, "opencode", "opencode-go")
-}
-
-func buildClineConfigModels(entry *config.ClineKey, staticModels []*ModelInfo) []*ModelInfo {
-	if entry == nil || len(entry.Models) == 0 {
-		return nil
-	}
-	return buildConfigModels(entry.Models, "cline", "cline", nil)
-}
-
 func buildOllamaCloudConfigModels(entry *config.OllamaCloudKey, staticModels []*ModelInfo) []*ModelInfo {
 	if entry == nil || len(entry.Models) == 0 {
 		return nil

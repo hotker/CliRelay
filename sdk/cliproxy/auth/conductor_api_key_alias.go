@@ -221,11 +221,7 @@ func resolveUpstreamModelForCodexAPIKey(cfg *runtimeConfigSnapshot, auth *Auth, 
 }
 
 func resolveUpstreamModelForClineAPIKey(cfg *runtimeConfigSnapshot, auth *Auth, requestedModel string) string {
-	entry := resolveClineAPIKeyConfig(cfg, auth)
-	if entry == nil {
-		return ""
-	}
-	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
+	return ""
 }
 
 func resolveUpstreamModelForBedrockAPIKey(cfg *runtimeConfigSnapshot, auth *Auth, requestedModel string) string {

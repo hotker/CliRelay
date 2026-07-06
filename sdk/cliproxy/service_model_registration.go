@@ -149,22 +149,14 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		}
 		models = applyExcludedModels(models, excluded)
 	case "opencode-go":
-		staticModels := sdkmodelcatalog.StaticModelDefinitionsByChannel("opencode-go")
-		models = staticModels
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("opencode-go")
 		if entry := s.resolveConfigOpenCodeGoKey(a); entry != nil && authKind == "apikey" {
-			if len(entry.Models) > 0 {
-				models = buildOpenCodeGoConfigModels(entry, staticModels)
-			}
 			excluded = entry.ExcludedModels
 		}
 		models = applyExcludedModels(models, excluded)
 	case "cline":
-		staticModels := sdkmodelcatalog.StaticModelDefinitionsByChannel("cline")
-		models = staticModels
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("cline")
 		if entry := s.resolveConfigClineKey(a); entry != nil && authKind == "apikey" {
-			if len(entry.Models) > 0 {
-				models = buildClineConfigModels(entry, staticModels)
-			}
 			excluded = entry.ExcludedModels
 		}
 		models = applyExcludedModels(models, excluded)

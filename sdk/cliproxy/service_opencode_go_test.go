@@ -71,7 +71,7 @@ func TestRegisterModelsForAuth_OpenCodeGoRegistersAllDefaultModels(t *testing.T)
 	}
 }
 
-func TestRegisterModelsForAuth_OpenCodeGoUsesExplicitModels(t *testing.T) {
+func TestRegisterModelsForAuth_OpenCodeGoIgnoresPerKeyModels(t *testing.T) {
 	service := &Service{cfg: &config.Config{
 		OpenCodeGoKey: []config.OpenCodeGoKey{{
 			APIKey: "go-key-explicit",
@@ -100,16 +100,13 @@ func TestRegisterModelsForAuth_OpenCodeGoUsesExplicitModels(t *testing.T) {
 	service.registerModelsForAuth(context.Background(), auth)
 
 	models := registry.GetModelsForClient(auth.ID)
-	if len(models) != 2 {
-		t.Fatalf("expected 2 explicit opencode-go models, got %d: %+v", len(models), models)
+	if len(models) != 20 {
+		t.Fatalf("expected default opencode-go models, got %d: %+v", len(models), models)
 	}
-	if !hasModelID(models, "qwen3.7-max") {
-		t.Fatalf("qwen3.7-max not registered; got %+v", models)
+	if hasModelID(models, "official-new-model") {
+		t.Fatalf("per-key OpenCode Go model should be ignored; got %+v", models)
 	}
-	if !hasModelID(models, "official-new-model") {
-		t.Fatalf("official-new-model not registered; got %+v", models)
-	}
-	if hasModelID(models, "deepseek-v4-flash") {
-		t.Fatalf("deepseek-v4-flash should not be registered from explicit models; got %+v", models)
+	if !hasModelID(models, "deepseek-v4-flash") {
+		t.Fatalf("default OpenCode Go models should be registered; got %+v", models)
 	}
 }

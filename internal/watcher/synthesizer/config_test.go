@@ -373,13 +373,10 @@ func TestConfigSynthesizer_OpenCodeGoKeys(t *testing.T) {
 		t.Fatalf("unexpected proxy settings: %+v", auth)
 	}
 	if auth.Attributes["auth_kind"] != "apikey" || auth.Attributes["excluded_models"] != "minimax-m2.5" {
-		t.Fatalf("expected api key exclusion metadata, got %#v", auth.Attributes)
+		t.Fatalf("expected api key metadata, got %#v", auth.Attributes)
 	}
-	if auth.Attributes["models_hash"] == "" {
-		t.Fatalf("expected models_hash for explicit OpenCode Go models, got %#v", auth.Attributes)
-	}
-	if auth.Attributes["vision_fallback_model"] != "qwen3.5-plus" {
-		t.Fatalf("expected vision fallback metadata, got %#v", auth.Attributes)
+	if auth.Attributes["models_hash"] != "" || auth.Attributes["vision_fallback_model"] != "" {
+		t.Fatalf("expected OpenCode Go per-key model metadata to be ignored, got %#v", auth.Attributes)
 	}
 }
 
@@ -427,10 +424,10 @@ func TestConfigSynthesizer_ClineKeys(t *testing.T) {
 		t.Fatalf("unexpected proxy settings: %+v", auth)
 	}
 	if auth.Attributes["auth_kind"] != "apikey" || auth.Attributes["excluded_models"] != "cline-pass/minimax-m3" {
-		t.Fatalf("expected api key exclusion metadata, got %#v", auth.Attributes)
+		t.Fatalf("expected api key metadata, got %#v", auth.Attributes)
 	}
-	if auth.Attributes["vision_fallback_model"] != "cline-pass/mimo-v2.5-pro" {
-		t.Fatalf("expected vision fallback metadata, got %#v", auth.Attributes)
+	if auth.Attributes["models_hash"] != "" || auth.Attributes["vision_fallback_model"] != "" {
+		t.Fatalf("expected ClinePass per-key model metadata to be ignored, got %#v", auth.Attributes)
 	}
 }
 

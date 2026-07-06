@@ -3,7 +3,6 @@ package providers
 import (
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -362,7 +361,7 @@ func TestOpenCodeGoKeysReplacePatchDeleteAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchOpenCodeGoKey() error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey[0]; got.Name != "secondary" || !reflect.DeepEqual(got.ExcludedModels, []string{"minimax-m2.5"}) || got.WorkspaceID != "wrk_456" || got.AuthCookie != "auth-next" {
+	if got := cfg.OpenCodeGoKey[0]; got.Name != "secondary" || !reflect.DeepEqual(got.ExcludedModels, []string{"minimax-m2.5"}) || got.VisionFallbackModel != "" || got.WorkspaceID != "wrk_456" || got.AuthCookie != "auth-next" {
 		t.Fatalf("patched opencode go key = %#v", got)
 	}
 
@@ -374,7 +373,7 @@ func TestOpenCodeGoKeysReplacePatchDeleteAndRollback(t *testing.T) {
 	}
 }
 
-func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
+func TestOpenCodeGoKeysDropPerKeyModels(t *testing.T) {
 	cfg := &config.Config{
 		OpenCodeGoKey: []config.OpenCodeGoKey{{
 			APIKey: "existing",
@@ -390,27 +389,20 @@ func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
 		Models: []config.OpenCodeGoModel{{
 			Name: " cline-pass/glm-5.2 ",
 		}},
+		ExcludedModels:      []string{"minimax-m2.5", "*"},
+		VisionFallbackModel: "cline-pass/mimo-v2.5-pro",
 	}})
-	if err == nil || !strings.Contains(err.Error(), "opencode-go models contains invalid model") {
-		t.Fatalf("ReplaceOpenCodeGoKeys() error = %v, want invalid opencode-go model error", err)
+	if err != nil {
+		t.Fatalf("ReplaceOpenCodeGoKeys() error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "existing" || got[0].Models[0].Name != "glm-5.2" {
-		t.Fatalf("OpenCodeGoKey after rejected replace = %#v, want unchanged existing entry", got)
-	}
-
-	badExcluded := []string{"cline-pass/minimax-m3"}
-	err = svc.PatchOpenCodeGoKey(nil, stringPtr("existing"), nil, OpenCodeGoPatch{ExcludedModels: &badExcluded})
-	if err == nil || !strings.Contains(err.Error(), "opencode-go excluded-models contains invalid model") {
-		t.Fatalf("PatchOpenCodeGoKey(excluded-models) error = %v, want invalid opencode-go model error", err)
-	}
-	if got := cfg.OpenCodeGoKey[0].ExcludedModels; len(got) != 0 {
-		t.Fatalf("OpenCodeGoKey excluded models after rejected patch = %#v, want unchanged empty list", got)
+	if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "go-key" || len(got[0].Models) != 0 || got[0].VisionFallbackModel != "" || !reflect.DeepEqual(got[0].ExcludedModels, []string{"minimax-m2.5", "*"}) {
+		t.Fatalf("OpenCodeGoKey after replace = %#v, want sanitized entry", got)
 	}
 
-	validExcluded := []string{"*"}
+	validExcluded := []string{"*", "minimax-m2.5"}
 	validFallback := " qwen3.5-plus "
 	validModels := []config.OpenCodeGoModel{{Name: " glm-5.2 "}}
-	err = svc.PatchOpenCodeGoKey(nil, stringPtr("existing"), nil, OpenCodeGoPatch{
+	err = svc.PatchOpenCodeGoKey(nil, stringPtr("go-key"), nil, OpenCodeGoPatch{
 		Models:         &validModels,
 		ExcludedModels: &validExcluded,
 		VisionFallback: &validFallback,
@@ -418,12 +410,12 @@ func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchOpenCodeGoKey(valid models) error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey[0]; got.Models[0].Name != "glm-5.2" || got.ExcludedModels[0] != "*" || got.VisionFallbackModel != "qwen3.5-plus" {
+	if got := cfg.OpenCodeGoKey[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*", "minimax-m2.5"}) || got.VisionFallbackModel != "" {
 		t.Fatalf("OpenCodeGoKey after valid patch = %#v", got)
 	}
 }
 
-func TestClineKeysRejectNonClinePassModels(t *testing.T) {
+func TestClineKeysDropPerKeyModels(t *testing.T) {
 	cfg := &config.Config{
 		ClineKey: []config.ClineKey{{
 			APIKey: "existing",
@@ -439,27 +431,20 @@ func TestClineKeysRejectNonClinePassModels(t *testing.T) {
 		Models: []config.ClineModel{{
 			Name: " glm-5.2 ",
 		}},
+		ExcludedModels:      []string{"cline-pass/minimax-m3", "*"},
+		VisionFallbackModel: "cline-pass/mimo-v2.5-pro",
 	}})
-	if err == nil || !strings.Contains(err.Error(), "cline models contains invalid model") {
-		t.Fatalf("ReplaceClineKeys() error = %v, want invalid cline model error", err)
+	if err != nil {
+		t.Fatalf("ReplaceClineKeys() error = %v, want nil", err)
 	}
-	if got := cfg.ClineKey; len(got) != 1 || got[0].APIKey != "existing" || got[0].Models[0].Name != "cline-pass/glm-5.2" {
-		t.Fatalf("ClineKey after rejected replace = %#v, want unchanged existing entry", got)
-	}
-
-	badFallback := "qwen3.5-plus"
-	err = svc.PatchClineKey(nil, stringPtr("existing"), nil, ClinePatch{VisionFallback: &badFallback})
-	if err == nil || !strings.Contains(err.Error(), "cline vision-fallback-model contains invalid model") {
-		t.Fatalf("PatchClineKey(vision-fallback-model) error = %v, want invalid cline model error", err)
-	}
-	if got := cfg.ClineKey[0].VisionFallbackModel; got != "" {
-		t.Fatalf("ClineKey vision fallback after rejected patch = %q, want unchanged empty value", got)
+	if got := cfg.ClineKey; len(got) != 1 || got[0].APIKey != "cline-key" || len(got[0].Models) != 0 || got[0].VisionFallbackModel != "" || !reflect.DeepEqual(got[0].ExcludedModels, []string{"cline-pass/minimax-m3", "*"}) {
+		t.Fatalf("ClineKey after replace = %#v, want sanitized entry", got)
 	}
 
 	validExcluded := []string{"*", " cline-pass/minimax-m3 "}
 	validFallback := " cline-pass/mimo-v2.5-pro "
 	validModels := []config.ClineModel{{Name: " cline-pass/qwen3.7-max "}}
-	err = svc.PatchClineKey(nil, stringPtr("existing"), nil, ClinePatch{
+	err = svc.PatchClineKey(nil, stringPtr("cline-key"), nil, ClinePatch{
 		Models:         &validModels,
 		ExcludedModels: &validExcluded,
 		VisionFallback: &validFallback,
@@ -467,7 +452,7 @@ func TestClineKeysRejectNonClinePassModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchClineKey(valid models) error = %v, want nil", err)
 	}
-	if got := cfg.ClineKey[0]; got.Models[0].Name != "cline-pass/qwen3.7-max" || got.ExcludedModels[0] != "*" || got.ExcludedModels[1] != "cline-pass/minimax-m3" || got.VisionFallbackModel != "cline-pass/mimo-v2.5-pro" {
+	if got := cfg.ClineKey[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*", "cline-pass/minimax-m3"}) || got.VisionFallbackModel != "" {
 		t.Fatalf("ClineKey after valid patch = %#v", got)
 	}
 }
