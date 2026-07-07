@@ -17,7 +17,7 @@ import (
 // - Responsibility: turn registry state plus stored capabilities into management-facing availability DTOs.
 func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw string) map[string]any {
 	modelRegistry := registry.GetGlobalRegistry()
-	allModels := s.effectiveModels(modelRegistry.GetAvailableModels("openai"), allowedChannelsRaw, allowedGroupsRaw)
+	allModels := s.effectiveModels(managementVisibleModels(modelRegistry), allowedChannelsRaw, allowedGroupsRaw)
 	authByID := s.authByID()
 	usesMappedOwners := false
 	var ownerMappings map[string]string
@@ -95,7 +95,7 @@ func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw st
 
 func (s *Service) Models(allowedChannelsRaw, allowedGroupsRaw string) map[string]any {
 	modelRegistry := registry.GetGlobalRegistry()
-	allModels := s.effectiveModels(modelRegistry.GetAvailableModels("openai"), allowedChannelsRaw, allowedGroupsRaw)
+	allModels := s.effectiveModels(managementVisibleModels(modelRegistry), allowedChannelsRaw, allowedGroupsRaw)
 
 	pricingMap := usage.GetAllModelPricing()
 	filteredModels := make([]map[string]any, len(allModels))
@@ -129,6 +129,71 @@ func (s *Service) Models(allowedChannelsRaw, allowedGroupsRaw string) map[string
 		"object": "list",
 		"data":   filteredModels,
 	}
+}
+
+func managementVisibleModels(modelRegistry *registry.ModelRegistry) []map[string]any {
+	if modelRegistry == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	add := func(model map[string]any) {
+		id, _ := model["id"].(string)
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, model)
+	}
+	for _, model := range modelRegistry.GetAvailableModels("openai") {
+		add(model)
+	}
+	for _, provider := range []string{"opencode-go", "cline", "ollama-cloud"} {
+		for _, info := range modelRegistry.GetAvailableModelsByProvider(provider) {
+			add(registryModelInfoAsOpenAIModel(info))
+		}
+	}
+	return out
+}
+
+func registryModelInfoAsOpenAIModel(info *registry.ModelInfo) map[string]any {
+	if info == nil {
+		return nil
+	}
+	model := map[string]any{
+		"id":       info.ID,
+		"object":   "model",
+		"owned_by": info.OwnedBy,
+	}
+	if info.Created > 0 {
+		model["created"] = info.Created
+	}
+	if info.Type != "" {
+		model["type"] = info.Type
+	}
+	if info.DisplayName != "" {
+		model["display_name"] = info.DisplayName
+	}
+	if info.Version != "" {
+		model["version"] = info.Version
+	}
+	if info.Description != "" {
+		model["description"] = info.Description
+	}
+	if info.ContextLength > 0 {
+		model["context_length"] = info.ContextLength
+	}
+	if info.MaxCompletionTokens > 0 {
+		model["max_completion_tokens"] = info.MaxCompletionTokens
+	}
+	if len(info.SupportedParameters) > 0 {
+		model["supported_parameters"] = info.SupportedParameters
+	}
+	return model
 }
 
 func (s *Service) effectiveModels(models []map[string]any, allowedChannelsRaw, allowedGroupsRaw string) []map[string]any {

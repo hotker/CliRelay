@@ -375,8 +375,8 @@ func TestConfigSynthesizer_OpenCodeGoKeys(t *testing.T) {
 	if auth.Attributes["auth_kind"] != "apikey" || auth.Attributes["excluded_models"] != "minimax-m2.5" {
 		t.Fatalf("expected api key metadata, got %#v", auth.Attributes)
 	}
-	if auth.Attributes["models_hash"] != "" || auth.Attributes["vision_fallback_model"] != "" {
-		t.Fatalf("expected OpenCode Go per-key model metadata to be ignored, got %#v", auth.Attributes)
+	if auth.Attributes["models_hash"] == "" || auth.Attributes["vision_fallback_model"] != "qwen3.5-plus" {
+		t.Fatalf("expected OpenCode Go per-key model metadata, got %#v", auth.Attributes)
 	}
 }
 
