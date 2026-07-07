@@ -333,6 +333,12 @@ func (s *ConfigSynthesizer) synthesizeOpenCodeGoKeys(ctx *SynthesisContext) []*c
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
+		if hash := diff.ComputeOpenCodeGoModelsHash(entry.Models); hash != "" {
+			attrs["models_hash"] = hash
+		}
+		if visionFallbackModel := strings.TrimSpace(entry.VisionFallbackModel); visionFallbackModel != "" {
+			attrs["vision_fallback_model"] = visionFallbackModel
+		}
 		addConfigHeadersToAttrs(entry.Headers, attrs)
 		label := strings.TrimSpace(entry.Name)
 		if label == "" {

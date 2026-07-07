@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	managementmodelcatalog "github.com/router-for-me/CLIProxyAPI/v6/internal/management/modelcatalog"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	sdkmodelcatalog "github.com/router-for-me/CLIProxyAPI/v6/sdk/modelcatalog"
@@ -135,6 +137,79 @@ func TestSyncDynamicConfigAuthModelsFallsBackWhenOnlyDirtyModelsRemain(t *testin
 	if hasSDKModelID(reg.models, "cline-pass/glm-5.2") {
 		t.Fatalf("registered dirty fallback model in %+v", reg.models)
 	}
+}
+
+func TestSyncConfigDerivedAuthsPublishesConfiguredProviderModelsToManagementAvailability(t *testing.T) {
+	cfg := &config.Config{
+		OpenCodeGoKey: []config.OpenCodeGoKey{{
+			APIKey: "go-key",
+			Name:   "OpenCode Go",
+			Models: []config.OpenCodeGoModel{{Name: "glm-5.2"}},
+		}},
+		ClineKey: []config.ClineKey{{
+			APIKey:  "cline-key",
+			Name:    "ClinePass",
+			BaseURL: config.DefaultClineBaseURL,
+			Models:  []config.ClineModel{{Name: "cline-pass/mimo-v2.5-pro", Alias: "mimo-v2.5-pro"}},
+		}},
+		OllamaCloudKey: []config.OllamaCloudKey{{
+			APIKey:  "ollama-key",
+			Name:    "Ollama Cloud",
+			BaseURL: config.DefaultOllamaCloudBaseURL,
+			Models:  []config.OllamaCloudModel{{Name: "gpt-oss:120b"}},
+		}},
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+
+	SyncConfigDerivedAuths(cfg, manager)
+	for _, auth := range manager.List() {
+		if auth != nil {
+			t.Cleanup(func(id string) func() {
+				return func() { registry.GetGlobalRegistry().UnregisterClient(id) }
+			}(auth.ID))
+		}
+	}
+
+	result := managementmodelcatalog.New(cfg, manager).ConfiguredAvailability("", "")
+	data, ok := result["data"].([]map[string]any)
+	if !ok {
+		t.Fatalf("data = %#v, want []map[string]any", result["data"])
+	}
+	available := make(map[string][]map[string]any, len(data))
+	for _, item := range data {
+		id, _ := item["id"].(string)
+		if id == "" {
+			continue
+		}
+		sources, _ := item["sources"].([]map[string]any)
+		available[id] = sources
+	}
+	for _, want := range []struct {
+		modelID  string
+		provider string
+	}{
+		{modelID: "glm-5.2", provider: "opencode-go"},
+		{modelID: "mimo-v2.5-pro", provider: "cline"},
+		{modelID: "gpt-oss:120b", provider: "ollama-cloud"},
+	} {
+		sources, ok := available[want.modelID]
+		if !ok {
+			t.Fatalf("configured availability missing %s; got models %#v", want.modelID, available)
+		}
+		if !hasSourceProvider(sources, want.provider) {
+			t.Fatalf("%s sources = %#v, want provider %s", want.modelID, sources, want.provider)
+		}
+	}
+}
+
+func hasSourceProvider(sources []map[string]any, provider string) bool {
+	for _, source := range sources {
+		sourceProvider, _ := source["provider"].(string)
+		if strings.EqualFold(strings.TrimSpace(sourceProvider), provider) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSDKModelID(models []*sdkmodelcatalog.ModelInfo, id string) bool {
