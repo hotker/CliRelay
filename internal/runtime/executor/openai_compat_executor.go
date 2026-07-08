@@ -78,6 +78,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		originalUpstreamModel := thinking.ParseSuffix(req.Model).ModelName
 		fallback = applyVisionFallback(req, opts, openAICompatVisionFallbackModel(e.cfg, auth, e.provider))
 		if fallback.Applied {
+			if opencodeAuth := e.openCodeGoVisionFallbackAuth(fallback.FallbackModel); opencodeAuth != nil {
+				return NewOpenCodeGoExecutor(e.cfg).Execute(ctx, opencodeAuth, fallback.Request, optsWithRequestedModel(opts, fallback.FallbackModel))
+			}
 			ctx = contextWithVisionFallbackLog(ctx, originalRequestedModel, originalUpstreamModel, fallback.FallbackModel)
 		}
 		req = fallback.Request
@@ -218,6 +221,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		originalUpstreamModel := thinking.ParseSuffix(req.Model).ModelName
 		fallback = applyVisionFallback(req, opts, openAICompatVisionFallbackModel(e.cfg, auth, e.provider))
 		if fallback.Applied {
+			if opencodeAuth := e.openCodeGoVisionFallbackAuth(fallback.FallbackModel); opencodeAuth != nil {
+				return NewOpenCodeGoExecutor(e.cfg).ExecuteStream(ctx, opencodeAuth, fallback.Request, optsWithRequestedModel(opts, fallback.FallbackModel))
+			}
 			ctx = contextWithVisionFallbackLog(ctx, originalRequestedModel, originalUpstreamModel, fallback.FallbackModel)
 		}
 		req = fallback.Request
@@ -568,6 +574,87 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *con
 		}
 	}
 	return nil
+}
+
+func (e *OpenAICompatExecutor) openCodeGoVisionFallbackAuth(model string) *cliproxyauth.Auth {
+	if e == nil || e.cfg == nil || !strings.EqualFold(strings.TrimSpace(e.provider), "cline") {
+		return nil
+	}
+	model = strings.TrimSpace(model)
+	if model == "" || strings.HasPrefix(strings.ToLower(model), "cline-pass/") {
+		return nil
+	}
+	for i := range e.cfg.OpenCodeGoKey {
+		entry := &e.cfg.OpenCodeGoKey[i]
+		if !openCodeGoKeyAllowsModel(entry, model) {
+			continue
+		}
+		label := strings.TrimSpace(entry.Name)
+		if label == "" {
+			label = "opencode-go-apikey"
+		}
+		attrs := map[string]string{
+			"api_key":   strings.TrimSpace(entry.APIKey),
+			"auth_kind": "apikey",
+			"source":    "config:opencode-go",
+		}
+		if excluded := strings.Join(entry.ExcludedModels, ","); strings.TrimSpace(excluded) != "" {
+			attrs["excluded_models"] = excluded
+		}
+		if fallback := strings.TrimSpace(entry.VisionFallbackModel); fallback != "" {
+			attrs["vision_fallback_model"] = fallback
+		}
+		for k, v := range entry.Headers {
+			if key := strings.TrimSpace(k); key != "" {
+				attrs["header:"+key] = strings.TrimSpace(v)
+			}
+		}
+		return &cliproxyauth.Auth{
+			Provider:   openCodeGoProvider,
+			Label:      label,
+			Status:     cliproxyauth.StatusActive,
+			Prefix:     strings.TrimSpace(entry.Prefix),
+			ProxyURL:   strings.TrimSpace(entry.ProxyURL),
+			ProxyID:    strings.TrimSpace(entry.ProxyID),
+			Attributes: attrs,
+		}
+	}
+	return nil
+}
+
+func openCodeGoKeyAllowsModel(entry *config.OpenCodeGoKey, model string) bool {
+	if entry == nil || entry.Disabled || strings.TrimSpace(entry.APIKey) == "" {
+		return false
+	}
+	if opencodeGoModelExcluded(model, strings.Join(entry.ExcludedModels, ",")) {
+		return false
+	}
+	if len(entry.Models) == 0 {
+		return true
+	}
+	model = strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(model).ModelName))
+	for i := range entry.Models {
+		name := strings.ToLower(strings.TrimSpace(entry.Models[i].Name))
+		alias := strings.ToLower(strings.TrimSpace(entry.Models[i].Alias))
+		if model == name || (alias != "" && model == alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func optsWithRequestedModel(opts cliproxyexecutor.Options, model string) cliproxyexecutor.Options {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return opts
+	}
+	meta := make(map[string]any, len(opts.Metadata)+1)
+	for k, v := range opts.Metadata {
+		meta[k] = v
+	}
+	meta[cliproxyexecutor.RequestedModelMetadataKey] = model
+	opts.Metadata = meta
+	return opts
 }
 
 func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byte {
