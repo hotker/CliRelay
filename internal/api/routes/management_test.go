@@ -25,7 +25,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 226; got != want {
+	if got, want := len(routes), 228; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 	if got, want := sortedRouteKeys(routes), expectedManagementRoutes(); !slices.Equal(got, want) {
@@ -48,10 +48,12 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		"PUT /v0/management/cline-api-key",
 		"PATCH /v0/management/cline-api-key",
 		"DELETE /v0/management/cline-api-key",
+		"POST /v0/management/cline-api-key/usage",
 		"GET /v0/management/ollama-cloud-api-key",
 		"PUT /v0/management/ollama-cloud-api-key",
 		"PATCH /v0/management/ollama-cloud-api-key",
 		"DELETE /v0/management/ollama-cloud-api-key",
+		"POST /v0/management/ollama-cloud-api-key/usage",
 		"GET /v0/management/auth-files/models",
 		"GET /v0/management/image-generation/size-presets",
 		"PUT /v0/management/image-generation/size-presets",
@@ -263,6 +265,8 @@ func expectedManagementRoutes() []string {
 		"POST /v0/management/model-configs",
 		"POST /v0/management/model-openrouter-sync/run",
 		"POST /v0/management/oauth-callback",
+		"POST /v0/management/cline-api-key/usage",
+		"POST /v0/management/ollama-cloud-api-key/usage",
 		"POST /v0/management/opencode-go-api-key/usage",
 		"POST /v0/management/proxy-pool/check",
 		"POST /v0/management/public/ccswitch-import-configs",

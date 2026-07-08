@@ -21,7 +21,7 @@ func TestOllamaCloudKeyManagementPutGetPatchDelete(t *testing.T) {
 	}
 	h := &Handler{cfg: &config.Config{}, configFilePath: configPath}
 
-	putBody := []byte(`[{"api-key":" ollama-key ","name":" primary ","prefix":" team ","base-url":" https://ollama.com/ ","headers":{"X-Test":" yes "},"models":[{"name":" gpt-oss:120b "}],"excluded-models":[" gpt-oss:20b "],"vision-fallback-model":" gpt-oss:120b "}]`)
+	putBody := []byte(`[{"api-key":" ollama-key ","name":" primary ","prefix":" team ","base-url":" https://ollama.com/ ","headers":{"X-Test":" yes "},"models":[{"name":" gpt-oss:120b "}],"excluded-models":[" gpt-oss:20b "],"vision-fallback-model":" gpt-oss:120b ","auth-cookie":" ollama_session=ok "}]`)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/ollama-cloud-api-key", bytes.NewReader(putBody))
@@ -41,8 +41,11 @@ func TestOllamaCloudKeyManagementPutGetPatchDelete(t *testing.T) {
 	if h.cfg.OllamaCloudKey[0].VisionFallbackModel != "gpt-oss:120b" {
 		t.Fatalf("OllamaCloudKey vision fallback after PUT = %+v", h.cfg.OllamaCloudKey[0])
 	}
+	if h.cfg.OllamaCloudKey[0].AuthCookie != "ollama_session=ok" {
+		t.Fatalf("OllamaCloudKey auth cookie after PUT = %+v", h.cfg.OllamaCloudKey[0])
+	}
 
-	patchBody := []byte(`{"index":0,"value":{"name":"secondary","base-url":"","models":[{"name":"gpt-oss:20b"}],"excluded-models":[" gpt-oss:120b ","*"],"vision-fallback-model":" gpt-oss:20b "}}`)
+	patchBody := []byte(`{"index":0,"value":{"name":"secondary","base-url":"","models":[{"name":"gpt-oss:20b"}],"excluded-models":[" gpt-oss:120b ","*"],"vision-fallback-model":" gpt-oss:20b ","auth-cookie":" ollama_session=next "}}`)
 	w = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/ollama-cloud-api-key", bytes.NewReader(patchBody))
@@ -50,7 +53,7 @@ func TestOllamaCloudKeyManagementPutGetPatchDelete(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d body=%s", w.Code, w.Body.String())
 	}
-	if h.cfg.OllamaCloudKey[0].Name != "secondary" || h.cfg.OllamaCloudKey[0].BaseURL != config.DefaultOllamaCloudBaseURL || len(h.cfg.OllamaCloudKey[0].Models) != 0 || len(h.cfg.OllamaCloudKey[0].ExcludedModels) != 1 || h.cfg.OllamaCloudKey[0].ExcludedModels[0] != "*" || h.cfg.OllamaCloudKey[0].VisionFallbackModel != "gpt-oss:20b" {
+	if h.cfg.OllamaCloudKey[0].Name != "secondary" || h.cfg.OllamaCloudKey[0].BaseURL != config.DefaultOllamaCloudBaseURL || len(h.cfg.OllamaCloudKey[0].Models) != 0 || len(h.cfg.OllamaCloudKey[0].ExcludedModels) != 1 || h.cfg.OllamaCloudKey[0].ExcludedModels[0] != "*" || h.cfg.OllamaCloudKey[0].VisionFallbackModel != "gpt-oss:20b" || h.cfg.OllamaCloudKey[0].AuthCookie != "ollama_session=next" {
 		t.Fatalf("OllamaCloudKey after PATCH = %+v", h.cfg.OllamaCloudKey[0])
 	}
 
@@ -67,7 +70,7 @@ func TestOllamaCloudKeyManagementPutGetPatchDelete(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &getBody); err != nil {
 		t.Fatalf("decode GET body: %v", err)
 	}
-	if len(getBody.Items) != 1 || getBody.Items[0].Name != "secondary" || getBody.Items[0].BaseURL != config.DefaultOllamaCloudBaseURL || len(getBody.Items[0].Models) != 0 || len(getBody.Items[0].ExcludedModels) != 1 || getBody.Items[0].ExcludedModels[0] != "*" || getBody.Items[0].VisionFallbackModel != "gpt-oss:20b" {
+	if len(getBody.Items) != 1 || getBody.Items[0].Name != "secondary" || getBody.Items[0].BaseURL != config.DefaultOllamaCloudBaseURL || len(getBody.Items[0].Models) != 0 || len(getBody.Items[0].ExcludedModels) != 1 || getBody.Items[0].ExcludedModels[0] != "*" || getBody.Items[0].VisionFallbackModel != "gpt-oss:20b" || getBody.Items[0].AuthCookie != "ollama_session=next" {
 		t.Fatalf("GET body = %+v", getBody)
 	}
 

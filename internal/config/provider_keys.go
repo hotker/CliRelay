@@ -312,6 +312,9 @@ type ClineKey struct {
 
 	// VisionFallbackModel is used for image requests whose requested model lacks vision support.
 	VisionFallbackModel string `yaml:"vision-fallback-model,omitempty" json:"vision-fallback-model,omitempty"`
+
+	// AuthCookie stores the Cline dashboard cookie used for usage checks.
+	AuthCookie string `yaml:"-" json:"auth-cookie,omitempty"`
 }
 
 type ClineModel struct {
@@ -361,6 +364,9 @@ type OllamaCloudKey struct {
 
 	// VisionFallbackModel is used for image requests whose requested model lacks vision support.
 	VisionFallbackModel string `yaml:"vision-fallback-model,omitempty" json:"vision-fallback-model,omitempty"`
+
+	// AuthCookie stores the Ollama dashboard cookie used for usage checks.
+	AuthCookie string `yaml:"-" json:"auth-cookie,omitempty"`
 }
 
 func (k OllamaCloudKey) GetAPIKey() string  { return k.APIKey }

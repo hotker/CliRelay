@@ -289,6 +289,7 @@ func (cfg *Config) SanitizeClineKeys() {
 			entry.Models = nil
 		}
 		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 		out = append(out, entry)
 	}
 	cfg.ClineKey = out
@@ -354,6 +355,7 @@ func (cfg *Config) SanitizeOllamaCloudKeys() {
 			entry.Models = nil
 		}
 		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 		out = append(out, entry)
 	}
 	cfg.OllamaCloudKey = out

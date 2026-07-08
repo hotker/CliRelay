@@ -367,6 +367,7 @@ type ClinePatch struct {
 	Models         *[]config.ClineModel `json:"models"`
 	ExcludedModels *[]string            `json:"excluded-models"`
 	VisionFallback *string              `json:"vision-fallback-model"`
+	AuthCookie     *string              `json:"auth-cookie"`
 }
 
 func (s *Service) ClineKeys() []config.ClineKey {
@@ -470,6 +471,9 @@ func (s *Service) PatchClineKey(index *int, apiKey *string, name *string, patch 
 	if patch.VisionFallback != nil {
 		entry.VisionFallbackModel = strings.TrimSpace(*patch.VisionFallback)
 	}
+	if patch.AuthCookie != nil {
+		entry.AuthCookie = strings.TrimSpace(*patch.AuthCookie)
+	}
 	NormalizeClineKey(&entry)
 	if entry.APIKey == "" {
 		return ErrProviderAPIKeyRequired
@@ -539,6 +543,7 @@ type OllamaCloudPatch struct {
 	Models         *[]config.OllamaCloudModel `json:"models"`
 	ExcludedModels *[]string                  `json:"excluded-models"`
 	VisionFallback *string                    `json:"vision-fallback-model"`
+	AuthCookie     *string                    `json:"auth-cookie"`
 }
 
 func (s *Service) OllamaCloudKeys() []config.OllamaCloudKey {
@@ -641,6 +646,9 @@ func (s *Service) PatchOllamaCloudKey(index *int, apiKey *string, name *string, 
 	}
 	if patch.VisionFallback != nil {
 		entry.VisionFallbackModel = strings.TrimSpace(*patch.VisionFallback)
+	}
+	if patch.AuthCookie != nil {
+		entry.AuthCookie = strings.TrimSpace(*patch.AuthCookie)
 	}
 	NormalizeOllamaCloudKey(&entry)
 	if entry.APIKey == "" {
@@ -784,6 +792,7 @@ func NormalizeClineKey(entry *config.ClineKey) {
 	entry.Models = config.NormalizeClineModels(entry.Models)
 	entry.ExcludedModels = config.NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
 	entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+	entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 }
 
 func NormalizedClineKeyEntries(entries []config.ClineKey) []config.ClineKey {
@@ -818,6 +827,7 @@ func NormalizeOllamaCloudKey(entry *config.OllamaCloudKey) {
 	entry.Models = config.NormalizeOllamaCloudModels(entry.Models)
 	entry.ExcludedModels = config.NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
 	entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+	entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 }
 
 func NormalizedOllamaCloudKeyEntries(entries []config.OllamaCloudKey) []config.OllamaCloudKey {
