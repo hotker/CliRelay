@@ -7,11 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"github.com/tidwall/gjson"
 )
@@ -53,6 +55,154 @@ func TestOpenAICompatExecutorClineUsesVisionFallbackForImageRequests(t *testing.
 	}
 	if gotModel := gjson.GetBytes(resp.Payload, "model").String(); gotModel != "cline-pass/deepseek-v4-flash" {
 		t.Fatalf("response model = %q, want cline-pass/deepseek-v4-flash; payload=%s", gotModel, string(resp.Payload))
+	}
+}
+
+func TestOpenAICompatExecutorClineUsesOpenCodeGoForCrossProviderVisionFallback(t *testing.T) {
+	usagePlugin := &usageCapturePlugin{records: make(chan cliproxyusage.Record, 4)}
+	cliproxyusage.RegisterPlugin(usagePlugin)
+
+	var clineHit bool
+	clineServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clineHit = true
+		http.Error(w, "cline should not receive cross-provider fallback", http.StatusInternalServerError)
+	}))
+	defer clineServer.Close()
+
+	var gotPath string
+	var gotAuth string
+	var gotBody []byte
+	opencodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"qwen3.5-plus","choices":[{"index":0,"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer opencodeServer.Close()
+	oldBaseURL := opencodeGoBaseURL
+	opencodeGoBaseURL = opencodeServer.URL + "/v1"
+	defer func() { opencodeGoBaseURL = oldBaseURL }()
+
+	exec := NewOpenAICompatExecutor("cline", &config.Config{
+		OpenCodeGoKey: []config.OpenCodeGoKey{{
+			APIKey: "go-key",
+			Name:   "opencode go",
+			Models: []config.OpenCodeGoModel{{Name: "qwen3.5-plus"}},
+		}},
+	})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"base_url":              clineServer.URL + "/api/v1",
+		"api_key":               "cline-key",
+		"vision_fallback_model": "qwen3.5-plus",
+	}}
+	payload := []byte(`{"model":"cline-pass/deepseek-v4-flash","messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`)
+	resp, err := exec.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "cline-pass/deepseek-v4-flash",
+		Payload: payload,
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAI})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if clineHit {
+		t.Fatal("cline upstream was hit for cross-provider vision fallback")
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotAuth != "Bearer go-key" {
+		t.Fatalf("authorization = %q, want Bearer go-key", gotAuth)
+	}
+	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "qwen3.5-plus" {
+		t.Fatalf("upstream model = %q, want qwen3.5-plus; body=%s", gotModel, string(gotBody))
+	}
+	if gotModel := gjson.GetBytes(resp.Payload, "model").String(); gotModel != "qwen3.5-plus" {
+		t.Fatalf("response model = %q, want qwen3.5-plus; payload=%s", gotModel, string(resp.Payload))
+	}
+	timer := time.After(time.Second)
+	for {
+		select {
+		case record := <-usagePlugin.records:
+			if record.Provider == openCodeGoProvider && record.Model == "qwen3.5-plus" {
+				if record.ChannelName != "opencode go" {
+					t.Fatalf("channel name = %q, want opencode go", record.ChannelName)
+				}
+				if record.UpstreamModel != "qwen3.5-plus" {
+					t.Fatalf("upstream model = %q, want qwen3.5-plus", record.UpstreamModel)
+				}
+				return
+			}
+		case <-timer:
+			t.Fatal("timed out waiting for opencode-go usage record")
+		}
+	}
+}
+
+func TestOpenAICompatExecutorClineStreamsOpenCodeGoCrossProviderVisionFallback(t *testing.T) {
+	var clineHit bool
+	clineServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clineHit = true
+		http.Error(w, "cline should not receive cross-provider fallback", http.StatusInternalServerError)
+	}))
+	defer clineServer.Close()
+
+	var gotPath string
+	var gotBody []byte
+	opencodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","created":1,"model":"qwen3.5-plus","choices":[{"index":0,"delta":{"content":"vision"},"finish_reason":null}]}`,
+			`data: [DONE]`,
+			``,
+		}, "\n\n")))
+	}))
+	defer opencodeServer.Close()
+	oldBaseURL := opencodeGoBaseURL
+	opencodeGoBaseURL = opencodeServer.URL + "/v1"
+	defer func() { opencodeGoBaseURL = oldBaseURL }()
+
+	exec := NewOpenAICompatExecutor("cline", &config.Config{
+		OpenCodeGoKey: []config.OpenCodeGoKey{{
+			APIKey: "go-key",
+			Name:   "opencode go",
+			Models: []config.OpenCodeGoModel{{Name: "qwen3.5-plus"}},
+		}},
+	})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"base_url":              clineServer.URL + "/api/v1",
+		"api_key":               "cline-key",
+		"vision_fallback_model": "qwen3.5-plus",
+	}}
+	payload := []byte(`{"model":"cline-pass/deepseek-v4-flash","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`)
+	result, err := exec.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "cline-pass/deepseek-v4-flash",
+		Payload: payload,
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAI, Stream: true})
+	if err != nil {
+		t.Fatalf("ExecuteStream returned error: %v", err)
+	}
+
+	var out strings.Builder
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("stream chunk error: %v", chunk.Err)
+		}
+		out.Write(chunk.Payload)
+	}
+	if clineHit {
+		t.Fatal("cline upstream was hit for stream cross-provider vision fallback")
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotModel := gjson.GetBytes(gotBody, "model").String(); gotModel != "qwen3.5-plus" {
+		t.Fatalf("upstream model = %q, want qwen3.5-plus; body=%s", gotModel, string(gotBody))
+	}
+	if !strings.Contains(out.String(), `"content":"vision"`) {
+		t.Fatalf("stream response missing content: %s", out.String())
 	}
 }
 
