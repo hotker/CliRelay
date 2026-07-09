@@ -12,9 +12,10 @@ import (
 )
 
 type CcSwitchModelMappingRow struct {
-	Role         string `json:"role,omitempty"`
-	RequestModel string `json:"request-model"`
-	TargetModel  string `json:"target-model"`
+	Role          string `json:"role,omitempty"`
+	RequestModel  string `json:"request-model"`
+	TargetModel   string `json:"target-model"`
+	ContextWindow int    `json:"context-window,omitempty"`
 }
 
 type CcSwitchImportConfigRow struct {
@@ -296,15 +297,23 @@ func normalizeCcSwitchModelMappings(values []CcSwitchModelMappingRow) []CcSwitch
 		}
 		seen[key] = struct{}{}
 		result = append(result, CcSwitchModelMappingRow{
-			Role:         role,
-			RequestModel: requestModel,
-			TargetModel:  targetModel,
+			Role:          role,
+			RequestModel:  requestModel,
+			TargetModel:   targetModel,
+			ContextWindow: normalizeCcSwitchContextWindow(value.ContextWindow),
 		})
 	}
 	if result == nil {
 		return []CcSwitchModelMappingRow{}
 	}
 	return result
+}
+
+func normalizeCcSwitchContextWindow(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	return value
 }
 
 func normalizeCcSwitchModelRole(value string) string {

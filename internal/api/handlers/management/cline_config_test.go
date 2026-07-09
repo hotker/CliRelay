@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -22,7 +21,7 @@ func TestClineKeyManagementPutGetPatchDelete(t *testing.T) {
 	}
 	h := &Handler{cfg: &config.Config{}, configFilePath: configPath}
 
-	putBody := []byte(`[{"api-key":" cline-key ","name":" primary ","prefix":" team ","base-url":" https://api.cline.bot/api/v1/ ","headers":{"X-Test":" yes "},"models":[{"name":" cline-pass/glm-5.2 "}],"excluded-models":[" cline-pass/minimax-m3 "],"vision-fallback-model":" cline-pass/mimo-v2.5-pro "}]`)
+	putBody := []byte(`[{"api-key":" cline-key ","name":" primary ","prefix":" team ","base-url":" https://api.cline.bot/api/v1/ ","headers":{"X-Test":" yes "},"models":[{"name":" cline-pass/glm-5.2 "}],"excluded-models":[" cline-pass/minimax-m3 "],"vision-fallback-model":" cline-pass/mimo-v2.5-pro ","auth-cookie":" session=cline "}]`)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/cline-api-key", bytes.NewReader(putBody))
@@ -34,16 +33,19 @@ func TestClineKeyManagementPutGetPatchDelete(t *testing.T) {
 		t.Fatalf("ClineKey after PUT = %+v", h.cfg.ClineKey)
 	}
 	if len(h.cfg.ClineKey[0].Models) != 1 || h.cfg.ClineKey[0].Models[0].Name != "cline-pass/glm-5.2" {
-		t.Fatalf("ClineKey models after PUT = %+v", h.cfg.ClineKey[0].Models)
+		t.Fatalf("ClineKey models after PUT = %+v, want sanitized model", h.cfg.ClineKey[0].Models)
 	}
-	if len(h.cfg.ClineKey[0].ExcludedModels) != 1 || h.cfg.ClineKey[0].ExcludedModels[0] != "cline-pass/minimax-m3" {
+	if len(h.cfg.ClineKey[0].ExcludedModels) != 0 {
 		t.Fatalf("ClineKey excluded models after PUT = %+v", h.cfg.ClineKey[0].ExcludedModels)
 	}
 	if h.cfg.ClineKey[0].VisionFallbackModel != "cline-pass/mimo-v2.5-pro" {
 		t.Fatalf("ClineKey vision fallback after PUT = %+v", h.cfg.ClineKey[0])
 	}
+	if h.cfg.ClineKey[0].AuthCookie != "session=cline" {
+		t.Fatalf("ClineKey auth cookie after PUT = %+v", h.cfg.ClineKey[0])
+	}
 
-	patchBody := []byte(`{"index":0,"value":{"name":"secondary","base-url":"","models":[{"name":"cline-pass/qwen3.7-max"}],"excluded-models":[" cline-pass/deepseek-v4-flash "],"vision-fallback-model":" cline-pass/qwen3.7-vl "}}`)
+	patchBody := []byte(`{"index":0,"value":{"name":"secondary","base-url":"","models":[{"name":"cline-pass/qwen3.7-max"}],"excluded-models":[" cline-pass/deepseek-v4-flash ","*"],"vision-fallback-model":" cline-pass/qwen3.7-vl ","auth-cookie":" session=next "}}`)
 	w = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/cline-api-key", bytes.NewReader(patchBody))
@@ -51,7 +53,7 @@ func TestClineKeyManagementPutGetPatchDelete(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d body=%s", w.Code, w.Body.String())
 	}
-	if h.cfg.ClineKey[0].Name != "secondary" || h.cfg.ClineKey[0].BaseURL != config.DefaultClineBaseURL || h.cfg.ClineKey[0].Models[0].Name != "cline-pass/qwen3.7-max" || h.cfg.ClineKey[0].ExcludedModels[0] != "cline-pass/deepseek-v4-flash" || h.cfg.ClineKey[0].VisionFallbackModel != "cline-pass/qwen3.7-vl" {
+	if h.cfg.ClineKey[0].Name != "secondary" || h.cfg.ClineKey[0].BaseURL != config.DefaultClineBaseURL || len(h.cfg.ClineKey[0].Models) != 0 || len(h.cfg.ClineKey[0].ExcludedModels) != 1 || h.cfg.ClineKey[0].ExcludedModels[0] != "*" || h.cfg.ClineKey[0].VisionFallbackModel != "cline-pass/qwen3.7-vl" || h.cfg.ClineKey[0].AuthCookie != "session=next" {
 		t.Fatalf("ClineKey after PATCH = %+v", h.cfg.ClineKey[0])
 	}
 
@@ -68,7 +70,7 @@ func TestClineKeyManagementPutGetPatchDelete(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &getBody); err != nil {
 		t.Fatalf("decode GET body: %v", err)
 	}
-	if len(getBody.Items) != 1 || getBody.Items[0].Name != "secondary" || getBody.Items[0].BaseURL != config.DefaultClineBaseURL || getBody.Items[0].VisionFallbackModel != "cline-pass/qwen3.7-vl" {
+	if len(getBody.Items) != 1 || getBody.Items[0].Name != "secondary" || getBody.Items[0].BaseURL != config.DefaultClineBaseURL || len(getBody.Items[0].Models) != 0 || len(getBody.Items[0].ExcludedModels) != 1 || getBody.Items[0].ExcludedModels[0] != "*" || getBody.Items[0].VisionFallbackModel != "cline-pass/qwen3.7-vl" || getBody.Items[0].AuthCookie != "session=next" {
 		t.Fatalf("GET body = %+v", getBody)
 	}
 
@@ -84,7 +86,7 @@ func TestClineKeyManagementPutGetPatchDelete(t *testing.T) {
 	}
 }
 
-func TestClineKeyManagementRejectsBareModels(t *testing.T) {
+func TestClineKeyManagementRejectsNonClinePassModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte("{}\n"), 0o644); err != nil {
@@ -95,16 +97,13 @@ func TestClineKeyManagementRejectsBareModels(t *testing.T) {
 		configFilePath: configPath,
 	}
 
-	putBody := []byte(`[{"api-key":"cline-key","models":[{"name":"glm-5.2"}]}]`)
+	putBody := []byte(`[{"api-key":"cline-key","models":[{"name":"glm-5.2"}],"excluded-models":["cline-pass/minimax-m3","*"],"vision-fallback-model":"cline-pass/mimo-v2.5-pro"}]`)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/cline-api-key", bytes.NewReader(putBody))
 	h.ProviderKeys().PutClineKeys(c)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("PUT status = %d body=%s, want 400", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "cline models contains invalid model") {
-		t.Fatalf("PUT body = %s, want invalid model error", w.Body.String())
 	}
 	if got := h.cfg.ClineKey; len(got) != 1 || got[0].APIKey != "existing" {
 		t.Fatalf("ClineKey after rejected PUT = %+v, want unchanged existing entry", got)

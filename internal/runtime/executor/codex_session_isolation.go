@@ -13,7 +13,7 @@ func codexAccountScopedExplicitSessionID(auth *cliproxyauth.Auth, raw string) st
 	if raw == "" {
 		return ""
 	}
-	scope := codexSessionIsolationScope(auth)
+	scope := sessionIsolationScope(auth)
 	if scope == "" {
 		return raw
 	}
@@ -22,6 +22,10 @@ func codexAccountScopedExplicitSessionID(auth *cliproxyauth.Auth, raw string) st
 }
 
 func codexSessionIsolationScope(auth *cliproxyauth.Auth) string {
+	return sessionIsolationScope(auth)
+}
+
+func sessionIsolationScope(auth *cliproxyauth.Auth) string {
 	accountKey, authSubjectID := identityFingerprintAccount(auth)
 	if strings.TrimSpace(accountKey) != "" {
 		if strings.TrimSpace(authSubjectID) != "" {
@@ -49,8 +53,19 @@ func codexSessionIsolationScope(auth *cliproxyauth.Auth) string {
 	return ""
 }
 
+func scopedPromptCacheKey(auth *cliproxyauth.Auth, model, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	model = strings.TrimSpace(model)
+	scope := sessionIsolationScope(auth)
+	sum := sha256.Sum256([]byte(scope + "\x00" + model + "\x00" + raw))
+	return "clirelay-" + hex.EncodeToString(sum[:16])
+}
+
 func codexPromptCacheMapKey(auth *cliproxyauth.Auth, model, userID string) string {
-	scope := codexSessionIsolationScope(auth)
+	scope := sessionIsolationScope(auth)
 	model = strings.TrimSpace(model)
 	userID = strings.TrimSpace(userID)
 	if scope == "" {

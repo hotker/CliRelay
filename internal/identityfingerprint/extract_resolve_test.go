@@ -95,6 +95,36 @@ func TestExtractCodexObservationVersionHeaderOverridesUserAgentVersion(t *testin
 	}
 }
 
+func TestExtractXAIObservationFromGrokHeaders(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("User-Agent", "grok-shell/0.2.93 (macos; aarch64)")
+	headers.Set("X-Grok-Client-Identifier", "grok-shell")
+	headers.Set("X-Grok-Client-Version", "0.2.93")
+	headers.Set("X-Grok-Conv-Id", "conv-123")
+
+	obs, ok := ExtractObservation(LearnInput{
+		Provider:   ProviderXAI,
+		AccountKey: "acct",
+		Headers:    headers,
+		ObservedAt: time.Date(2026, 7, 9, 1, 2, 3, 0, time.UTC),
+	})
+	if !ok {
+		t.Fatal("ExtractObservation returned false")
+	}
+	if obs.ClientProduct != "grok-shell" || obs.Version != "0.2.93" {
+		t.Fatalf("product/version = %s/%s, want grok-shell/0.2.93", obs.ClientProduct, obs.Version)
+	}
+	if got := obs.Fields[FieldXAIClientIdentifier]; got != "grok-shell" {
+		t.Fatalf("x-grok-client-identifier = %q, want grok-shell", got)
+	}
+	if got := obs.Fields[FieldXAIClientVersion]; got != "0.2.93" {
+		t.Fatalf("x-grok-client-version = %q, want 0.2.93", got)
+	}
+	if got := obs.Fields[FieldXAIGrokConversationID]; got != "" {
+		t.Fatalf("x-grok-conv-id learned = %q, want dynamic field ignored", got)
+	}
+}
+
 func TestMergeObservationUpdatesOnlyNewerSameProductAndPreservesMissingFields(t *testing.T) {
 	existing := &LearnedRecord{
 		Provider:      ProviderClaude,
@@ -278,5 +308,32 @@ func TestResolveGeminiUsesLearnedWhenPresetEmpty(t *testing.T) {
 	}
 	if got := effective.Fields[FieldGeminiClientMetadata].Source; got != FieldSourceLearned {
 		t.Fatalf("metadata source = %q, want learned", got)
+	}
+}
+
+func TestResolveXAIUsesLearnedWhenPresetEmpty(t *testing.T) {
+	learned := &LearnedRecord{
+		Provider:      ProviderXAI,
+		AccountKey:    "acct",
+		ClientProduct: "grok-shell",
+		Version:       "0.2.93",
+		Fields: map[string]string{
+			FieldUserAgent:           "grok-shell/0.2.93 (macos; aarch64)",
+			FieldXAIClientIdentifier: "grok-shell",
+			FieldXAIClientVersion:    "0.2.93",
+		},
+	}
+
+	fp, effective := ResolveXAI(config.XAIIdentityFingerprintConfig{Enabled: true}, learned)
+	if fp.UserAgent != "grok-shell/0.2.93 (macos; aarch64)" ||
+		fp.ClientIdentifier != "grok-shell" ||
+		fp.ClientVersion != "0.2.93" {
+		t.Fatalf("resolved xAI fingerprint = %#v, want learned fields", fp)
+	}
+	if effective.Version != "0.2.93" {
+		t.Fatalf("effective version = %q, want learned version", effective.Version)
+	}
+	if got := effective.Fields[FieldUserAgent].Source; got != FieldSourceLearned {
+		t.Fatalf("User-Agent source = %q, want learned", got)
 	}
 }

@@ -66,7 +66,7 @@ func TestRegisterModelsForAuth_ClineRegistersDefaultModels(t *testing.T) {
 	}
 }
 
-func TestRegisterModelsForAuth_ClineUsesExplicitAndExcludedModels(t *testing.T) {
+func TestRegisterModelsForAuth_ClineUsesPerKeyModels(t *testing.T) {
 	service := &Service{cfg: &config.Config{
 		ClineKey: []config.ClineKey{{
 			APIKey: "cline-key-explicit",
@@ -96,18 +96,55 @@ func TestRegisterModelsForAuth_ClineUsesExplicitAndExcludedModels(t *testing.T) 
 	service.registerModelsForAuth(context.Background(), auth)
 
 	models := registry.GetModelsForClient(auth.ID)
-	if len(models) != 1 {
-		t.Fatalf("expected 1 explicit cline model after exclusion, got %d: %+v", len(models), models)
-	}
-	if hasModelID(models, "cline-pass/glm-5.2") {
-		t.Fatalf("cline-pass/glm-5.2 should be excluded; got %+v", models)
+	if len(models) != 2 {
+		t.Fatalf("expected configured cline models, got %d: %+v", len(models), models)
 	}
 	if !hasModelID(models, "cline-pass/new-model") {
-		t.Fatalf("cline-pass/new-model not registered; got %+v", models)
+		t.Fatalf("per-key ClinePass model should be registered; got %+v", models)
+	}
+	if !hasModelID(models, "cline-pass/glm-5.2") {
+		t.Fatalf("specific ClinePass exclusion should be ignored; got %+v", models)
 	}
 }
 
-func TestRegisterModelsForAuth_ClineRegistersAliasWithUpstreamModelID(t *testing.T) {
+func TestRegisterModelsForAuth_ClineFiltersDirtyNonClinePassModels(t *testing.T) {
+	service := &Service{cfg: &config.Config{
+		ClineKey: []config.ClineKey{{
+			APIKey: "cline-key-dirty",
+			Models: []config.ClineModel{
+				{Name: "glm-5.2"},
+				{Name: "cline-pass/qwen3.7-max"},
+			},
+		}},
+	}}
+	auth := &coreauth.Auth{
+		ID:       "cline-auth-dirty-models",
+		Provider: "cline",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"auth_kind": "apikey",
+			"api_key":   "cline-key-dirty",
+		},
+	}
+
+	registry := GlobalModelRegistry()
+	registry.UnregisterClient(auth.ID)
+	t.Cleanup(func() {
+		registry.UnregisterClient(auth.ID)
+	})
+
+	service.registerModelsForAuth(context.Background(), auth)
+
+	models := registry.GetModelsForClient(auth.ID)
+	if len(models) != 1 || !hasModelID(models, "cline-pass/qwen3.7-max") {
+		t.Fatalf("expected only valid ClinePass model after dirty filtering, got %+v", models)
+	}
+	if hasModelID(models, "glm-5.2") {
+		t.Fatalf("dirty non-ClinePass model should not be registered for Cline; got %+v", models)
+	}
+}
+
+func TestRegisterModelsForAuth_ClineUsesPerKeyAlias(t *testing.T) {
 	service := &Service{cfg: &config.Config{
 		ClineKey: []config.ClineKey{{
 			APIKey: "cline-key-alias",
@@ -135,13 +172,10 @@ func TestRegisterModelsForAuth_ClineRegistersAliasWithUpstreamModelID(t *testing
 	service.registerModelsForAuth(context.Background(), auth)
 
 	models := registry.GetModelsForClient(auth.ID)
-	for _, model := range models {
-		if model.ID == "mimo-v2.5-pro" {
-			if model.UpstreamModelID != "cline-pass/mimo-v2.5-pro" {
-				t.Fatalf("UpstreamModelID = %q, want cline-pass/mimo-v2.5-pro", model.UpstreamModelID)
-			}
-			return
-		}
+	if !hasModelID(models, "mimo-v2.5-pro") {
+		t.Fatalf("per-key ClinePass alias should be registered; got %+v", models)
 	}
-	t.Fatalf("mimo-v2.5-pro alias not registered; got %+v", models)
+	if hasModelID(models, "cline-pass/mimo-v2.5-pro") {
+		t.Fatalf("aliased ClinePass upstream id should not be registered separately; got %+v", models)
+	}
 }

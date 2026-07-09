@@ -140,7 +140,7 @@ func TestPublicCcSwitchImportConfigsIncludesCodexModelCatalog(t *testing.T) {
 			EndpointPath:         "/v1",
 			UsageAutoInterval:    30,
 			ModelMappings: []usage.CcSwitchModelMappingRow{
-				{RequestModel: "gpt-5.5", TargetModel: "gpt-5.5"},
+				{RequestModel: "gpt-5.5", TargetModel: "gpt-5.5", ContextWindow: 272000},
 				{RequestModel: "deepseek-v4-flash", TargetModel: "deepseek-chat"},
 				{RequestModel: "deepseek-v4-pro", TargetModel: "deepseek-reasoner"},
 			},
@@ -201,5 +201,12 @@ func TestPublicCcSwitchImportConfigsIncludesCodexModelCatalog(t *testing.T) {
 		if slugs[idx] != want[idx] {
 			t.Fatalf("catalog slug[%d] = %q, want %q; all=%#v", idx, slugs[idx], want[idx], slugs)
 		}
+	}
+	if item.CodexModelCatalog.Models[0].ContextWindow != 272000 ||
+		item.CodexModelCatalog.Models[0].ModelMessages.ContextWindow != 272000 {
+		t.Fatalf("first catalog context window = %#v, want 272000", item.CodexModelCatalog.Models[0])
+	}
+	if item.CodexModelCatalog.Models[1].ContextWindow != 128000 {
+		t.Fatalf("second catalog context window = %d, want 128000", item.CodexModelCatalog.Models[1].ContextWindow)
 	}
 }

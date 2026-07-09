@@ -33,6 +33,9 @@ type Config struct {
 	// When empty, the process local timezone (time.Local) is used.
 	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 
+	// Postgres config controls the runtime primary database.
+	Postgres PostgresConfig `yaml:"postgres" json:"-"`
+
 	// Redis config controls the Redis connection for usage persistence.
 	Redis RedisConfig `yaml:"redis" json:"redis"`
 
@@ -124,6 +127,9 @@ type Config struct {
 	// ClineKey defines ClinePass API key configurations.
 	ClineKey []ClineKey `yaml:"cline-api-key" json:"cline-api-key"`
 
+	// OllamaCloudKey defines Ollama Cloud API key configurations.
+	OllamaCloudKey []OllamaCloudKey `yaml:"ollama-cloud-api-key" json:"ollama-cloud-api-key"`
+
 	// ClaudeHeaderDefaults configures default header values for Claude API requests.
 	// These are used as fallbacks when the client does not send its own headers.
 	ClaudeHeaderDefaults ClaudeHeaderDefaults `yaml:"claude-header-defaults" json:"claude-header-defaults"`
@@ -161,7 +167,7 @@ type Config struct {
 
 	// OAuthModelAlias defines global model name aliases for OAuth/file-backed auth channels.
 	// These aliases affect both model listing and model routing for supported channels:
-	// gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, iflow.
+	// gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, xai, iflow, kimi.
 	//
 	// NOTE: This does not apply to existing per-credential model alias features under:
 	// gemini-api-key, codex-api-key, claude-api-key, openai-compatibility, vertex-api-key, and ampcode.

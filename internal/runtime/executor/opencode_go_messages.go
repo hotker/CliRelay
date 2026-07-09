@@ -50,6 +50,7 @@ func (e *OpenCodeGoExecutor) executeMessages(ctx context.Context, auth *cliproxy
 		return resp, err
 	}
 	translated = execCtx.ApplyPayloadConfig(translated, originalTranslated)
+	translated = applyProviderPromptCaching(translated, req.Payload, auth, e.Identifier(), execCtx.BaseModel, sdktranslator.FormatClaude, opts)
 
 	url := strings.TrimSuffix(opencodeGoBaseURL, "/") + "/messages"
 	httpReq, err := http.NewRequestWithContext(execCtx.Context, http.MethodPost, url, bytes.NewReader(translated))
@@ -137,6 +138,7 @@ func (e *OpenCodeGoExecutor) executeMessagesStream(ctx context.Context, auth *cl
 		return nil, err
 	}
 	translated = execCtx.ApplyPayloadConfig(translated, originalTranslated)
+	translated = applyProviderPromptCaching(translated, req.Payload, auth, e.Identifier(), execCtx.BaseModel, sdktranslator.FormatClaude, opts)
 
 	url := strings.TrimSuffix(opencodeGoBaseURL, "/") + "/messages"
 	httpReq, err := http.NewRequestWithContext(execCtx.Context, http.MethodPost, url, bytes.NewReader(translated))

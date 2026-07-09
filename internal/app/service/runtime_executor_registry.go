@@ -92,23 +92,69 @@ func syncConfigDerivedAuthModels(cfg *config.Config, auth *coreauth.Auth) {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
-	case "opencode-go":
-		syncOpenCodeGoConfigAuthModels(reg, cfg, auth)
+	case "opencode-go", "cline", "ollama-cloud":
+		syncDynamicConfigAuthModels(reg, cfg, auth)
 	}
 }
 
-func syncOpenCodeGoConfigAuthModels(reg sdkmodelcatalog.Registry, cfg *config.Config, auth *coreauth.Auth) {
-	entry := resolveConfigOpenCodeGoKey(cfg, auth)
-	if entry == nil {
+func syncDynamicConfigAuthModels(reg sdkmodelcatalog.Registry, cfg *config.Config, auth *coreauth.Auth) {
+	provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+	staticModels := sdkmodelcatalog.StaticModelDefinitionsByChannel(provider)
+	models := staticModels
+	excluded := []string(nil)
+	ownedBy := provider
+	switch provider {
+	case "opencode-go":
+		ownedBy = "opencode"
+		entry := resolveConfigOpenCodeGoKey(cfg, auth)
+		if entry == nil {
+			reg.UnregisterClient(auth.ID)
+			return
+		}
+		if len(entry.Models) > 0 {
+			models = buildNamedConfigModels(filterNamedConfigModels(entry.Models, isNotClinePassConfigModelID), staticModels, ownedBy, provider)
+		}
+		excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
+	case "cline":
+		entry := resolveConfigClineKey(cfg, auth)
+		if entry == nil {
+			reg.UnregisterClient(auth.ID)
+			return
+		}
+		if len(entry.Models) > 0 {
+			models = buildNamedConfigModels(filterNamedConfigModels(entry.Models, isClinePassConfigModelID), staticModels, ownedBy, provider)
+		}
+		excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
+	case "ollama-cloud":
+		ownedBy = "ollama"
+		entry := resolveConfigOllamaCloudKey(cfg, auth)
+		if entry == nil {
+			reg.UnregisterClient(auth.ID)
+			return
+		}
+		if len(entry.Models) > 0 {
+			models = buildNamedConfigModels(filterNamedConfigModels(entry.Models, isNotClinePassConfigModelID), staticModels, ownedBy, provider)
+		}
+		excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
+	default:
 		reg.UnregisterClient(auth.ID)
 		return
 	}
-	models := sdkmodelcatalog.StaticModelDefinitionsByChannel("opencode-go")
-	if len(entry.Models) > 0 {
-		models = buildOpenCodeGoConfigModels(entry.Models, models)
+	models = applyConfigModelExclusions(models, excluded)
+	if len(models) == 0 {
+		reg.UnregisterClient(auth.ID)
+		return
 	}
-	models = applyConfigModelExclusions(models, entry.ExcludedModels)
-	reg.RegisterClient(auth.ID, "opencode-go", applyConfigModelPrefixes(models, auth.Prefix, cfg.ForceModelPrefix))
+	reg.RegisterClient(auth.ID, provider, applyConfigModelPrefixes(models, auth.Prefix, cfg.ForceModelPrefix))
+}
+
+func providerModelAccessExcludedModels(excluded []string) []string {
+	for _, model := range excluded {
+		if strings.TrimSpace(model) == "*" {
+			return []string{"*"}
+		}
+	}
+	return nil
 }
 
 func resolveConfigOpenCodeGoKey(cfg *config.Config, auth *coreauth.Auth) *config.OpenCodeGoKey {
@@ -127,7 +173,76 @@ func resolveConfigOpenCodeGoKey(cfg *config.Config, auth *coreauth.Auth) *config
 	return nil
 }
 
-func buildOpenCodeGoConfigModels(models []config.OpenCodeGoModel, staticModels []*sdkmodelcatalog.ModelInfo) []*sdkmodelcatalog.ModelInfo {
+func resolveConfigClineKey(cfg *config.Config, auth *coreauth.Auth) *config.ClineKey {
+	if cfg == nil || auth == nil || auth.Attributes == nil {
+		return nil
+	}
+	attrKey := strings.TrimSpace(auth.Attributes["api_key"])
+	attrBase := strings.TrimSpace(auth.Attributes["base_url"])
+	for i := range cfg.ClineKey {
+		entry := &cfg.ClineKey[i]
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if cfgBase == "" {
+			cfgBase = config.DefaultClineBaseURL
+		}
+		if attrKey != "" && strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+			if attrBase == "" || strings.EqualFold(cfgBase, attrBase) {
+				return entry
+			}
+		}
+	}
+	return nil
+}
+
+func resolveConfigOllamaCloudKey(cfg *config.Config, auth *coreauth.Auth) *config.OllamaCloudKey {
+	if cfg == nil || auth == nil || auth.Attributes == nil {
+		return nil
+	}
+	attrKey := strings.TrimSpace(auth.Attributes["api_key"])
+	attrBase := strings.TrimSpace(auth.Attributes["base_url"])
+	for i := range cfg.OllamaCloudKey {
+		entry := &cfg.OllamaCloudKey[i]
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if cfgBase == "" {
+			cfgBase = config.DefaultOllamaCloudBaseURL
+		}
+		if attrKey != "" && strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+			if attrBase == "" || strings.EqualFold(cfgBase, attrBase) {
+				return entry
+			}
+		}
+	}
+	return nil
+}
+
+type namedConfigModel interface {
+	GetName() string
+	GetAlias() string
+}
+
+func filterNamedConfigModels[T namedConfigModel](models []T, keep func(string) bool) []T {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]T, 0, len(models))
+	for _, model := range models {
+		if keep(model.GetName()) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func isClinePassConfigModelID(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "cline-pass/")
+}
+
+func isNotClinePassConfigModelID(model string) bool {
+	model = strings.TrimSpace(model)
+	return model != "" && !isClinePassConfigModelID(model)
+}
+
+func buildNamedConfigModels[T namedConfigModel](models []T, staticModels []*sdkmodelcatalog.ModelInfo, ownedBy, modelType string) []*sdkmodelcatalog.ModelInfo {
 	staticByID := make(map[string]*sdkmodelcatalog.ModelInfo, len(staticModels))
 	for _, model := range staticModels {
 		if model == nil {
@@ -142,30 +257,44 @@ func buildOpenCodeGoConfigModels(models []config.OpenCodeGoModel, staticModels [
 	seen := make(map[string]struct{}, len(models))
 	out := make([]*sdkmodelcatalog.ModelInfo, 0, len(models))
 	for i := range models {
-		name := strings.TrimSpace(models[i].Name)
+		name := strings.TrimSpace(models[i].GetName())
+		alias := strings.TrimSpace(models[i].GetAlias())
 		if name == "" {
 			continue
 		}
-		key := strings.ToLower(name)
+		id := name
+		if alias != "" {
+			id = alias
+		}
+		key := strings.ToLower(id)
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		if model := staticByID[key]; model != nil {
+		if model := staticByID[strings.ToLower(name)]; model != nil {
 			clone := *model
+			clone.ID = id
+			clone.DisplayName = name
+			if alias != "" && !strings.EqualFold(alias, name) {
+				clone.UpstreamModelID = name
+			}
 			clone.UserDefined = true
 			out = append(out, &clone)
 			continue
 		}
-		out = append(out, &sdkmodelcatalog.ModelInfo{
-			ID:          name,
+		info := &sdkmodelcatalog.ModelInfo{
+			ID:          id,
 			Object:      "model",
 			Created:     now,
-			OwnedBy:     "opencode",
-			Type:        "opencode-go",
+			OwnedBy:     ownedBy,
+			Type:        modelType,
 			DisplayName: name,
 			UserDefined: true,
-		})
+		}
+		if alias != "" && !strings.EqualFold(alias, name) {
+			info.UpstreamModelID = name
+		}
+		out = append(out, info)
 	}
 	return out
 }
@@ -326,12 +455,16 @@ func RegisterExecutorForAuth(coreManager *coreauth.Manager, cfg *config.Config, 
 		coreManager.RegisterExecutor(executor.NewBedrockExecutor(cfg))
 	case "opencode-go":
 		coreManager.RegisterExecutor(executor.NewOpenCodeGoExecutor(cfg))
+	case "ollama-cloud":
+		coreManager.RegisterExecutor(executor.NewOllamaCloudExecutor(cfg))
 	case "qwen":
 		coreManager.RegisterExecutor(executor.NewQwenExecutor(cfg))
 	case "iflow":
 		coreManager.RegisterExecutor(executor.NewIFlowExecutor(cfg))
 	case "kimi":
 		coreManager.RegisterExecutor(executor.NewKimiExecutor(cfg))
+	case "xai":
+		coreManager.RegisterExecutor(executor.NewXAIExecutor(cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
 		if providerKey == "" {
@@ -343,6 +476,11 @@ func RegisterExecutorForAuth(coreManager *coreauth.Manager, cfg *config.Config, 
 
 func openAICompatInfoFromAuth(auth *coreauth.Auth) (providerKey string, compatName string, ok bool) {
 	if auth == nil {
+		return "", "", false
+	}
+	// Ollama Cloud keeps compat metadata for chat fallback, but its native
+	// Responses/Messages routes require the dedicated executor.
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "ollama-cloud") {
 		return "", "", false
 	}
 	if len(auth.Attributes) > 0 {

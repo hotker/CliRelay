@@ -83,6 +83,11 @@ type CcSwitchCodexModelCatalogEntry struct {
 const ccSwitchCodexDefaultContextWindow = 128000
 const ccSwitchCodexBaseInstructions = "You are Codex, a coding agent."
 
+type ccSwitchCodexCatalogModelSpec struct {
+	Model         string
+	ContextWindow int
+}
+
 var ccSwitchCodexSupportedReasoningLevels = []CcSwitchCodexReasoningLevel{
 	{Effort: "low", Description: "Fast responses with lighter reasoning"},
 	{Effort: "medium", Description: "Balances speed and reasoning depth for everyday tasks"},
@@ -95,10 +100,7 @@ func BuildCcSwitchCodexModelCatalog(row CcSwitchImportConfigRow) *CcSwitchCodexM
 		return nil
 	}
 
-	models := make([]string, 0, len(row.ModelMappings)+1)
-	if model := strings.TrimSpace(row.DefaultModel); model != "" {
-		models = append(models, model)
-	}
+	models := make([]ccSwitchCodexCatalogModelSpec, 0, len(row.ModelMappings)+1)
 	for _, mapping := range row.ModelMappings {
 		if strings.TrimSpace(mapping.Role) != "" {
 			continue
@@ -108,23 +110,29 @@ func BuildCcSwitchCodexModelCatalog(row CcSwitchImportConfigRow) *CcSwitchCodexM
 			model = strings.TrimSpace(mapping.TargetModel)
 		}
 		if model != "" {
-			models = append(models, model)
+			models = append(models, ccSwitchCodexCatalogModelSpec{
+				Model:         model,
+				ContextWindow: normalizeCcSwitchCodexContextWindow(mapping.ContextWindow),
+			})
 		}
+	}
+	if model := strings.TrimSpace(row.DefaultModel); model != "" {
+		models = append(models, ccSwitchCodexCatalogModelSpec{Model: model})
 	}
 
 	seen := make(map[string]struct{}, len(models))
 	entries := make([]CcSwitchCodexModelCatalogEntry, 0, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		key := strings.ToLower(model)
-		if model == "" {
+	for _, spec := range models {
+		spec.Model = strings.TrimSpace(spec.Model)
+		key := strings.ToLower(spec.Model)
+		if spec.Model == "" {
 			continue
 		}
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		entries = append(entries, buildCcSwitchCodexModelCatalogEntry(model, len(entries)))
+		entries = append(entries, buildCcSwitchCodexModelCatalogEntry(spec, len(entries)))
 	}
 	if len(entries) == 0 {
 		return nil
@@ -154,7 +162,16 @@ func AttachCcSwitchCodexModelCatalogs(rows []CcSwitchImportConfigRow) []CcSwitch
 	return out
 }
 
-func buildCcSwitchCodexModelCatalogEntry(model string, priority int) CcSwitchCodexModelCatalogEntry {
+func normalizeCcSwitchCodexContextWindow(value int) int {
+	if value <= 0 {
+		return ccSwitchCodexDefaultContextWindow
+	}
+	return value
+}
+
+func buildCcSwitchCodexModelCatalogEntry(spec ccSwitchCodexCatalogModelSpec, priority int) CcSwitchCodexModelCatalogEntry {
+	model := strings.TrimSpace(spec.Model)
+	contextWindow := normalizeCcSwitchCodexContextWindow(spec.ContextWindow)
 	messages := CcSwitchCodexModelMessages{
 		InstructionsTemplate:          ccSwitchCodexBaseInstructions,
 		InstructionsVariables:         map[string]string{},
@@ -167,8 +184,8 @@ func buildCcSwitchCodexModelCatalogEntry(model string, priority int) CcSwitchCod
 		TruncationPolicy:              CcSwitchCodexTruncationPolicy{Mode: "tokens", Limit: 10000},
 		SupportsParallelToolCalls:     true,
 		SupportsImageDetailOriginal:   true,
-		ContextWindow:                 ccSwitchCodexDefaultContextWindow,
-		MaxContextWindow:              ccSwitchCodexDefaultContextWindow,
+		ContextWindow:                 contextWindow,
+		MaxContextWindow:              contextWindow,
 		EffectiveContextWindowPercent: 95,
 		ExperimentalSupportedTools:    []string{},
 		InputModalities:               []string{"text", "image"},
@@ -202,8 +219,8 @@ func buildCcSwitchCodexModelCatalogEntry(model string, priority int) CcSwitchCod
 		TruncationPolicy:              CcSwitchCodexTruncationPolicy{Mode: "tokens", Limit: 10000},
 		SupportsParallelToolCalls:     true,
 		SupportsImageDetailOriginal:   true,
-		ContextWindow:                 ccSwitchCodexDefaultContextWindow,
-		MaxContextWindow:              ccSwitchCodexDefaultContextWindow,
+		ContextWindow:                 contextWindow,
+		MaxContextWindow:              contextWindow,
 		EffectiveContextWindowPercent: 95,
 		ExperimentalSupportedTools:    []string{},
 		InputModalities:               []string{"text", "image"},

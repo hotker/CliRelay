@@ -43,6 +43,15 @@ func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {
 	return filtered
 }
 
+func providerModelAccessExcludedModels(excluded []string) []string {
+	for _, model := range excluded {
+		if strings.TrimSpace(model) == "*" {
+			return []string{"*"}
+		}
+	}
+	return nil
+}
+
 func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix bool) []*ModelInfo {
 	trimmedPrefix := strings.TrimSpace(prefix)
 	if trimmedPrefix == "" || len(models) == 0 {
@@ -187,6 +196,23 @@ func buildConfigModels[T modelEntry](
 	return out
 }
 
+func filterConfigModels[T modelEntry](models []T, keep func(string) bool) []T {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]T, 0, len(models))
+	for _, model := range models {
+		if keep(model.GetName()) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func isClinePassConfigModelID(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "cline-pass/")
+}
+
 func buildVertexCompatConfigModels(
 	entry *config.VertexCompatKey,
 	resolveThinking staticThinkingResolver,
@@ -327,62 +353,32 @@ func buildCodexConfigModels(entry *config.CodexKey, resolveThinking staticThinki
 	return buildConfigModels(entry.Models, "openai", "openai", resolveThinking)
 }
 
-func buildOpenCodeGoConfigModels(entry *config.OpenCodeGoKey, staticModels []*ModelInfo) []*ModelInfo {
+func buildOpenCodeGoConfigModels(entry *config.OpenCodeGoKey) []*ModelInfo {
 	if entry == nil || len(entry.Models) == 0 {
 		return nil
 	}
-	return buildNamedConfigModels(entry.Models, staticModels, "opencode", "opencode-go")
+	models := filterConfigModels(entry.Models, func(name string) bool {
+		return !isClinePassConfigModelID(name)
+	})
+	return buildConfigModels(models, "opencode", "opencode-go", nil)
 }
 
-func buildClineConfigModels(entry *config.ClineKey, staticModels []*ModelInfo) []*ModelInfo {
+func buildClineConfigModels(entry *config.ClineKey) []*ModelInfo {
 	if entry == nil || len(entry.Models) == 0 {
 		return nil
 	}
-	return buildConfigModels(entry.Models, "cline", "cline", nil)
+	models := filterConfigModels(entry.Models, isClinePassConfigModelID)
+	return buildConfigModels(models, "cline", "cline", nil)
 }
 
-func buildNamedConfigModels[T interface{ GetName() string }](models []T, staticModels []*ModelInfo, ownedBy, modelType string) []*ModelInfo {
-	staticByID := make(map[string]*ModelInfo, len(staticModels))
-	for _, model := range staticModels {
-		if model == nil {
-			continue
-		}
-		if id := strings.ToLower(strings.TrimSpace(model.ID)); id != "" {
-			staticByID[id] = model
-		}
+func buildOllamaCloudConfigModels(entry *config.OllamaCloudKey) []*ModelInfo {
+	if entry == nil || len(entry.Models) == 0 {
+		return nil
 	}
-
-	now := time.Now().Unix()
-	seen := make(map[string]struct{}, len(models))
-	out := make([]*ModelInfo, 0, len(models))
-	for i := range models {
-		name := strings.TrimSpace(models[i].GetName())
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		if model := staticByID[key]; model != nil {
-			clone := *model
-			clone.UserDefined = true
-			out = append(out, &clone)
-			continue
-		}
-		out = append(out, &ModelInfo{
-			ID:          name,
-			Object:      "model",
-			Created:     now,
-			OwnedBy:     ownedBy,
-			Type:        modelType,
-			DisplayName: name,
-			UserDefined: true,
-		})
-	}
-	return out
+	models := filterConfigModels(entry.Models, func(name string) bool {
+		return !isClinePassConfigModelID(name)
+	})
+	return buildConfigModels(models, "ollama", "ollama-cloud", nil)
 }
 
 func rewriteModelInfoName(name, oldID, newID string) string {

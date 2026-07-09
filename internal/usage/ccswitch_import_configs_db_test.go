@@ -25,7 +25,7 @@ func TestReplaceAllCcSwitchImportConfigsPersistsModelMappings(t *testing.T) {
 			APIKeyField:          "ANTHROPIC_API_KEY",
 			ModelMappings: []CcSwitchModelMappingRow{
 				{Role: "main", RequestModel: "kimi-k2.5", TargetModel: "kimi-k2.5"},
-				{Role: "haiku", RequestModel: "claude-3-5-haiku", TargetModel: "kimi-k2.5"},
+				{Role: "haiku", RequestModel: "claude-3-5-haiku", TargetModel: "kimi-k2.5", ContextWindow: 272000},
 			},
 		},
 	})
@@ -42,7 +42,8 @@ func TestReplaceAllCcSwitchImportConfigsPersistsModelMappings(t *testing.T) {
 	}
 	if rows[0].ModelMappings[1].Role != "haiku" ||
 		rows[0].ModelMappings[1].RequestModel != "claude-3-5-haiku" ||
-		rows[0].ModelMappings[1].TargetModel != "kimi-k2.5" {
+		rows[0].ModelMappings[1].TargetModel != "kimi-k2.5" ||
+		rows[0].ModelMappings[1].ContextWindow != 272000 {
 		t.Fatalf("model mapping not preserved: %#v", rows[0].ModelMappings[1])
 	}
 }

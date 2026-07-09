@@ -22,6 +22,9 @@ const (
 	FieldCodexBetaFeatures      = "x-codex-beta-features"
 	FieldGeminiAPIClient        = "x-goog-api-client"
 	FieldGeminiClientMetadata   = "client-metadata"
+	FieldXAIGrokConversationID  = "x-grok-conv-id"
+	FieldXAIClientIdentifier    = "x-grok-client-identifier"
+	FieldXAIClientVersion       = "x-grok-client-version"
 )
 
 var (
@@ -29,6 +32,7 @@ var (
 	codexDesktopUARe = regexp.MustCompile(`(?i)\bcodex\s+desktop/([0-9]+(?:\.[0-9]+){0,3})(?:[-+][a-z0-9_.-]+)?`)
 	tokenVerRe       = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*codex[a-z0-9_.-]*)/([0-9]+(?:\.[0-9]+){0,3})(?:[-+][a-z0-9_.-]+)?`)
 	geminiUARe       = regexp.MustCompile(`(?i)^google-api-nodejs-client/([0-9]+(?:\.[0-9]+){0,3})`)
+	xaiTokenVerRe    = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*(?:grok|xai)[a-z0-9_.-]*)/([0-9]+(?:\.[0-9]+){0,3})(?:[-+][a-z0-9_.-]+)?`)
 )
 
 func ExtractObservation(input LearnInput) (Observation, bool) {
@@ -44,6 +48,8 @@ func ExtractObservation(input LearnInput) (Observation, bool) {
 		return extractCodexObservation(input, headers, observedAt)
 	case ProviderGemini:
 		return extractGeminiObservation(input, headers, observedAt)
+	case ProviderXAI:
+		return extractXAIObservation(input, headers, observedAt)
 	default:
 		return Observation{}, false
 	}
@@ -167,6 +173,46 @@ func extractGeminiObservation(input LearnInput, headers http.Header, observedAt 
 	}, true
 }
 
+func extractXAIObservation(input LearnInput, headers http.Header, observedAt time.Time) (Observation, bool) {
+	ua := strings.TrimSpace(headers.Get("User-Agent"))
+	clientIdentifier := strings.TrimSpace(headers.Get("X-Grok-Client-Identifier"))
+	clientVersion := strings.TrimSpace(headers.Get("X-Grok-Client-Version"))
+	product, version := xaiProductVersion(ua)
+	if product == "" && clientIdentifier != "" {
+		product = clientIdentifier
+	}
+	if version == "" {
+		version = clientVersion
+	}
+	if product == "" {
+		return Observation{}, false
+	}
+	fields := map[string]string{}
+	if ua != "" {
+		fields[FieldUserAgent] = ua
+	}
+	if clientIdentifier != "" {
+		fields[FieldXAIClientIdentifier] = clientIdentifier
+	}
+	if clientVersion != "" {
+		fields[FieldXAIClientVersion] = clientVersion
+	}
+	if len(fields) == 0 {
+		return Observation{}, false
+	}
+	return Observation{
+		Provider:        ProviderXAI,
+		AccountKey:      strings.TrimSpace(input.AccountKey),
+		AuthSubjectID:   strings.TrimSpace(input.AuthSubjectID),
+		ClientProduct:   product,
+		ClientVariant:   "cli",
+		Version:         version,
+		Fields:          fields,
+		ObservedHeaders: observedHeaders(headers, []string{"User-Agent", "X-Grok-Client-Identifier", "X-Grok-Client-Version"}),
+		ObservedAt:      observedAt.UTC(),
+	}, true
+}
+
 func MergeObservation(existing *LearnedRecord, obs Observation) MergeResult {
 	if strings.TrimSpace(obs.AccountKey) == "" {
 		return MergeResult{Reason: "missing_account_key"}
@@ -248,6 +294,24 @@ func codexProductVersion(ua string) (string, string) {
 
 	if strings.Contains(strings.ToLower(ua), "codex") {
 		return "codex", ""
+	}
+	return "", ""
+}
+
+func xaiProductVersion(ua string) (string, string) {
+	ua = strings.TrimSpace(ua)
+	if ua == "" {
+		return "", ""
+	}
+	if matches := xaiTokenVerRe.FindStringSubmatch(ua); len(matches) > 0 {
+		return strings.ToLower(matches[1]), matches[2]
+	}
+	lower := strings.ToLower(ua)
+	if strings.Contains(lower, "grok") {
+		return "grok-cli", ""
+	}
+	if strings.Contains(lower, "xai") {
+		return "xai-cli", ""
 	}
 	return "", ""
 }

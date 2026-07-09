@@ -84,7 +84,9 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 	}
 	provider := strings.ToLower(strings.TrimSpace(a.Provider))
 	compatProviderKey, compatDisplayName, compatDetected := openAICompatInfoFromAuth(a)
-	if compatDetected && provider != "cline" {
+	// Cline and Ollama Cloud use OpenAI-compatible transport metadata to pick
+	// executors, but their model lists are owned by their native config blocks.
+	if compatDetected && provider != "cline" && provider != "ollama-cloud" {
 		provider = "openai-compatibility"
 	}
 	excluded := s.oauthExcludedModels(provider, authKind)
@@ -149,23 +151,30 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		}
 		models = applyExcludedModels(models, excluded)
 	case "opencode-go":
-		staticModels := sdkmodelcatalog.StaticModelDefinitionsByChannel("opencode-go")
-		models = staticModels
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("opencode-go")
 		if entry := s.resolveConfigOpenCodeGoKey(a); entry != nil && authKind == "apikey" {
 			if len(entry.Models) > 0 {
-				models = buildOpenCodeGoConfigModels(entry, staticModels)
+				models = buildOpenCodeGoConfigModels(entry)
 			}
-			excluded = entry.ExcludedModels
+			excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
 		}
 		models = applyExcludedModels(models, excluded)
 	case "cline":
-		staticModels := sdkmodelcatalog.StaticModelDefinitionsByChannel("cline")
-		models = staticModels
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("cline")
 		if entry := s.resolveConfigClineKey(a); entry != nil && authKind == "apikey" {
 			if len(entry.Models) > 0 {
-				models = buildClineConfigModels(entry, staticModels)
+				models = buildClineConfigModels(entry)
 			}
-			excluded = entry.ExcludedModels
+			excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
+		}
+		models = applyExcludedModels(models, excluded)
+	case "ollama-cloud":
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("ollama-cloud")
+		if entry := s.resolveConfigOllamaCloudKey(a); entry != nil && authKind == "apikey" {
+			if len(entry.Models) > 0 {
+				models = buildOllamaCloudConfigModels(entry)
+			}
+			excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
 		}
 		models = applyExcludedModels(models, excluded)
 	case "codex":
@@ -181,6 +190,9 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "qwen":
 		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("qwen")
+		models = applyExcludedModels(models, excluded)
+	case "xai":
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("xai")
 		models = applyExcludedModels(models, excluded)
 	case "iflow":
 		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("iflow")

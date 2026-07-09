@@ -3,7 +3,6 @@ package providers
 import (
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -342,7 +341,7 @@ func TestOpenCodeGoKeysReplacePatchDeleteAndRollback(t *testing.T) {
 	if len(cfg.OpenCodeGoKey) != 1 {
 		t.Fatalf("OpenCodeGoKey len = %d, want 1", len(cfg.OpenCodeGoKey))
 	}
-	if got := cfg.OpenCodeGoKey[0]; got.APIKey != "go-key" || got.Prefix != "team" || got.WorkspaceID != "wrk_123" || got.AuthCookie != "auth-token" {
+	if got := cfg.OpenCodeGoKey[0]; got.APIKey != "go-key" || got.Prefix != "team" || got.VisionFallbackModel != "qwen3.5-plus" || got.WorkspaceID != "wrk_123" || got.AuthCookie != "auth-token" {
 		t.Fatalf("normalized opencode go key = %#v", got)
 	}
 
@@ -362,7 +361,7 @@ func TestOpenCodeGoKeysReplacePatchDeleteAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchOpenCodeGoKey() error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey[0]; got.Name != "secondary" || !reflect.DeepEqual(got.ExcludedModels, []string{"minimax-m2.5"}) || got.WorkspaceID != "wrk_456" || got.AuthCookie != "auth-next" {
+	if got := cfg.OpenCodeGoKey[0]; got.Name != "secondary" || len(got.ExcludedModels) != 0 || got.VisionFallbackModel != "qwen3.6-plus" || got.WorkspaceID != "wrk_456" || got.AuthCookie != "auth-next" {
 		t.Fatalf("patched opencode go key = %#v", got)
 	}
 
@@ -374,7 +373,7 @@ func TestOpenCodeGoKeysReplacePatchDeleteAndRollback(t *testing.T) {
 	}
 }
 
-func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
+func TestOpenCodeGoKeysKeepPerKeyModelsAndClearWhenDisabledAll(t *testing.T) {
 	cfg := &config.Config{
 		OpenCodeGoKey: []config.OpenCodeGoKey{{
 			APIKey: "existing",
@@ -388,29 +387,22 @@ func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
 	err := svc.ReplaceOpenCodeGoKeys([]config.OpenCodeGoKey{{
 		APIKey: "go-key",
 		Models: []config.OpenCodeGoModel{{
-			Name: " cline-pass/glm-5.2 ",
+			Name: " glm-5.2 ",
 		}},
+		ExcludedModels:      []string{"minimax-m2.5"},
+		VisionFallbackModel: "qwen3.5-plus",
 	}})
-	if err == nil || !strings.Contains(err.Error(), "opencode-go models contains invalid model") {
-		t.Fatalf("ReplaceOpenCodeGoKeys() error = %v, want invalid opencode-go model error", err)
+	if err != nil {
+		t.Fatalf("ReplaceOpenCodeGoKeys() error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "existing" || got[0].Models[0].Name != "glm-5.2" {
-		t.Fatalf("OpenCodeGoKey after rejected replace = %#v, want unchanged existing entry", got)
-	}
-
-	badExcluded := []string{"cline-pass/minimax-m3"}
-	err = svc.PatchOpenCodeGoKey(nil, stringPtr("existing"), nil, OpenCodeGoPatch{ExcludedModels: &badExcluded})
-	if err == nil || !strings.Contains(err.Error(), "opencode-go excluded-models contains invalid model") {
-		t.Fatalf("PatchOpenCodeGoKey(excluded-models) error = %v, want invalid opencode-go model error", err)
-	}
-	if got := cfg.OpenCodeGoKey[0].ExcludedModels; len(got) != 0 {
-		t.Fatalf("OpenCodeGoKey excluded models after rejected patch = %#v, want unchanged empty list", got)
+	if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "go-key" || len(got[0].Models) != 1 || got[0].Models[0].Name != "glm-5.2" || got[0].VisionFallbackModel != "qwen3.5-plus" || len(got[0].ExcludedModels) != 0 {
+		t.Fatalf("OpenCodeGoKey after replace = %#v, want sanitized entry", got)
 	}
 
-	validExcluded := []string{"*"}
+	validExcluded := []string{"*", "minimax-m2.5"}
 	validFallback := " qwen3.5-plus "
 	validModels := []config.OpenCodeGoModel{{Name: " glm-5.2 "}}
-	err = svc.PatchOpenCodeGoKey(nil, stringPtr("existing"), nil, OpenCodeGoPatch{
+	err = svc.PatchOpenCodeGoKey(nil, stringPtr("go-key"), nil, OpenCodeGoPatch{
 		Models:         &validModels,
 		ExcludedModels: &validExcluded,
 		VisionFallback: &validFallback,
@@ -418,12 +410,152 @@ func TestOpenCodeGoKeysRejectClinePassModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchOpenCodeGoKey(valid models) error = %v, want nil", err)
 	}
-	if got := cfg.OpenCodeGoKey[0]; got.Models[0].Name != "glm-5.2" || got.ExcludedModels[0] != "*" || got.VisionFallbackModel != "qwen3.5-plus" {
+	if got := cfg.OpenCodeGoKey[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*"}) || got.VisionFallbackModel != "qwen3.5-plus" {
 		t.Fatalf("OpenCodeGoKey after valid patch = %#v", got)
 	}
 }
 
-func TestClineKeysRejectNonClinePassModels(t *testing.T) {
+func TestPatchClineKeyRepairsConfiguredModelExclusions(t *testing.T) {
+	cfg := &config.Config{
+		ClineKey: []config.ClineKey{{
+			APIKey: "cline-key",
+			Name:   "old",
+			Models: []config.ClineModel{
+				{Name: "cline-pass/qwen3.7-max"},
+				{Name: "cline-pass/kimi-k2.6"},
+			},
+			ExcludedModels: []string{
+				"cline-pass/qwen3.7-max",
+				"cline-pass/kimi-k2.6",
+			},
+		}},
+	}
+	name := "new"
+
+	err := NewService(cfg, nil).PatchClineKey(nil, nil, &name, ClinePatch{Name: &name})
+	if !errors.Is(err, ErrItemNotFound) {
+		t.Fatalf("PatchClineKey unmatched error = %v, want ErrItemNotFound", err)
+	}
+
+	index := 0
+	err = NewService(cfg, nil).PatchClineKey(&index, nil, nil, ClinePatch{Name: &name})
+	if err != nil {
+		t.Fatalf("PatchClineKey() error = %v, want nil", err)
+	}
+	if len(cfg.ClineKey[0].ExcludedModels) != 0 {
+		t.Fatalf("excluded models = %#v, want repaired empty list", cfg.ClineKey[0].ExcludedModels)
+	}
+}
+
+func TestExtendedProviderReplaceRejectsNonEmptyPayloadWithoutAPIKeys(t *testing.T) {
+	t.Run("opencode go", func(t *testing.T) {
+		cfg := &config.Config{OpenCodeGoKey: []config.OpenCodeGoKey{{APIKey: "existing"}}}
+		svc := NewService(cfg, nil)
+
+		err := svc.ReplaceOpenCodeGoKeys([]config.OpenCodeGoKey{{Name: "empty"}})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("ReplaceOpenCodeGoKeys() error = %v, want api-key required", err)
+		}
+		if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("OpenCodeGoKey after rejected replace = %#v, want unchanged", got)
+		}
+
+		if err := svc.ReplaceOpenCodeGoKeys(nil); err != nil {
+			t.Fatalf("ReplaceOpenCodeGoKeys(nil) error = %v, want nil", err)
+		}
+		if len(cfg.OpenCodeGoKey) != 0 {
+			t.Fatalf("OpenCodeGoKey after explicit clear = %#v, want empty", cfg.OpenCodeGoKey)
+		}
+	})
+
+	t.Run("cline", func(t *testing.T) {
+		cfg := &config.Config{ClineKey: []config.ClineKey{{APIKey: "existing"}}}
+		svc := NewService(cfg, nil)
+
+		err := svc.ReplaceClineKeys([]config.ClineKey{{Name: "empty"}})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("ReplaceClineKeys() error = %v, want api-key required", err)
+		}
+		if got := cfg.ClineKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("ClineKey after rejected replace = %#v, want unchanged", got)
+		}
+
+		if err := svc.ReplaceClineKeys(nil); err != nil {
+			t.Fatalf("ReplaceClineKeys(nil) error = %v, want nil", err)
+		}
+		if len(cfg.ClineKey) != 0 {
+			t.Fatalf("ClineKey after explicit clear = %#v, want empty", cfg.ClineKey)
+		}
+	})
+
+	t.Run("ollama cloud", func(t *testing.T) {
+		cfg := &config.Config{OllamaCloudKey: []config.OllamaCloudKey{{APIKey: "existing"}}}
+		svc := NewService(cfg, nil)
+
+		err := svc.ReplaceOllamaCloudKeys([]config.OllamaCloudKey{{Name: "empty"}})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("ReplaceOllamaCloudKeys() error = %v, want api-key required", err)
+		}
+		if got := cfg.OllamaCloudKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("OllamaCloudKey after rejected replace = %#v, want unchanged", got)
+		}
+
+		if err := svc.ReplaceOllamaCloudKeys(nil); err != nil {
+			t.Fatalf("ReplaceOllamaCloudKeys(nil) error = %v, want nil", err)
+		}
+		if len(cfg.OllamaCloudKey) != 0 {
+			t.Fatalf("OllamaCloudKey after explicit clear = %#v, want empty", cfg.OllamaCloudKey)
+		}
+	})
+}
+
+func TestExtendedProviderPatchRejectsEmptyAPIKeyWithoutDeleting(t *testing.T) {
+	empty := " "
+
+	t.Run("opencode go", func(t *testing.T) {
+		cfg := &config.Config{OpenCodeGoKey: []config.OpenCodeGoKey{{APIKey: "existing", Name: "go"}}}
+		svc := NewService(cfg, nil)
+		index := 0
+
+		err := svc.PatchOpenCodeGoKey(&index, nil, nil, OpenCodeGoPatch{APIKey: &empty})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("PatchOpenCodeGoKey() error = %v, want api-key required", err)
+		}
+		if got := cfg.OpenCodeGoKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("OpenCodeGoKey after rejected patch = %#v, want unchanged", got)
+		}
+	})
+
+	t.Run("cline", func(t *testing.T) {
+		cfg := &config.Config{ClineKey: []config.ClineKey{{APIKey: "existing", Name: "cline"}}}
+		svc := NewService(cfg, nil)
+		index := 0
+
+		err := svc.PatchClineKey(&index, nil, nil, ClinePatch{APIKey: &empty})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("PatchClineKey() error = %v, want api-key required", err)
+		}
+		if got := cfg.ClineKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("ClineKey after rejected patch = %#v, want unchanged", got)
+		}
+	})
+
+	t.Run("ollama cloud", func(t *testing.T) {
+		cfg := &config.Config{OllamaCloudKey: []config.OllamaCloudKey{{APIKey: "existing", Name: "ollama"}}}
+		svc := NewService(cfg, nil)
+		index := 0
+
+		err := svc.PatchOllamaCloudKey(&index, nil, nil, OllamaCloudPatch{APIKey: &empty})
+		if !errors.Is(err, ErrProviderAPIKeyRequired) {
+			t.Fatalf("PatchOllamaCloudKey() error = %v, want api-key required", err)
+		}
+		if got := cfg.OllamaCloudKey; len(got) != 1 || got[0].APIKey != "existing" {
+			t.Fatalf("OllamaCloudKey after rejected patch = %#v, want unchanged", got)
+		}
+	})
+}
+
+func TestClineKeysRejectNonClinePassModelsButAllowCrossProviderFallback(t *testing.T) {
 	cfg := &config.Config{
 		ClineKey: []config.ClineKey{{
 			APIKey: "existing",
@@ -439,21 +571,23 @@ func TestClineKeysRejectNonClinePassModels(t *testing.T) {
 		Models: []config.ClineModel{{
 			Name: " glm-5.2 ",
 		}},
+		ExcludedModels:      []string{"cline-pass/minimax-m3", "*"},
+		VisionFallbackModel: "cline-pass/mimo-v2.5-pro",
 	}})
-	if err == nil || !strings.Contains(err.Error(), "cline models contains invalid model") {
-		t.Fatalf("ReplaceClineKeys() error = %v, want invalid cline model error", err)
+	if err == nil {
+		t.Fatal("ReplaceClineKeys() error = nil, want invalid non-ClinePass model error")
 	}
 	if got := cfg.ClineKey; len(got) != 1 || got[0].APIKey != "existing" || got[0].Models[0].Name != "cline-pass/glm-5.2" {
 		t.Fatalf("ClineKey after rejected replace = %#v, want unchanged existing entry", got)
 	}
 
-	badFallback := "qwen3.5-plus"
-	err = svc.PatchClineKey(nil, stringPtr("existing"), nil, ClinePatch{VisionFallback: &badFallback})
-	if err == nil || !strings.Contains(err.Error(), "cline vision-fallback-model contains invalid model") {
-		t.Fatalf("PatchClineKey(vision-fallback-model) error = %v, want invalid cline model error", err)
+	crossProviderFallback := "qwen3.5-plus"
+	err = svc.PatchClineKey(nil, stringPtr("existing"), nil, ClinePatch{VisionFallback: &crossProviderFallback})
+	if err != nil {
+		t.Fatalf("PatchClineKey(vision-fallback-model) error = %v, want nil", err)
 	}
-	if got := cfg.ClineKey[0].VisionFallbackModel; got != "" {
-		t.Fatalf("ClineKey vision fallback after rejected patch = %q, want unchanged empty value", got)
+	if got := cfg.ClineKey[0].VisionFallbackModel; got != "qwen3.5-plus" {
+		t.Fatalf("ClineKey vision fallback after patch = %q, want cross-provider fallback", got)
 	}
 
 	validExcluded := []string{"*", " cline-pass/minimax-m3 "}
@@ -467,8 +601,84 @@ func TestClineKeysRejectNonClinePassModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PatchClineKey(valid models) error = %v, want nil", err)
 	}
-	if got := cfg.ClineKey[0]; got.Models[0].Name != "cline-pass/qwen3.7-max" || got.ExcludedModels[0] != "*" || got.ExcludedModels[1] != "cline-pass/minimax-m3" || got.VisionFallbackModel != "cline-pass/mimo-v2.5-pro" {
+	if got := cfg.ClineKey[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*"}) || got.VisionFallbackModel != "cline-pass/mimo-v2.5-pro" {
 		t.Fatalf("ClineKey after valid patch = %#v", got)
+	}
+}
+
+func TestModelAccessProviderPatchDisabledAndClearExcludedModels(t *testing.T) {
+	cfg := &config.Config{
+		OpenCodeGoKey: []config.OpenCodeGoKey{{
+			APIKey:         "sk-opencode",
+			ExcludedModels: []string{"*"},
+			Models:         []config.OpenCodeGoModel{{Name: "qwen3.5-plus"}},
+		}},
+		ClineKey: []config.ClineKey{{
+			APIKey:         "sk-cline",
+			ExcludedModels: []string{"*"},
+			Models:         []config.ClineModel{{Name: "cline-pass/glm-5.2"}},
+		}},
+		OllamaCloudKey: []config.OllamaCloudKey{{
+			APIKey:         "sk-ollama",
+			ExcludedModels: []string{"*"},
+			Models:         []config.OllamaCloudModel{{Name: "gpt-oss:120b"}},
+		}},
+	}
+	svc := NewService(cfg, nil)
+	index := 0
+	disabled := true
+	clearExcluded := []string{}
+
+	if err := svc.PatchOpenCodeGoKey(&index, nil, nil, OpenCodeGoPatch{Disabled: &disabled, ExcludedModels: &clearExcluded}); err != nil {
+		t.Fatalf("PatchOpenCodeGoKey() error = %v, want nil", err)
+	}
+	if got := cfg.OpenCodeGoKey[0]; !got.Disabled || len(got.ExcludedModels) != 0 {
+		t.Fatalf("OpenCodeGoKey after patch = %#v, want disabled with cleared excluded models", got)
+	}
+
+	if err := svc.PatchClineKey(&index, nil, nil, ClinePatch{Disabled: &disabled, ExcludedModels: &clearExcluded}); err != nil {
+		t.Fatalf("PatchClineKey() error = %v, want nil", err)
+	}
+	if got := cfg.ClineKey[0]; !got.Disabled || len(got.ExcludedModels) != 0 {
+		t.Fatalf("ClineKey after patch = %#v, want disabled with cleared excluded models", got)
+	}
+
+	if err := svc.PatchOllamaCloudKey(&index, nil, nil, OllamaCloudPatch{Disabled: &disabled, ExcludedModels: &clearExcluded}); err != nil {
+		t.Fatalf("PatchOllamaCloudKey() error = %v, want nil", err)
+	}
+	if got := cfg.OllamaCloudKey[0]; !got.Disabled || len(got.ExcludedModels) != 0 {
+		t.Fatalf("OllamaCloudKey after patch = %#v, want disabled with cleared excluded models", got)
+	}
+}
+
+func TestModelAccessProviderGetHidesStaleModelsWhenAllAccessDisabled(t *testing.T) {
+	cfg := &config.Config{
+		OpenCodeGoKey: []config.OpenCodeGoKey{{
+			APIKey:         "sk-opencode",
+			Models:         []config.OpenCodeGoModel{{Name: "qwen3.5-plus"}},
+			ExcludedModels: []string{"*"},
+		}},
+		ClineKey: []config.ClineKey{{
+			APIKey:         "sk-cline",
+			Models:         []config.ClineModel{{Name: "cline-pass/glm-5.2"}},
+			ExcludedModels: []string{"*"},
+		}},
+		OllamaCloudKey: []config.OllamaCloudKey{{
+			APIKey:         "sk-ollama",
+			Models:         []config.OllamaCloudModel{{Name: "gpt-oss:120b"}},
+			ExcludedModels: []string{"*"},
+		}},
+	}
+	svc := NewService(cfg, nil)
+
+	if got := svc.OpenCodeGoKeys()[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*"}) {
+		t.Fatalf("OpenCodeGoKeys()[0] = %#v, want no stale models", got)
+	}
+	if got := svc.ClineKeys()[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*"}) {
+		t.Fatalf("ClineKeys()[0] = %#v, want no stale models", got)
+	}
+	if got := svc.OllamaCloudKeys()[0]; len(got.Models) != 0 || !reflect.DeepEqual(got.ExcludedModels, []string{"*"}) {
+		t.Fatalf("OllamaCloudKeys()[0] = %#v, want no stale models", got)
 	}
 }
 

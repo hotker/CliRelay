@@ -131,6 +131,24 @@ func TestSanitizeConfigForAPI(t *testing.T) {
 				ExcludedModels: []string{"minimax-m2.5"},
 			},
 		},
+		ClineKey: []config.ClineKey{
+			{
+				APIKey:         "sk-clineXXXX1234000000",
+				Name:           "ClinePass 渠道",
+				BaseURL:        "https://api.cline.bot/api/v1",
+				AuthCookie:     "cline-cookie-secret",
+				ExcludedModels: []string{"cline-pass/old-model"},
+			},
+		},
+		OllamaCloudKey: []config.OllamaCloudKey{
+			{
+				APIKey:         "sk-ollamaXXXX1234000000",
+				Name:           "Ollama Cloud 渠道",
+				BaseURL:        "https://ollama.com",
+				AuthCookie:     "ollama-cookie-secret",
+				ExcludedModels: []string{"old-model"},
+			},
+		},
 		OAuthModelAlias: map[string][]config.OAuthModelAlias{
 			"antigravity": {
 				{Name: "rev19-uic3-1p", Alias: "gemini-2.5-computer-use-preview"},
@@ -219,6 +237,17 @@ func TestSanitizeConfigForAPI(t *testing.T) {
 		}
 		if c.AuthCookie == "auth-cookie-secret" {
 			t.Error("OpenCodeGoKey: auth-cookie not masked")
+		}
+	}
+
+	for _, c := range sanitized.ClineKey {
+		if c.AuthCookie == "cline-cookie-secret" {
+			t.Error("ClineKey: auth-cookie not masked")
+		}
+	}
+	for _, c := range sanitized.OllamaCloudKey {
+		if c.AuthCookie == "ollama-cookie-secret" {
+			t.Error("OllamaCloudKey: auth-cookie not masked")
 		}
 	}
 

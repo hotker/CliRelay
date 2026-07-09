@@ -230,6 +230,9 @@ type OpenCodeGoKey struct {
 	// Name is a human-readable label for this channel.
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 
+	// Disabled prevents this credential from serving requests without changing its model allowlist.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
@@ -264,11 +267,12 @@ type OpenCodeGoKey struct {
 
 // OpenCodeGoModel describes a model explicitly enabled for OpenCode Go routing.
 type OpenCodeGoModel struct {
-	Name string `yaml:"name" json:"name"`
+	Name  string `yaml:"name" json:"name"`
+	Alias string `yaml:"alias,omitempty" json:"alias,omitempty"`
 }
 
 func (m OpenCodeGoModel) GetName() string  { return m.Name }
-func (m OpenCodeGoModel) GetAlias() string { return "" }
+func (m OpenCodeGoModel) GetAlias() string { return m.Alias }
 
 const DefaultClineBaseURL = "https://api.cline.bot/api/v1"
 
@@ -278,6 +282,9 @@ type ClineKey struct {
 
 	// Name is a human-readable label for this channel.
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+
+	// Disabled prevents this credential from serving requests without changing its model allowlist.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 
 	// Priority controls selection preference when multiple credentials match.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
@@ -305,6 +312,9 @@ type ClineKey struct {
 
 	// VisionFallbackModel is used for image requests whose requested model lacks vision support.
 	VisionFallbackModel string `yaml:"vision-fallback-model,omitempty" json:"vision-fallback-model,omitempty"`
+
+	// AuthCookie stores the Cline dashboard cookie used for usage checks.
+	AuthCookie string `yaml:"-" json:"auth-cookie,omitempty"`
 }
 
 type ClineModel struct {
@@ -314,3 +324,58 @@ type ClineModel struct {
 
 func (m ClineModel) GetName() string  { return m.Name }
 func (m ClineModel) GetAlias() string { return m.Alias }
+
+const DefaultOllamaCloudBaseURL = "https://ollama.com"
+
+// OllamaCloudKey represents an Ollama Cloud API key.
+type OllamaCloudKey struct {
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// Name is a human-readable label for this channel.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+
+	// Disabled prevents this credential from serving requests without changing its model allowlist.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+
+	// Priority controls selection preference when multiple credentials match.
+	// Higher values are preferred; defaults to 0.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
+
+	// Prefix optionally namespaces models for this credential.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// BaseURL is the Ollama API host. Defaults to DefaultOllamaCloudBaseURL.
+	BaseURL string `yaml:"base-url,omitempty" json:"base-url,omitempty"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// ProxyID references a reusable proxy-pool entry. When valid, it takes precedence over ProxyURL.
+	ProxyID string `yaml:"proxy-id,omitempty" json:"proxy-id,omitempty"`
+
+	// Models defines upstream Ollama model IDs and optional client-facing aliases.
+	Models []OllamaCloudModel `yaml:"models,omitempty" json:"models,omitempty"`
+
+	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// ExcludedModels lists model IDs that should be excluded for this provider.
+	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// VisionFallbackModel is used for image requests whose requested model lacks vision support.
+	VisionFallbackModel string `yaml:"vision-fallback-model,omitempty" json:"vision-fallback-model,omitempty"`
+
+	// AuthCookie stores the Ollama dashboard cookie used for usage checks.
+	AuthCookie string `yaml:"-" json:"auth-cookie,omitempty"`
+}
+
+func (k OllamaCloudKey) GetAPIKey() string  { return k.APIKey }
+func (k OllamaCloudKey) GetBaseURL() string { return k.BaseURL }
+
+type OllamaCloudModel struct {
+	Name  string `yaml:"name" json:"name"`
+	Alias string `yaml:"alias,omitempty" json:"alias,omitempty"`
+}
+
+func (m OllamaCloudModel) GetName() string  { return m.Name }
+func (m OllamaCloudModel) GetAlias() string { return m.Alias }

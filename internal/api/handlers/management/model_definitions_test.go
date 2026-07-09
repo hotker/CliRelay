@@ -41,6 +41,27 @@ func withClineRecommendedModelsServer(t *testing.T, status int, body string) {
 	clineRecommendedModelsClient = server.Client()
 }
 
+func withOllamaCloudModelsServer(t *testing.T, status int, body string) {
+	t.Helper()
+	previousURL := ollamaCloudModelsURL
+	previousClient := ollamaCloudModelsClient
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		ollamaCloudModelsURL = previousURL
+		ollamaCloudModelsClient = previousClient
+	})
+	ollamaCloudModelsURL = server.URL + "/v1/models"
+	ollamaCloudModelsClient = server.Client()
+}
+
 func TestGetStaticModelDefinitionsUsesClineRecommendedModels(t *testing.T) {
 	withClineRecommendedModelsServer(t, http.StatusOK, `{
 		"clinePass": [
@@ -97,4 +118,38 @@ func TestGetStaticModelDefinitionsFallsBackToClineStaticModels(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected static fallback to include cline-pass/glm-5.2, got %+v", payload.Models)
+}
+
+func TestGetStaticModelDefinitionsUsesOllamaCloudModelsAPI(t *testing.T) {
+	withOllamaCloudModelsServer(t, http.StatusOK, `{
+		"object": "list",
+		"data": [
+			{"id": "gpt-oss:120b", "object": "model", "created": 1, "owned_by": "ollama"},
+			{"id": " ", "object": "model"}
+		]
+	}`)
+	h := NewHandler(&config.Config{}, "", nil)
+
+	rec := performModelDefinitionsRequest(h.GetStaticModelDefinitions, "ollama-cloud")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Models []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+			OwnedBy     string `json:"owned_by"`
+			Type        string `json:"type"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(payload.Models) != 1 {
+		t.Fatalf("expected one remote model, got %+v", payload.Models)
+	}
+	model := payload.Models[0]
+	if model.ID != "gpt-oss:120b" || model.DisplayName != "gpt-oss:120b" || model.OwnedBy != "ollama" || model.Type != "ollama-cloud" {
+		t.Fatalf("unexpected model payload: %+v", model)
+	}
 }

@@ -106,6 +106,10 @@ func (m *Manager) rebuildAPIKeyModelAliasLocked(cfg *runtimeConfigSnapshot) {
 			if entry := resolveClineAPIKeyConfig(cfg, auth); entry != nil {
 				compileAPIKeyModelAliasForModels(byAlias, entry.Models)
 			}
+		case "ollama-cloud":
+			if entry := resolveOllamaCloudAPIKeyConfig(cfg, auth); entry != nil {
+				compileAPIKeyModelAliasForModels(byAlias, entry.Models)
+			}
 		case "bedrock":
 			if entry := resolveBedrockAPIKeyConfig(cfg, auth); entry != nil {
 				compileAPIKeyModelAliasForModels(byAlias, entry.Models)

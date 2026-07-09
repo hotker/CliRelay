@@ -17,17 +17,17 @@ import (
 // - Responsibility: turn registry state plus stored capabilities into management-facing availability DTOs.
 func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw string) map[string]any {
 	modelRegistry := registry.GetGlobalRegistry()
-	allModels := s.effectiveModels(modelRegistry.GetAvailableModels("openai"), allowedChannelsRaw, allowedGroupsRaw)
+	allModels := s.effectiveModels(managementVisibleModels(modelRegistry), allowedChannelsRaw, allowedGroupsRaw)
 	authByID := s.authByID()
 	usesMappedOwners := false
 	var ownerMappings map[string]string
 	var ownerKeys map[string]bool
 	if shouldUseDefaultMappedOwnerScope(allowedChannelsRaw, allowedGroupsRaw) {
-		if rows, keys, ok := s.defaultMappedOwnerRows(); ok {
+		if rows, keys, configuredModelKeys, ok := s.defaultMappedOwnerRows(); ok {
 			usesMappedOwners = true
 			ownerKeys = keys
 			ownerMappings = authGroupOwnerMappingMap()
-			allModels = withDefaultMappedOwnerRows(modelRegistry, allModels, rows, ownerKeys, authByID, ownerMappings)
+			allModels = withDefaultMappedOwnerRows(modelRegistry, allModels, rows, ownerKeys, configuredModelKeys, authByID, ownerMappings)
 		}
 	}
 
@@ -52,9 +52,7 @@ func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw st
 		if ownedBy, exists := model["owned_by"]; exists {
 			entry["owned_by"] = ownedBy
 		}
-		row, hasConfig := configByID[strings.ToLower(id)]
-		modelOwnedByMappedOwner := hasConfig && row.Enabled && ownerKeys[normalizeModelOwnerKey(row.OwnedBy)]
-		if sources := s.modelSourceEntries(modelRegistry, id, authByID, ownerMappings, ownerKeys, modelOwnedByMappedOwner); len(sources) > 0 {
+		if sources := s.modelSourceEntries(modelRegistry, id, authByID, ownerMappings, ownerKeys); len(sources) > 0 {
 			entry["sources"] = sources
 		}
 		if row, ok := configByID[strings.ToLower(id)]; ok {
@@ -97,7 +95,7 @@ func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw st
 
 func (s *Service) Models(allowedChannelsRaw, allowedGroupsRaw string) map[string]any {
 	modelRegistry := registry.GetGlobalRegistry()
-	allModels := s.effectiveModels(modelRegistry.GetAvailableModels("openai"), allowedChannelsRaw, allowedGroupsRaw)
+	allModels := s.effectiveModels(managementVisibleModels(modelRegistry), allowedChannelsRaw, allowedGroupsRaw)
 
 	pricingMap := usage.GetAllModelPricing()
 	filteredModels := make([]map[string]any, len(allModels))
@@ -131,6 +129,71 @@ func (s *Service) Models(allowedChannelsRaw, allowedGroupsRaw string) map[string
 		"object": "list",
 		"data":   filteredModels,
 	}
+}
+
+func managementVisibleModels(modelRegistry *registry.ModelRegistry) []map[string]any {
+	if modelRegistry == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	add := func(model map[string]any) {
+		id, _ := model["id"].(string)
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, model)
+	}
+	for _, model := range modelRegistry.GetAvailableModels("openai") {
+		add(model)
+	}
+	for _, provider := range []string{"opencode-go", "cline", "ollama-cloud"} {
+		for _, info := range modelRegistry.GetAvailableModelsByProvider(provider) {
+			add(registryModelInfoAsOpenAIModel(info))
+		}
+	}
+	return out
+}
+
+func registryModelInfoAsOpenAIModel(info *registry.ModelInfo) map[string]any {
+	if info == nil {
+		return nil
+	}
+	model := map[string]any{
+		"id":       info.ID,
+		"object":   "model",
+		"owned_by": info.OwnedBy,
+	}
+	if info.Created > 0 {
+		model["created"] = info.Created
+	}
+	if info.Type != "" {
+		model["type"] = info.Type
+	}
+	if info.DisplayName != "" {
+		model["display_name"] = info.DisplayName
+	}
+	if info.Version != "" {
+		model["version"] = info.Version
+	}
+	if info.Description != "" {
+		model["description"] = info.Description
+	}
+	if info.ContextLength > 0 {
+		model["context_length"] = info.ContextLength
+	}
+	if info.MaxCompletionTokens > 0 {
+		model["max_completion_tokens"] = info.MaxCompletionTokens
+	}
+	if len(info.SupportedParameters) > 0 {
+		model["supported_parameters"] = info.SupportedParameters
+	}
+	return model
 }
 
 func (s *Service) effectiveModels(models []map[string]any, allowedChannelsRaw, allowedGroupsRaw string) []map[string]any {
@@ -252,22 +315,26 @@ func shouldUseDefaultMappedOwnerScope(allowedChannelsRaw, allowedGroupsRaw strin
 	return strings.TrimSpace(allowedChannelsRaw) == "" && strings.TrimSpace(allowedGroupsRaw) == ""
 }
 
-func (s *Service) defaultMappedOwnerRows() ([]usage.ModelConfigRow, map[string]bool, bool) {
+func (s *Service) defaultMappedOwnerRows() ([]usage.ModelConfigRow, map[string]bool, map[string]bool, bool) {
 	ownerKeys := s.defaultMappedOwnerKeys()
 	if len(ownerKeys) == 0 {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	rows := modelconfigsettings.ListAllConfigs()
 	out := make([]usage.ModelConfigRow, 0, len(rows))
+	configuredModelKeys := make(map[string]bool, len(rows))
 	for _, row := range rows {
 		if !row.Enabled {
 			continue
+		}
+		if key := strings.ToLower(strings.TrimSpace(row.ModelID)); key != "" {
+			configuredModelKeys[key] = true
 		}
 		if ownerKeys[normalizeModelOwnerKey(row.OwnedBy)] {
 			out = append(out, row)
 		}
 	}
-	return out, ownerKeys, true
+	return out, ownerKeys, configuredModelKeys, true
 }
 
 func withDefaultMappedOwnerRows(
@@ -275,18 +342,20 @@ func withDefaultMappedOwnerRows(
 	models []map[string]any,
 	rows []usage.ModelConfigRow,
 	ownerKeys map[string]bool,
+	configuredModelKeys map[string]bool,
 	authByID map[string]*coreauth.Auth,
 	ownerMappings map[string]string,
 ) []map[string]any {
 	out := make([]map[string]any, 0, len(models)+len(rows))
 	seen := make(map[string]struct{}, len(models)+len(rows))
+	rowModelKeys := mappedOwnerRowModelKeys(rows, ownerKeys)
 	for _, model := range models {
 		id, _ := model["id"].(string)
 		key := strings.ToLower(strings.TrimSpace(id))
 		if key == "" {
 			continue
 		}
-		if registryModelCoveredByMappedOwners(modelRegistry, id, authByID, ownerMappings, ownerKeys) {
+		if registryModelCoveredByMappedOwners(modelRegistry, id, authByID, ownerMappings, ownerKeys, configuredModelKeys, rowModelKeys) {
 			continue
 		}
 		if _, exists := seen[key]; exists {
@@ -300,11 +369,27 @@ func withDefaultMappedOwnerRows(
 		if key == "" {
 			continue
 		}
+		// DB-backed model catalog rows are management-authoritative. A newly
+		// added owner-mapped model may not have a runtime registry source until a
+		// provider advertises it, but the management UI still needs it in default
+		// availability so system/default model lists and route editors can select it.
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
 		out = append(out, modelConfigRowAsOpenAIModel(row))
+	}
+	return out
+}
+
+func mappedOwnerRowModelKeys(rows []usage.ModelConfigRow, ownerKeys map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		key := strings.ToLower(strings.TrimSpace(row.ModelID))
+		if key == "" || !row.Enabled || !ownerKeys[normalizeModelOwnerKey(row.OwnedBy)] {
+			continue
+		}
+		out[key] = true
 	}
 	return out
 }
@@ -315,9 +400,17 @@ func registryModelCoveredByMappedOwners(
 	authByID map[string]*coreauth.Auth,
 	ownerMappings map[string]string,
 	ownerKeys map[string]bool,
+	configuredModelKeys map[string]bool,
+	rowModelKeys map[string]bool,
 ) bool {
 	if modelRegistry == nil || len(ownerMappings) == 0 || len(ownerKeys) == 0 {
 		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(modelID))
+	if !configuredModelKeys[key] && !rowModelKeys[key] {
+		if registryModelOnlyHasDynamicProviderSources(modelRegistry, modelID, authByID) {
+			return false
+		}
 	}
 	sources := modelRegistry.GetModelClientSources(modelID)
 	if len(sources) == 0 {
@@ -329,6 +422,27 @@ func registryModelCoveredByMappedOwners(
 		}
 		owner := mappedOwnerForSource(source, authByID, ownerMappings)
 		if owner == "" || !ownerKeys[owner] {
+			return false
+		}
+	}
+	return true
+}
+
+func registryModelOnlyHasDynamicProviderSources(modelRegistry *registry.ModelRegistry, modelID string, authByID map[string]*coreauth.Auth) bool {
+	sources := modelRegistry.GetModelClientSources(modelID)
+	if len(sources) == 0 {
+		return false
+	}
+	for _, source := range sources {
+		provider := strings.ToLower(strings.TrimSpace(source.Provider))
+		if auth := authByID[strings.TrimSpace(source.ClientID)]; auth != nil && strings.TrimSpace(auth.Provider) != "" {
+			provider = strings.ToLower(strings.TrimSpace(auth.Provider))
+		}
+		// These config-backed providers publish their serviceable models from runtime model lists,
+		// so a missing system model-config row must not hide the registry model.
+		switch provider {
+		case "opencode-go", "cline", "ollama-cloud":
+		default:
 			return false
 		}
 	}
@@ -425,7 +539,6 @@ func (s *Service) modelSourceEntries(
 	authByID map[string]*coreauth.Auth,
 	ownerMappings map[string]string,
 	ownerKeys map[string]bool,
-	modelOwnedByMappedOwner bool,
 ) []map[string]any {
 	if modelRegistry == nil {
 		return nil
@@ -436,8 +549,15 @@ func (s *Service) modelSourceEntries(
 	}
 	out := make([]map[string]any, 0, len(rawSources))
 	seen := make(map[string]struct{}, len(rawSources))
+	hasExplicitConfigSource := false
 	for _, raw := range rawSources {
-		if !modelOwnedByMappedOwner && sourceCoveredByMappedOwners(raw, authByID, ownerMappings, ownerKeys) {
+		if sourceHasExplicitConfigModels(raw, authByID) {
+			hasExplicitConfigSource = true
+			break
+		}
+	}
+	for _, raw := range rawSources {
+		if hasExplicitConfigSource && sourceCoveredByMappedOwners(raw, authByID, ownerMappings, ownerKeys) {
 			continue
 		}
 		clientID := strings.TrimSpace(raw.ClientID)

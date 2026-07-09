@@ -151,7 +151,18 @@ func sanitizeConfigForAPI(cfg *config.Config) *config.Config {
 		copy.ClineKey[i].Name = maskName(copy.ClineKey[i].Name)
 		copy.ClineKey[i].BaseURL = maskBaseURL(copy.ClineKey[i].BaseURL)
 		copy.ClineKey[i].ProxyURL = maskBaseURL(copy.ClineKey[i].ProxyURL)
+		copy.ClineKey[i].AuthCookie = maskKey(copy.ClineKey[i].AuthCookie)
 		copy.ClineKey[i].ExcludedModels = nil
+	}
+
+	// Mask Ollama Cloud API keys, names, URLs, and exclusions
+	for i := range copy.OllamaCloudKey {
+		copy.OllamaCloudKey[i].APIKey = maskKey(copy.OllamaCloudKey[i].APIKey)
+		copy.OllamaCloudKey[i].Name = maskName(copy.OllamaCloudKey[i].Name)
+		copy.OllamaCloudKey[i].BaseURL = maskBaseURL(copy.OllamaCloudKey[i].BaseURL)
+		copy.OllamaCloudKey[i].ProxyURL = maskBaseURL(copy.OllamaCloudKey[i].ProxyURL)
+		copy.OllamaCloudKey[i].AuthCookie = maskKey(copy.OllamaCloudKey[i].AuthCookie)
+		copy.OllamaCloudKey[i].ExcludedModels = nil
 	}
 
 	// Mask OpenAI compatibility API keys, names, URLs, and models

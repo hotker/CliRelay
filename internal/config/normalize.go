@@ -226,7 +226,10 @@ func (cfg *Config) SanitizeOpenCodeGoKeys() {
 		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.Models = NormalizeOpenCodeGoModels(entry.Models)
-		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		entry.ExcludedModels = NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
+		if IsProviderModelAccessDisabledAll(entry.ExcludedModels) {
+			entry.Models = nil
+		}
 		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
 		entry.WorkspaceID = strings.TrimSpace(entry.WorkspaceID)
 		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
@@ -251,7 +254,8 @@ func NormalizeOpenCodeGoModels(models []OpenCodeGoModel) []OpenCodeGoModel {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, OpenCodeGoModel{Name: name})
+		alias := strings.TrimSpace(models[i].Alias)
+		out = append(out, OpenCodeGoModel{Name: name, Alias: alias})
 	}
 	return out
 }
@@ -280,8 +284,12 @@ func (cfg *Config) SanitizeClineKeys() {
 		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.Models = NormalizeClineModels(entry.Models)
-		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		entry.ExcludedModels = NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
+		if IsProviderModelAccessDisabledAll(entry.ExcludedModels) {
+			entry.Models = nil
+		}
 		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
 		out = append(out, entry)
 	}
 	cfg.ClineKey = out
@@ -313,6 +321,116 @@ func normalizeClineBaseURL(baseURL string) string {
 	base := strings.TrimSpace(baseURL)
 	if base == "" {
 		return DefaultClineBaseURL
+	}
+	return strings.TrimSuffix(base, "/")
+}
+
+// SanitizeOllamaCloudKeys deduplicates and normalizes Ollama Cloud credentials.
+func (cfg *Config) SanitizeOllamaCloudKeys() {
+	if cfg == nil || len(cfg.OllamaCloudKey) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(cfg.OllamaCloudKey))
+	out := make([]OllamaCloudKey, 0, len(cfg.OllamaCloudKey))
+	for i := range cfg.OllamaCloudKey {
+		entry := cfg.OllamaCloudKey[i]
+		entry.APIKey = strings.TrimSpace(entry.APIKey)
+		if entry.APIKey == "" {
+			continue
+		}
+		entry.BaseURL = normalizeOllamaCloudBaseURL(entry.BaseURL)
+		seenKey := entry.APIKey + "\x00" + entry.BaseURL
+		if _, exists := seen[seenKey]; exists {
+			continue
+		}
+		seen[seenKey] = struct{}{}
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.Models = NormalizeOllamaCloudModels(entry.Models)
+		entry.ExcludedModels = NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
+		if IsProviderModelAccessDisabledAll(entry.ExcludedModels) {
+			entry.Models = nil
+		}
+		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		entry.AuthCookie = strings.TrimSpace(entry.AuthCookie)
+		out = append(out, entry)
+	}
+	cfg.OllamaCloudKey = out
+}
+
+func NormalizeOllamaCloudModels(models []OllamaCloudModel) []OllamaCloudModel {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]OllamaCloudModel, 0, len(models))
+	for i := range models {
+		name := strings.TrimSpace(models[i].Name)
+		if name == "" {
+			continue
+		}
+		alias := strings.TrimSpace(models[i].Alias)
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, OllamaCloudModel{Name: name, Alias: alias})
+	}
+	return out
+}
+
+// NormalizeExcludedModelsForConfiguredModels repairs legacy data where every
+// explicitly configured model is also excluded, leaving the key unusable.
+func NormalizeExcludedModelsForConfiguredModels(excluded []string, modelNames []string) []string {
+	if len(excluded) == 0 || len(modelNames) == 0 {
+		return excluded
+	}
+	configured := make(map[string]struct{}, len(modelNames))
+	for _, name := range modelNames {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key != "" {
+			configured[key] = struct{}{}
+		}
+	}
+	if len(configured) < 2 {
+		return excluded
+	}
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, model := range excluded {
+		key := strings.ToLower(strings.TrimSpace(model))
+		if key == "*" {
+			return excluded
+		}
+		if key != "" {
+			excludedSet[key] = struct{}{}
+		}
+	}
+	for model := range configured {
+		if _, exists := excludedSet[model]; !exists {
+			return excluded
+		}
+	}
+	out := excluded[:0]
+	for _, model := range excluded {
+		if _, exists := configured[strings.ToLower(strings.TrimSpace(model))]; exists {
+			continue
+		}
+		out = append(out, model)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeOllamaCloudBaseURL(baseURL string) string {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		return DefaultOllamaCloudBaseURL
 	}
 	return strings.TrimSuffix(base, "/")
 }
@@ -406,6 +524,28 @@ func NormalizeExcludedModels(models []string) []string {
 		return nil
 	}
 	return out
+}
+
+// NormalizeProviderModelAccessExcludedModels keeps only the existing disable-all
+// marker. OpenCode Go, ClinePass and Ollama Cloud use `models` as the per-model
+// allowlist; single-model exclusions are legacy dirty data.
+func NormalizeProviderModelAccessExcludedModels(models []string) []string {
+	for _, model := range NormalizeExcludedModels(models) {
+		if model == "*" {
+			return []string{"*"}
+		}
+	}
+	return nil
+}
+
+// IsProviderModelAccessDisabledAll reports whether a dynamic provider has no allowed models.
+func IsProviderModelAccessDisabledAll(models []string) bool {
+	for _, model := range models {
+		if strings.TrimSpace(model) == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeOAuthExcludedModels cleans provider -> excluded models mappings by normalizing provider keys

@@ -23,6 +23,10 @@ const (
 	DefaultGeminiFingerprintUserAgent      = "google-api-nodejs-client/9.15.1"
 	DefaultGeminiFingerprintAPIClient      = "gl-node/22.17.0"
 	DefaultGeminiFingerprintClientMetadata = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
+
+	DefaultXAIFingerprintUserAgent        = "grok-shell/0.2.93 (macos; aarch64)"
+	DefaultXAIFingerprintClientIdentifier = "grok-shell"
+	DefaultXAIFingerprintClientVersion    = "0.2.93"
 )
 
 // IdentityFingerprintConfig groups provider-specific upstream identity settings.
@@ -30,6 +34,7 @@ type IdentityFingerprintConfig struct {
 	Codex  CodexIdentityFingerprintConfig  `yaml:"codex,omitempty" json:"codex,omitempty"`
 	Claude ClaudeIdentityFingerprintConfig `yaml:"claude,omitempty" json:"claude,omitempty"`
 	Gemini GeminiIdentityFingerprintConfig `yaml:"gemini,omitempty" json:"gemini,omitempty"`
+	XAI    XAIIdentityFingerprintConfig    `yaml:"xai,omitempty" json:"xai,omitempty"`
 }
 
 // CodexIdentityFingerprintConfig configures Codex upstream identity headers.
@@ -84,6 +89,16 @@ type GeminiIdentityFingerprintConfig struct {
 	CustomHeaders  map[string]string `yaml:"custom-headers,omitempty" json:"custom-headers,omitempty"`
 }
 
+// XAIIdentityFingerprintConfig configures Grok/xAI upstream identity headers.
+type XAIIdentityFingerprintConfig struct {
+	Enabled            bool              `yaml:"enabled" json:"enabled"`
+	UserAgent          string            `yaml:"user-agent,omitempty" json:"user-agent,omitempty"`
+	ClientIdentifier   string            `yaml:"x-grok-client-identifier,omitempty" json:"x-grok-client-identifier,omitempty"`
+	ClientVersion      string            `yaml:"x-grok-client-version,omitempty" json:"x-grok-client-version,omitempty"`
+	GrokConversationID string            `yaml:"x-grok-conv-id,omitempty" json:"x-grok-conv-id,omitempty"`
+	CustomHeaders      map[string]string `yaml:"custom-headers,omitempty" json:"custom-headers,omitempty"`
+}
+
 // DefaultClaudeIdentityFingerprint returns the recommended Claude Code identity template.
 func DefaultClaudeIdentityFingerprint() ClaudeIdentityFingerprintConfig {
 	cliVersion := DefaultClaudeFingerprintCLIVersion
@@ -113,6 +128,17 @@ func DefaultGeminiIdentityFingerprint() GeminiIdentityFingerprintConfig {
 	}
 }
 
+// DefaultXAIIdentityFingerprint returns the conservative Grok identity template.
+func DefaultXAIIdentityFingerprint() XAIIdentityFingerprintConfig {
+	return XAIIdentityFingerprintConfig{
+		Enabled:          false,
+		UserAgent:        DefaultXAIFingerprintUserAgent,
+		ClientIdentifier: DefaultXAIFingerprintClientIdentifier,
+		ClientVersion:    DefaultXAIFingerprintClientVersion,
+		CustomHeaders:    map[string]string{},
+	}
+}
+
 // SanitizeIdentityFingerprint normalizes provider identity fingerprint config.
 func (cfg *Config) SanitizeIdentityFingerprint() {
 	if cfg == nil {
@@ -121,6 +147,7 @@ func (cfg *Config) SanitizeIdentityFingerprint() {
 	cfg.IdentityFingerprint.Codex = CleanCodexIdentityFingerprint(cfg.IdentityFingerprint.Codex)
 	cfg.IdentityFingerprint.Claude = CleanClaudeIdentityFingerprint(cfg.IdentityFingerprint.Claude)
 	cfg.IdentityFingerprint.Gemini = CleanGeminiIdentityFingerprint(cfg.IdentityFingerprint.Gemini)
+	cfg.IdentityFingerprint.XAI = CleanXAIIdentityFingerprint(cfg.IdentityFingerprint.XAI)
 }
 
 // NormalizeCodexIdentityFingerprint trims user input and applies safe defaults
@@ -265,6 +292,23 @@ func CleanGeminiIdentityFingerprint(in GeminiIdentityFingerprintConfig) GeminiId
 	out.UserAgent = strings.TrimSpace(out.UserAgent)
 	out.APIClient = strings.TrimSpace(out.APIClient)
 	out.ClientMetadata = strings.TrimSpace(out.ClientMetadata)
+	out.CustomHeaders = cleanIdentityFingerprintHeaders(out.CustomHeaders)
+	return out
+}
+
+// NormalizeXAIIdentityFingerprint trims user input while preserving empty fields
+// as "automatic learning" markers.
+func NormalizeXAIIdentityFingerprint(in XAIIdentityFingerprintConfig) XAIIdentityFingerprintConfig {
+	return CleanXAIIdentityFingerprint(in)
+}
+
+// CleanXAIIdentityFingerprint trims explicit overrides while preserving empty fields.
+func CleanXAIIdentityFingerprint(in XAIIdentityFingerprintConfig) XAIIdentityFingerprintConfig {
+	out := in
+	out.UserAgent = strings.TrimSpace(out.UserAgent)
+	out.ClientIdentifier = strings.TrimSpace(out.ClientIdentifier)
+	out.ClientVersion = strings.TrimSpace(out.ClientVersion)
+	out.GrokConversationID = strings.TrimSpace(out.GrokConversationID)
 	out.CustomHeaders = cleanIdentityFingerprintHeaders(out.CustomHeaders)
 	return out
 }

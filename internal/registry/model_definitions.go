@@ -18,11 +18,13 @@ import (
 //   - aistudio
 //   - bedrock
 //   - codex
+//   - xai
 //   - qwen
 //   - iflow
 //   - kimi
 //   - opencode-go
 //   - cline
+//   - ollama-cloud
 //   - antigravity (returns static overrides only)
 func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	key := strings.ToLower(strings.TrimSpace(channel))
@@ -41,6 +43,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetAIStudioModels()
 	case "codex":
 		return GetOpenAIModels()
+	case "xai", "x-ai", "grok":
+		return GetXAIModels()
 	case "qwen":
 		return GetQwenModels()
 	case "iflow":
@@ -51,6 +55,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetOpenCodeGoModels()
 	case "cline":
 		return GetClineModels()
+	case "ollama-cloud":
+		return GetOllamaCloudModels()
 	case "antigravity":
 		cfg := GetAntigravityModelConfig()
 		if len(cfg) == 0 {
@@ -94,11 +100,13 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		GetGeminiCLIModels(),
 		GetAIStudioModels(),
 		GetOpenAIModels(),
+		GetXAIModels(),
 		GetQwenModels(),
 		GetIFlowModels(),
 		GetKimiModels(),
 		GetOpenCodeGoModels(),
 		GetClineModels(),
+		GetOllamaCloudModels(),
 	}
 	for _, models := range allModels {
 		for _, m := range models {

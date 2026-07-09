@@ -7,7 +7,7 @@ func TestBuildCcSwitchCodexModelCatalogUsesRequestModels(t *testing.T) {
 		ClientType:   "codex",
 		DefaultModel: "gpt-5.5",
 		ModelMappings: []CcSwitchModelMappingRow{
-			{RequestModel: "gpt-5.5", TargetModel: "gpt-5.5"},
+			{RequestModel: "gpt-5.5", TargetModel: "gpt-5.5", ContextWindow: 272000},
 			{RequestModel: "deepseek-v4-flash", TargetModel: "deepseek-chat"},
 			{RequestModel: "DeepSeek-V4-Flash", TargetModel: "deepseek-chat"},
 			{RequestModel: "deepseek-v4-pro", TargetModel: "deepseek-reasoner"},
@@ -31,6 +31,14 @@ func TestBuildCcSwitchCodexModelCatalogUsesRequestModels(t *testing.T) {
 		if got[idx] != want[idx] {
 			t.Fatalf("slug[%d] = %q, want %q; all=%#v", idx, got[idx], want[idx], got)
 		}
+	}
+
+	gpt := catalog.Models[0]
+	if gpt.ContextWindow != 272000 {
+		t.Fatalf("gpt-5.5 context_window = %d, want 272000", gpt.ContextWindow)
+	}
+	if gpt.ModelMessages.ContextWindow != 272000 {
+		t.Fatalf("gpt-5.5 model_messages.context_window = %d, want 272000", gpt.ModelMessages.ContextWindow)
 	}
 
 	deepseek := catalog.Models[1]

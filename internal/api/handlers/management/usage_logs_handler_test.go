@@ -154,9 +154,15 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 	var payload struct {
 		Items []struct {
 			ChannelName string `json:"channel_name"`
+			AuthIndex   string `json:"auth_index"`
 		} `json:"items"`
 		Filters struct {
-			Channels []string `json:"channels"`
+			Channels       []string `json:"channels"`
+			ChannelOptions []struct {
+				Value     string `json:"value"`
+				Label     string `json:"label"`
+				AuthIndex string `json:"auth_index"`
+			} `json:"channel_options"`
 		} `json:"filters"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
@@ -165,13 +171,27 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 	if len(payload.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(payload.Items))
 	}
+	// Historical rows keep the channel_name snapshot written at request time.
 	if payload.Items[0].ChannelName != "tabcode-plus" {
 		t.Fatalf("channel_name = %q, want %q", payload.Items[0].ChannelName, "tabcode-plus")
 	}
-	if len(payload.Filters.Channels) != 1 || payload.Filters.Channels[0] != "tabcode-plus" {
-		t.Fatalf("filters.channels = %#v, want [tabcode-plus]", payload.Filters.Channels)
+	// Filter facets use the live auth label / auth_index so renamed channels stay
+	// selectable as one account, while still matching historical rows by index.
+	if len(payload.Filters.ChannelOptions) != 1 {
+		t.Fatalf("channel_options = %#v, want one option", payload.Filters.ChannelOptions)
+	}
+	opt := payload.Filters.ChannelOptions[0]
+	if opt.Label != "tabcode-pro" {
+		t.Fatalf("channel_options[0].label = %q, want tabcode-pro", opt.Label)
+	}
+	if opt.Value != auth.Index || opt.AuthIndex != auth.Index {
+		t.Fatalf("channel_options[0] value/auth_index = %#v, want auth index %q", opt, auth.Index)
+	}
+	if len(payload.Filters.Channels) != 1 || payload.Filters.Channels[0] != "tabcode-pro" {
+		t.Fatalf("filters.channels = %#v, want [tabcode-pro]", payload.Filters.Channels)
 	}
 
+	// Legacy clients can still filter by the historical channel_name string.
 	rec = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel=tabcode-plus", nil)
@@ -186,18 +206,34 @@ func TestGetUsageLogsKeepsStoredChannelNameWhenCurrentAuthNameDiffers(t *testing
 		t.Fatalf("filtered items = %#v, want one tabcode-plus item", payload.Items)
 	}
 
+	// Selecting the live label resolves to auth_index and still returns history.
 	rec = httptest.NewRecorder()
 	c, _ = gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel=tabcode-pro", nil)
 	h.UsageLogs().GetUsageLogs(c)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("mismatched filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
+		t.Fatalf("live-label filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("unmarshal mismatched filtered response: %v", err)
+		t.Fatalf("unmarshal live-label filtered response: %v", err)
 	}
-	if len(payload.Items) != 0 {
-		t.Fatalf("mismatched filtered items = %#v, want none", payload.Items)
+	if len(payload.Items) != 1 || payload.Items[0].AuthIndex != auth.Index {
+		t.Fatalf("live-label filtered items = %#v, want one item for auth %q", payload.Items, auth.Index)
+	}
+
+	// Filtering by auth_index value (new clients) also returns the historical row.
+	rec = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/usage/logs?days=7&page=1&size=50&channel="+auth.Index, nil)
+	h.UsageLogs().GetUsageLogs(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth-index filtered expected status %d, got %d, body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal auth-index filtered response: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ChannelName != "tabcode-plus" {
+		t.Fatalf("auth-index filtered items = %#v, want one tabcode-plus item", payload.Items)
 	}
 }
 

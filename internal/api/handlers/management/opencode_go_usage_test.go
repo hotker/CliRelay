@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -101,6 +102,24 @@ func TestNormalizeOpenCodeGoWorkspaceIDRejectsNamesAndServerIDs(t *testing.T) {
 	}
 }
 
+func TestParseOllamaCloudUsageHTML(t *testing.T) {
+	html := `<html><body>
+		<div>Session usage <strong>0% used</strong><span>Resets in 4 hours.</span></div>
+		<div>Weekly usage <strong>1.6% used</strong><span>Resets in 4 days.</span></div>
+	</body></html>`
+
+	items := parseOllamaCloudUsageHTML(html)
+	if len(items) != 2 {
+		t.Fatalf("usage item count = %d, want 2: %+v", len(items), items)
+	}
+	if items[0].Type != "session" || items[0].Percentage != 0 || items[0].ResetsIn != "4 hours" {
+		t.Fatalf("session item = %+v", items[0])
+	}
+	if items[1].Type != "weekly" || items[1].Percentage != 1.6 || items[1].ResetsIn != "4 days" {
+		t.Fatalf("weekly item = %+v", items[1])
+	}
+}
+
 func TestQueryOpenCodeGoUsageFetchesDashboard(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -192,6 +211,102 @@ func TestQueryOpenCodeGoUsageFetchesHydrationDashboard(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(decoded.Usage) != 3 || decoded.Usage[0].Percentage != 7 || decoded.Usage[2].ResetsIn != "1 day" {
+		t.Fatalf("response = %+v", decoded)
+	}
+}
+
+func TestQueryClineUsageFetchesDashboardAPI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	resetAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/users/me/plan/usage-limits" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Cookie"); got != "session=cline" {
+			t.Fatalf("cookie = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"limits":[{"type":"five_hour","percentUsed":2,"resetsAt":"` + resetAt + `"},{"type":"weekly","percentUsed":3,"resetsAt":"` + resetAt + `"},{"type":"monthly","percentUsed":39,"resetsAt":"` + resetAt + `"}]},"success":true}`))
+	}))
+	defer upstream.Close()
+
+	prevBaseURL := clineUsageAPIBaseURL
+	clineUsageAPIBaseURL = upstream.URL
+	defer func() { clineUsageAPIBaseURL = prevBaseURL }()
+
+	h := &Handler{cfg: &config.Config{
+		ClineKey: []config.ClineKey{{
+			APIKey:     "sk-cline",
+			Name:       "ClinePass",
+			AuthCookie: "Cookie: session=cline",
+		}},
+	}}
+
+	body := []byte(`{"index":0}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/cline-api-key/usage", bytes.NewReader(body))
+
+	h.QueryClineUsage(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+
+	var decoded struct {
+		Usage []openCodeGoUsageItem `json:"usage"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(decoded.Usage) != 3 || decoded.Usage[0].Type != "five_hour" || decoded.Usage[2].Percentage != 39 {
+		t.Fatalf("response = %+v", decoded)
+	}
+}
+
+func TestQueryOllamaCloudUsageFetchesSettingsPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/settings" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Cookie"); got != "ollama_session=ok" {
+			t.Fatalf("cookie = %q", got)
+		}
+		_, _ = w.Write([]byte(`Session usage 0% used Resets in 4 hours. Weekly usage 1.6% used Resets in 4 days.`))
+	}))
+	defer upstream.Close()
+
+	prevSettingsURL := ollamaCloudSettingsURL
+	ollamaCloudSettingsURL = upstream.URL + "/settings"
+	defer func() { ollamaCloudSettingsURL = prevSettingsURL }()
+
+	h := &Handler{cfg: &config.Config{
+		OllamaCloudKey: []config.OllamaCloudKey{{
+			APIKey:     "sk-ollama",
+			Name:       "Ollama Cloud",
+			AuthCookie: "ollama_session=ok",
+		}},
+	}}
+
+	body := []byte(`{"index":0}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/ollama-cloud-api-key/usage", bytes.NewReader(body))
+
+	h.QueryOllamaCloudUsage(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+
+	var decoded struct {
+		Usage []openCodeGoUsageItem `json:"usage"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(decoded.Usage) != 2 || decoded.Usage[0].Type != "session" || decoded.Usage[1].Percentage != 1.6 {
 		t.Fatalf("response = %+v", decoded)
 	}
 }
