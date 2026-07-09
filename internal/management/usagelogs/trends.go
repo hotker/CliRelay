@@ -244,6 +244,9 @@ func primaryWeeklyQuotaKeysForProvider(provider string) []string {
 		return []string{"seven_day"}
 	case "codex", "kimi":
 		return []string{"code_week"}
+	case "xai", "grok":
+		// Matches frontend quota-xai weekly_limit snapshot key.
+		return []string{"weekly_limit"}
 	default:
 		return nil
 	}
