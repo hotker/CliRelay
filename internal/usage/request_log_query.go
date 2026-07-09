@@ -237,7 +237,6 @@ func QueryFiltersForLogs(params LogQueryParams) (FilterOptions, error) {
 	}, nil
 }
 
-
 func (params LogQueryParams) withoutFacet(facet string) LogQueryParams {
 	params.Page = 0
 	params.Size = 0
@@ -765,7 +764,6 @@ func guessProviderFromSource(source string) string {
 	}
 	return source
 }
-
 
 func queryDistinctStatuses(db *sql.DB, params LogQueryParams) ([]string, error) {
 	where, args := buildWhereClause(params)
