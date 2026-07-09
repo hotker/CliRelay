@@ -81,3 +81,41 @@ func TestPostOAuthCallbackReturnsSessionStatusWhenFlowIsNoLongerPending(t *testi
 		t.Fatalf("expected session status in response, got %s", rec.Body.String())
 	}
 }
+
+func TestPostOAuthCallbackAcceptsDirectCodeAndState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	previousStore := oauthSessions
+	oauthSessions = newOAuthSessionStore(time.Minute)
+	t.Cleanup(func() {
+		oauthSessions = previousStore
+	})
+
+	RegisterOAuthSession("xai-state", "xai")
+
+	h := &Handler{
+		cfg: &config.Config{
+			AuthDir: t.TempDir(),
+		},
+	}
+
+	body := []byte(`{"provider":"xai","code":"manual-code","state":"xai-state"}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/oauth-callback", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	h.PostOAuthCallback(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	payload, err := WaitOAuthCallbackFile(h.cfg.AuthDir, "xai", "xai-state", time.Second)
+	if err != nil {
+		t.Fatalf("WaitOAuthCallbackFile() error = %v", err)
+	}
+	if payload["code"] != "manual-code" || payload["state"] != "xai-state" {
+		t.Fatalf("payload = %#v, want manual code and xai-state", payload)
+	}
+}
