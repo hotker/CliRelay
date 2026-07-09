@@ -42,7 +42,6 @@ type LogRow struct {
 	HasContent          bool      `json:"has_content"`
 }
 
-
 // LogQueryParams holds filter/pagination parameters for QueryLogs.
 type LogQueryParams struct {
 	Page            int      // 1-based
@@ -75,9 +74,9 @@ type LogQueryResult struct {
 
 // FilterOptions holds the available filter values for the UI.
 type FilterOptions struct {
-	APIKeys     []string              `json:"api_keys"`
-	APIKeyNames map[string]string     `json:"api_key_names"`
-	Models      []string              `json:"models"`
+	APIKeys     []string          `json:"api_keys"`
+	APIKeyNames map[string]string `json:"api_key_names"`
+	Models      []string          `json:"models"`
 	// Channels is a legacy plain-name list kept for older clients.
 	// Prefer ChannelOptions when both are present.
 	Channels       []string              `json:"channels"`
@@ -94,7 +93,6 @@ type ChannelFilterOption struct {
 	AuthType  string `json:"auth_type,omitempty"` // "oauth" | "api"
 	AuthIndex string `json:"auth_index,omitempty"`
 }
-
 
 // LogStats holds aggregated stats over the filtered result set.
 type LogStats struct {
