@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	serviceapp "github.com/router-for-me/CLIProxyAPI/v6/internal/app/service"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
 	imagegeneration "github.com/router-for-me/CLIProxyAPI/v6/internal/management/imagegeneration"
 	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -61,6 +63,7 @@ type Handler struct {
 	trendCacheMu         sync.Mutex
 	trendCache           map[string]trendCacheEntry
 	imageGeneration      *imagegeneration.Service
+	identityService      *identity.Service
 }
 
 type trendCacheEntry struct {
@@ -95,8 +98,8 @@ func (h *Handler) newImageGenerationService() *imagegeneration.Service {
 	if h == nil {
 		return nil
 	}
-	return imagegeneration.NewService(func(ctx context.Context, payload []byte, alt string) ([]byte, error) {
-		return h.executeImageGenerationTest(ctx, payload, alt)
+	return imagegeneration.NewService(func(ctx context.Context, tenantID string, payload []byte, alt string) ([]byte, error) {
+		return h.executeImageGenerationTestForTenant(ctx, tenantID, payload, alt)
 	}, imageGenerationSystemAPIKey)
 }
 
@@ -218,6 +221,39 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		c.Header("X-CPA-UI-VERSION", currentUIVersion)
 		c.Header("X-CPA-UI-COMMIT", currentUICommit)
 
+		if token := bearerToken(c); strings.HasPrefix(token, "cps_") {
+			service := h.identity()
+			if service == nil {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "identity_unavailable", "message": "identity service unavailable"}})
+				return
+			}
+			principal, err := service.Authenticate(c.Request.Context(), token, c.GetHeader("X-Effective-Tenant-ID"))
+			if err != nil {
+				identityError(c, err)
+				return
+			}
+			if principal.User.MustChangePassword {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "password_change_required", "message": "password change required"}})
+				return
+			}
+			permission := permissionForManagementRequest(c.Request.Method, c.Request.URL.Path)
+			if permission == "" || !principal.Has(permission) {
+				h.recordManagementAudit(c, principal, "denied")
+				identityError(c, identity.ErrPermissionDenied)
+				return
+			}
+			// Some runtime/config stores remain process-global. Non-system tenants may
+			// only use routes whose complete repository and scheduler paths are tenant-scoped.
+			if principal.EffectiveTenant.ID != identity.SystemTenantID && !isTenantScopedManagementPath(c.Request.URL.Path) {
+				h.recordManagementAudit(c, principal, "denied")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "tenant_resource_scope_unavailable", "message": "tenant business resources are not enabled for this tenant"}})
+				return
+			}
+			c.Set(managementPrincipalKey, principal)
+			h.nextWithManagementAudit(c)
+			return
+		}
+
 		clientIP := c.ClientIP()
 		localClient := clientIP == "127.0.0.1" || clientIP == "::1"
 		cfg := h.cfg
@@ -325,7 +361,8 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		if localClient {
 			if lp := h.localPassword; lp != "" {
 				if util.ConstantTimeStringEqual(provided, lp) {
-					c.Next()
+					h.setServicePrincipal(c)
+					h.nextWithManagementAudit(c)
 					return
 				}
 			}
@@ -333,7 +370,8 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 		if envSecret != "" && util.ConstantTimeStringEqual(provided, envSecret) {
 			clearFailures()
-			c.Next()
+			h.setServicePrincipal(c)
+			h.nextWithManagementAudit(c)
 			return
 		}
 
@@ -351,8 +389,9 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		}
 
 		clearFailures()
+		h.setServicePrincipal(c)
 
-		c.Next()
+		h.nextWithManagementAudit(c)
 	}
 }
 
@@ -387,6 +426,23 @@ func (h *Handler) persistRuntimeSetting(c *gin.Context, key string, value any) b
 	if h.onConfigMutated != nil {
 		h.onConfigMutated(cfg)
 	}
+	return true
+}
+
+func (h *Handler) persistRuntimeSettingForTenant(c *gin.Context, key string, value any, cfg *config.Config) bool {
+	tenantID := effectiveTenantID(c)
+	if tenantID == identity.SystemTenantID {
+		return h.persistRuntimeSetting(c, key, value)
+	}
+	if err := usage.UpsertRuntimeSettingForTenant(tenantID, key, value); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save runtime setting: %v", err)})
+		return false
+	}
+	if h.authManager != nil {
+		h.authManager.SetConfigForTenant(tenantID, cfg)
+		serviceapp.RebindTenantExecutors(h.cfg, h.authManager, tenantID, nil)
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
 }
 

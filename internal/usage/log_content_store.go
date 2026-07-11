@@ -260,6 +260,10 @@ func refreshRequestLogContentBytes(q logContentQuerier) {
 }
 
 func insertLogContentTx(tx *sql.Tx, logID int64, timestamp time.Time, inputContent, outputContent, detailContent string) error {
+	return insertLogContentTenantTx(tx, "00000000-0000-0000-0000-000000000001", logID, timestamp, inputContent, outputContent, detailContent)
+}
+
+func insertLogContentTenantTx(tx *sql.Tx, tenantID string, logID int64, timestamp time.Time, inputContent, outputContent, detailContent string) error {
 	if tx == nil || logID < 1 {
 		return nil
 	}
@@ -293,24 +297,23 @@ func insertLogContentTx(tx *sql.Tx, logID int64, timestamp time.Time, inputConte
 		return nil
 	}
 
-	_, err = tx.Exec(
-		`INSERT INTO request_log_content (log_id, timestamp, compression, input_content, output_content, detail_content, session_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(log_id) DO UPDATE SET
+	tenantID = normalizeTenantID(tenantID)
+	conflictTarget := "(log_id)"
+	if usageDriver == "postgres" {
+		conflictTarget = "(tenant_id, log_id)"
+	}
+	query := `INSERT INTO request_log_content (tenant_id, log_id, timestamp, compression, input_content, output_content, detail_content, session_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT` + conflictTarget + ` DO UPDATE SET
+		   tenant_id = excluded.tenant_id,
 		   timestamp = excluded.timestamp,
 		   compression = excluded.compression,
 		   input_content = excluded.input_content,
 		   output_content = excluded.output_content,
 		   detail_content = excluded.detail_content,
-		   session_id = excluded.session_id`,
-		logID,
-		timestamp.UTC().Format(time.RFC3339Nano),
-		requestLogContentCompression,
-		inputCompressed,
-		outputCompressed,
-		detailCompressed,
-		sessionID,
-	)
+		   session_id = excluded.session_id`
+	args := []any{tenantID, logID, timestamp.UTC().Format(time.RFC3339Nano), requestLogContentCompression, inputCompressed, outputCompressed, detailCompressed, sessionID}
+	_, err = tx.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("usage: insert compressed content: %w", err)
 	}

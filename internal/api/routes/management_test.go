@@ -25,7 +25,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 235; got != want {
+	if got, want := len(routes), 255; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 	if got, want := sortedRouteKeys(routes), expectedManagementRoutes(); !slices.Equal(got, want) {
@@ -103,6 +103,26 @@ func diffStrings(want, got []string) []string {
 
 func expectedManagementRoutes() []string {
 	routes := []string{
+		"GET /v0/auth/me",
+		"POST /v0/auth/login",
+		"POST /v0/auth/logout",
+		"PUT /v0/auth/password",
+		"GET /v0/management/permissions",
+		"GET /v0/management/roles",
+		"POST /v0/management/roles",
+		"PUT /v0/management/roles/:id/permissions",
+		"GET /v0/management/tenants",
+		"POST /v0/management/tenants",
+		"PATCH /v0/management/tenants/:id",
+		"DELETE /v0/management/tenants/:id",
+		"GET /v0/management/users",
+		"POST /v0/management/users",
+		"POST /v0/management/users/:id/reset-password",
+		"PATCH /v0/management/users/:id",
+		"DELETE /v0/management/users/:id",
+		"PUT /v0/management/users/:id/roles",
+		"GET /v0/management/audit-logs",
+		"DELETE /v0/management/roles/:id",
 		"DELETE /v0/management/ampcode/model-mappings",
 		"DELETE /v0/management/ampcode/upstream-api-key",
 		"DELETE /v0/management/ampcode/upstream-api-keys",

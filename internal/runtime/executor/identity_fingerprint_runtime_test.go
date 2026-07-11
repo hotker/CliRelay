@@ -877,3 +877,52 @@ func BenchmarkCodexIdentityFingerprintHotPathCached(b *testing.B) {
 		}
 	}
 }
+
+func TestTenantCredentialCannotUseLearnedIdentityFingerprints(t *testing.T) {
+	resetIdentityFingerprintRuntimeStateForTest()
+	t.Cleanup(resetIdentityFingerprintRuntimeStateForTest)
+
+	var observeCalls atomic.Int32
+	var listCalls atomic.Int32
+	runtimeIdentityFingerprintStoreFuncMu.Lock()
+	runtimeObserveIdentityFingerprint = func(input identityfingerprint.LearnInput) (*identityfingerprint.LearnedRecord, identityfingerprint.MergeResult, error) {
+		observeCalls.Add(1)
+		return nil, identityfingerprint.MergeResult{}, nil
+	}
+	runtimeListCodexIdentityFingerprintProfiles = func(provider identityfingerprint.Provider, accountKey string) ([]identityfingerprint.LearnedRecord, error) {
+		listCalls.Add(1)
+		return nil, nil
+	}
+	runtimeIdentityFingerprintStoreFuncMu.Unlock()
+
+	auth := &cliproxyauth.Auth{
+		ID:       "tenant-codex-auth",
+		TenantID: "11111111-1111-1111-1111-111111111111",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "codex-token",
+			"account_id":   "tenant-account",
+		},
+	}
+	inbound := http.Header{
+		"User-Agent": {"codex_cli_rs/0.200.0 (Mac OS; arm64)"},
+		"Version":    {"0.200.0"},
+		"Originator": {"codex_cli_rs"},
+	}
+	ctx := contextWithInboundHeaders(http.MethodPost, "/v1/responses", inbound)
+	if got := observeRuntimeIdentityFingerprint(identityfingerprint.ProviderCodex, auth, ctx); got != nil {
+		t.Fatalf("observeRuntimeIdentityFingerprint() = %#v, want nil", got)
+	}
+	cfg := &config.Config{IdentityFingerprint: config.IdentityFingerprintConfig{
+		Codex: config.CodexIdentityFingerprintConfig{Enabled: true},
+	}}
+	if _, enabled := codexIdentityFingerprint(cfg, auth, ctx); !enabled {
+		t.Fatal("codexIdentityFingerprint() disabled safe fallback")
+	}
+	if got := observeCalls.Load(); got != 0 {
+		t.Fatalf("identity fingerprint observe calls = %d, want 0", got)
+	}
+	if got := listCalls.Load(); got != 0 {
+		t.Fatalf("identity fingerprint list calls = %d, want 0", got)
+	}
+}

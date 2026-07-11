@@ -17,6 +17,7 @@ func (s *Service) ManagementLogs(input ManagementLogQueryInput) (map[string]any,
 	authIndexes, channelNames, authIndexChannelNames := channelFilterSelectors(input.Channels, channelNameMap, authIndexChannelMap, ambiguousAuthIndexChannelMap, authMetaByIndex)
 
 	params := usage.LogQueryParams{
+		TenantID:              s.tenantID,
 		Page:                  input.Page,
 		Size:                  input.Size,
 		Days:                  input.Days,
@@ -102,10 +103,11 @@ func (s *Service) ManagementLogs(input ManagementLogQueryInput) (map[string]any,
 }
 
 func (s *Service) ClearAllRequestLogs() (any, error) {
-	return usage.ClearAllRequestLogs()
+	return usage.ClearAllRequestLogsForTenant(s.tenantID)
 }
 
 func (s *Service) ClearRequestLogs(options usage.ClearRequestLogsOptions) (int, any, error) {
+	options.TenantID = s.tenantID
 	result, err := usage.ClearRequestLogs(options)
 	if err != nil {
 		if strings.Contains(err.Error(), "at least one cleanup option") {
@@ -120,6 +122,7 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 	_, channelNameMap, authIndexChannelMap, ambiguousAuthIndexChannelMap, authMetaByIndex := s.buildNameMaps()
 	authIndexes, channelNames, authIndexChannelNames := channelFilterSelectors(input.Channels, channelNameMap, authIndexChannelMap, ambiguousAuthIndexChannelMap, authMetaByIndex)
 	params := usage.LogQueryParams{
+		TenantID:              usage.ResolveAPIKeyTenant(input.APIKey),
 		Page:                  input.Page,
 		Size:                  input.Size,
 		Days:                  input.Days,
@@ -519,7 +522,7 @@ func normalizeAuthType(value string) string {
 }
 
 func (s *Service) publicAPIKeyName(apiKey string) string {
-	row := apikeysettings.NewService(nil).GetRow(apiKey)
+	row := apikeysettings.NewService(nil, apikeysettings.WithTenantID(s.tenantID)).GetRow(apiKey)
 	if row == nil {
 		return ""
 	}
@@ -558,7 +561,7 @@ func (s *Service) buildNameMaps() (
 	ambiguousAuthIndexChannelMap = make(map[string][]string)
 	authMetaByIndex = make(map[string]authChannelMeta)
 
-	for _, row := range apikeysettings.NewService(nil).ListRows() {
+	for _, row := range apikeysettings.NewService(nil, apikeysettings.WithTenantID(s.tenantID)).ListRows() {
 		if row.Key != "" && row.Name != "" {
 			keyNameMap[row.Key] = row.Name
 		}
@@ -601,7 +604,7 @@ func (s *Service) buildNameMaps() (
 	var legacyCandidates []legacyChannelCandidate
 
 	if s.authManager != nil {
-		for _, auth := range s.authManager.List() {
+		for _, auth := range s.authManager.ListForTenant(s.tenantID) {
 			if auth == nil {
 				continue
 			}

@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"database/sql"
 	"net/http"
 	"testing"
 	"time"
@@ -256,5 +257,77 @@ func TestObserveIdentityFingerprintSkipsRecentUnchangedLastSeenWrite(t *testing.
 	}
 	if !record.LastSeenAt.After(firstSeen) {
 		t.Fatalf("LastSeenAt = %s, want refreshed after %s", record.LastSeenAt, firstSeen)
+	}
+}
+
+func TestIdentityFingerprintStoreIsScopedToSystemTenant(t *testing.T) {
+	initTestUsageDB(t, config.RequestLogStorageConfig{})
+	db := getDB()
+	if db == nil {
+		t.Fatal("usage database unavailable")
+	}
+	if _, err := db.Exec(`
+		INSERT INTO identity_fingerprints (
+			tenant_id, provider, account_key, profile_key, fields_json, observed_headers_json,
+			created_at, updated_at, last_seen_at
+		) VALUES (?, ?, ?, ?, '{}', '{}', ?, ?, ?)
+	`, "11111111-1111-1111-1111-111111111111", string(identityfingerprint.ProviderCodex), "shared-account", "codex_cli_rs", time.Now(), time.Now(), time.Now()); err != nil {
+		t.Fatalf("insert foreign tenant fingerprint: %v", err)
+	}
+	if record, err := GetIdentityFingerprint(identityfingerprint.ProviderCodex, "shared-account"); err != nil || record != nil {
+		t.Fatalf("GetIdentityFingerprint() record=%#v err=%v, want no cross-tenant result", record, err)
+	}
+	if records, err := ListIdentityFingerprints(identityfingerprint.ProviderCodex, 10); err != nil || len(records) != 0 {
+		t.Fatalf("ListIdentityFingerprints() records=%#v err=%v, want no cross-tenant results", records, err)
+	}
+}
+
+func TestIdentityFingerprintLegacySchemaMigratesToTenantPrimaryKeys(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`CREATE TABLE identity_fingerprints (
+		tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', provider TEXT NOT NULL,
+		account_key TEXT NOT NULL, profile_key TEXT NOT NULL DEFAULT 'default', auth_subject_id TEXT NOT NULL DEFAULT '',
+		client_product TEXT NOT NULL DEFAULT '', client_variant TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '',
+		fields_json TEXT NOT NULL DEFAULT '{}', observed_headers_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '', last_seen_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (provider, account_key, profile_key));
+		CREATE TABLE identity_fingerprint_account_policies (
+		tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', provider TEXT NOT NULL,
+		account_key TEXT NOT NULL, strategy TEXT NOT NULL DEFAULT 'cli_preferred', active_profile_key TEXT NOT NULL DEFAULT '',
+		revision INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (provider, account_key));
+		INSERT INTO identity_fingerprints(tenant_id,provider,account_key,profile_key) VALUES
+		('00000000-0000-0000-0000-000000000001','codex','shared','codex_cli_rs');
+		INSERT INTO identity_fingerprint_account_policies(tenant_id,provider,account_key) VALUES
+		('00000000-0000-0000-0000-000000000001','codex','shared');`); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	initIdentityFingerprintsTable(db)
+
+	if pk, errPK := sqlitePrimaryKeyColumns(db, "identity_fingerprints"); errPK != nil || len(pk) != 4 || pk[0] != "tenant_id" {
+		t.Fatalf("identity_fingerprints primary key = %v, err=%v", pk, errPK)
+	}
+	if pk, errPK := sqlitePrimaryKeyColumns(db, "identity_fingerprint_account_policies"); errPK != nil || len(pk) != 3 || pk[0] != "tenant_id" {
+		t.Fatalf("identity_fingerprint_account_policies primary key = %v, err=%v", pk, errPK)
+	}
+	const tenantB = "00000000-0000-0000-0000-00000000000b"
+	if _, err = db.Exec(`INSERT INTO identity_fingerprints(tenant_id,provider,account_key,profile_key) VALUES(?,?,?,?)`, tenantB, "codex", "shared", "codex_cli_rs"); err != nil {
+		t.Fatalf("insert same fingerprint key for tenant B: %v", err)
+	}
+	if _, err = db.Exec(`INSERT INTO identity_fingerprint_account_policies(tenant_id,provider,account_key) VALUES(?,?,?)`, tenantB, "codex", "shared"); err != nil {
+		t.Fatalf("insert same policy key for tenant B: %v", err)
+	}
+	var fingerprints, policies int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM identity_fingerprints WHERE provider='codex' AND account_key='shared'`).Scan(&fingerprints); err != nil {
+		t.Fatalf("count fingerprints: %v", err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM identity_fingerprint_account_policies WHERE provider='codex' AND account_key='shared'`).Scan(&policies); err != nil {
+		t.Fatalf("count policies: %v", err)
+	}
+	if fingerprints != 2 || policies != 2 {
+		t.Fatalf("migrated row counts = fingerprints %d policies %d, want 2/2", fingerprints, policies)
 	}
 }
