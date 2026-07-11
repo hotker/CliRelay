@@ -54,6 +54,10 @@ const dashboardThroughputBucketCount = 7
 // QueryDashboardKPI returns aggregated KPI data from SQLite for the dashboard.
 // This replaces the old in-memory snapshot-based counting which lost data on restart.
 func QueryDashboardKPI(days int) (DashboardKPI, error) {
+	return QueryDashboardKPIForTenant(systemTenantID, days)
+}
+
+func QueryDashboardKPIForTenant(tenantID string, days int) (DashboardKPI, error) {
 	db := getReadDB()
 	if db == nil {
 		return DashboardKPI{}, nil
@@ -77,8 +81,8 @@ func QueryDashboardKPI(days int) (DashboardKPI, error) {
 		"COALESCE(SUM(total_tokens), 0), " +
 		"COALESCE(SUM(cost), 0), " +
 		"COALESCE(SUM(" + cacheRateEffectiveInputSQL + "), 0) " +
-		"FROM request_logs WHERE timestamp >= ?"
-	err := db.QueryRow(kpiSQL, cutoff).Scan(
+		"FROM request_logs WHERE tenant_id = ? AND timestamp >= ?"
+	err := db.QueryRow(kpiSQL, normalizeTenantID(tenantID), cutoff).Scan(
 		&kpi.TotalRequests,
 		&kpi.SuccessRequests,
 		&kpi.FailedRequests,
@@ -106,6 +110,10 @@ func QueryDashboardKPI(days int) (DashboardKPI, error) {
 // KPI trends follow the selected day range, while throughput always shows the
 // most recent 7 one-minute buckets.
 func QueryDashboardTrends(days int) (DashboardTrends, error) {
+	return QueryDashboardTrendsForTenant(systemTenantID, days)
+}
+
+func QueryDashboardTrendsForTenant(tenantID string, days int) (DashboardTrends, error) {
 	db := getReadDB()
 	if db == nil {
 		return emptyDashboardTrends(days), nil
@@ -124,8 +132,8 @@ func QueryDashboardTrends(days int) (DashboardTrends, error) {
 	rows, err := db.Query(`
 		SELECT timestamp, failed, total_tokens
 		FROM request_logs
-		WHERE timestamp >= ?
-	`, CutoffStartUTC(days).Format(time.RFC3339))
+		WHERE tenant_id = ? AND timestamp >= ?
+	`, normalizeTenantID(tenantID), CutoffStartUTC(days).Format(time.RFC3339))
 	if err != nil {
 		return DashboardTrends{}, fmt.Errorf("usage: query dashboard trends: %w", err)
 	}
@@ -158,7 +166,7 @@ func QueryDashboardTrends(days int) (DashboardTrends, error) {
 		return DashboardTrends{}, fmt.Errorf("usage: iterate dashboard trends: %w", err)
 	}
 
-	throughputSeries, err := queryDashboardThroughputSeriesAt(time.Now(), loc)
+	throughputSeries, err := queryDashboardThroughputSeriesAt(tenantID, time.Now(), loc)
 	if err != nil {
 		return DashboardTrends{}, err
 	}
@@ -233,7 +241,7 @@ func buildRecentThroughputBucketsAt(now time.Time, loc *time.Location) []dashboa
 	return buckets
 }
 
-func queryDashboardThroughputSeriesAt(now time.Time, loc *time.Location) ([]DashboardThroughputPoint, error) {
+func queryDashboardThroughputSeriesAt(tenantID string, now time.Time, loc *time.Location) ([]DashboardThroughputPoint, error) {
 	db := getReadDB()
 	if db == nil {
 		return throughputSeriesFromBuckets(buildRecentThroughputBucketsAt(now, loc)), nil
@@ -252,8 +260,8 @@ func queryDashboardThroughputSeriesAt(now time.Time, loc *time.Location) ([]Dash
 	rows, err := db.Query(`
 		SELECT timestamp, total_tokens
 		FROM request_logs
-		WHERE timestamp >= ?
-	`, start.UTC().Format(time.RFC3339))
+		WHERE tenant_id = ? AND timestamp >= ?
+	`, normalizeTenantID(tenantID), start.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, fmt.Errorf("usage: query dashboard throughput trends: %w", err)
 	}

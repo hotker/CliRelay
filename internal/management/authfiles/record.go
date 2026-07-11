@@ -10,6 +10,7 @@ import (
 
 type RecordOptions struct {
 	AuthDir  string
+	TenantID string
 	Path     string
 	Provider string
 	Metadata map[string]any
@@ -33,6 +34,7 @@ func BuildRecord(opts RecordOptions) *coreauth.Auth {
 	lastRefresh, hasLastRefresh := ExtractLastRefreshTimestamp(opts.Metadata)
 	auth := &coreauth.Auth{
 		ID:       authID,
+		TenantID: NormalizeTenantID(opts.TenantID),
 		Provider: opts.Provider,
 		Prefix:   MetadataString(opts.Metadata, "prefix"),
 		ProxyURL: MetadataString(opts.Metadata, "proxy_url", "proxy-url", "proxyUrl"),

@@ -246,6 +246,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	}
 	auth := &cliproxyauth.Auth{
 		ID:               id,
+		TenantID:         cliproxyauth.TenantIDFromAuthID(id),
 		Provider:         provider,
 		Prefix:           metadataString(metadata, "prefix"),
 		ProxyURL:         metadataString(metadata, "proxy_url", "proxy-url", "proxyUrl"),

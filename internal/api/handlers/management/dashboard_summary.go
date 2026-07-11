@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
 	managementauthfiles "github.com/router-for-me/CLIProxyAPI/v6/internal/management/authfiles"
 	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -19,6 +20,7 @@ import (
 // GET /v0/management/dashboard-summary?days=7
 func (h *Handler) GetDashboardSummary(c *gin.Context) {
 	cfg := h.cfg
+	tenantID := effectiveTenantID(c)
 
 	// ── Provider key counts ──
 	geminiCount := 0
@@ -29,17 +31,17 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 	authFileCount := 0
 	apiKeyCount := 0
 
-	if cfg != nil {
+	if cfg != nil && tenantID == identity.SystemTenantID {
 		geminiCount = len(cfg.GeminiKey)
 		claudeCount = len(cfg.ClaudeKey)
 		codexCount = len(cfg.CodexKey)
 		vertexCount = len(cfg.VertexCompatAPIKey)
 		openaiCount = len(cfg.OpenAICompatibility)
 	}
-	apiKeyCount = len(apikeysettings.NewService(nil).ListRows())
+	apiKeyCount = len(apikeysettings.NewService(nil, apikeysettings.WithTenantID(tenantID)).ListRows())
 
 	if h.authManager != nil {
-		authFileCount = len(managementauthfiles.ListEntries(h.authManager.List(), managementauthfiles.EntryOptions{
+		authFileCount = len(managementauthfiles.ListEntries(h.authManager.ListForTenant(tenantID), managementauthfiles.EntryOptions{
 			OnStatError: func(path string, err error) {
 				log.WithError(err).Warnf("failed to stat auth file %s", path)
 			},
@@ -47,6 +49,9 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 	}
 
 	providerTotal := geminiCount + claudeCount + codexCount + vertexCount + openaiCount
+	if tenantID != identity.SystemTenantID {
+		providerTotal = authFileCount
+	}
 
 	// ── Usage KPIs (from SQLite — persists across restarts) ──
 	daysStr := c.DefaultQuery("days", "7")
@@ -55,8 +60,8 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 		days = v
 	}
 
-	kpi, _ := usage.QueryDashboardKPI(days)
-	trends, _ := usage.QueryDashboardTrends(days)
+	kpi, _ := usage.QueryDashboardKPIForTenant(tenantID, days)
+	trends, _ := usage.QueryDashboardTrendsForTenant(tenantID, days)
 
 	c.JSON(http.StatusOK, gin.H{
 		"kpi": gin.H{
