@@ -67,11 +67,11 @@ type MenuInput struct {
 // secondary routes under that prefix (e.g. /runtime/monitor under /runtime).
 //
 // Information architecture (operator-facing):
-//   运行观测 — live health, request traces, runtime logs, host status
-//   接入与凭证 — upstream providers, AI OAuth accounts, client API keys, key profiles
-//   模型与调度 — model catalog, image models, routing groups, outbound proxies
-//   组织与权限 — tenants, users, roles, audit
-//   系统设置 — global config, menu management
+// 运行观测 — live health, request traces, runtime logs, host status
+// 接入与凭证 — upstream providers, AI OAuth accounts, client API keys, key profiles
+// 模型与调度 — model catalog, image models, routing groups, outbound proxies
+// 组织与权限 — tenants, users, roles, audit
+// 系统设置 — global config, menu management
 var MenuCatalog = []MenuSeed{
 	{Code: "dashboard", Type: "menu", Path: "/dashboard", Component: "dashboard", LabelKey: "shell.nav_dashboard", Icon: "layout-dashboard", PermissionCode: "dashboard.read", SortOrder: 10},
 	{Code: "group.runtime", Type: "directory", Path: "/runtime", Component: "Layout", LabelKey: "shell.nav_group_runtime", Icon: "activity", SortOrder: 20},
@@ -91,7 +91,9 @@ var MenuCatalog = []MenuSeed{
 	{Code: "access.api-keys", ParentCode: "group.access", Type: "menu", Path: "/access/api-keys", Component: "api-keys", LabelKey: "shell.nav_api_keys", Icon: "sparkles", PermissionCode: "api_keys.read", SortOrder: 30},
 	// Stable code kept; API Key permission profiles belong with client credentials.
 	{Code: "system.api-key-permissions", ParentCode: "group.access", Type: "menu", Path: "/access/api-key-permissions", Component: "api-key-permissions", LabelKey: "shell.nav_api_key_permissions", Icon: "shield-check", PermissionCode: "api_key_profiles.read", SortOrder: 40},
-	{Code: "access.ccswitch", ParentCode: "group.access", Type: "menu", Path: "/access/ccswitch-import-settings", Component: "ccswitch-import-settings", LabelKey: "shell.nav_ccswitch_import_settings", Icon: "arrow-down-to-line", PermissionCode: "system.config.read", SortOrder: 50},
+	// Tenant-scoped: matches /ccswitch-import-configs API auth (routing.read/write).
+	// Must not use platform system.config.read, or ordinary tenants never see this menu.
+	{Code: "access.ccswitch", ParentCode: "group.access", Type: "menu", Path: "/access/ccswitch-import-settings", Component: "ccswitch-import-settings", LabelKey: "shell.nav_ccswitch_import_settings", Icon: "arrow-down-to-line", PermissionCode: "routing.read", SortOrder: 50},
 	// Models & routing
 	{Code: "models.catalog", ParentCode: "group.models", Type: "menu", Path: "/models/catalog", Component: "models", LabelKey: "shell.nav_models", Icon: "cpu", PermissionCode: "models.read", SortOrder: 10},
 	{Code: "models.image-generation", ParentCode: "group.models", Type: "menu", Path: "/models/image-generation", Component: "image-generation", LabelKey: "shell.nav_image_generation", Icon: "image", PermissionCode: "system.config.read", SortOrder: 20},

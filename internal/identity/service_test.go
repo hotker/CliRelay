@@ -109,6 +109,11 @@ func TestMenuCatalogReferencesExistingParents(t *testing.T) {
 	if _, ok := seen[MenuManagementCode]; !ok {
 		t.Fatal("menu management entry is missing")
 	}
+	// CC Switch import configs are tenant-scoped (routing.* API auth). Ordinary tenant
+	// admins have routing.read but not platform system.config.read.
+	if got := seen["access.ccswitch"].PermissionCode; got != "routing.read" {
+		t.Fatalf("access.ccswitch permission = %q, want routing.read so tenant admins can see it", got)
+	}
 }
 
 func TestGeneratedIdentifier(t *testing.T) {
