@@ -18,9 +18,14 @@ import (
 // the transfer of the full usage / config payloads.
 //
 // GET /v0/management/dashboard-summary?days=7
+//
+// Platform super-admins receive throughput_series aggregated across every
+// tenant (meta.throughput_scope = "all_tenants"); ordinary tenants stay scoped.
 func (h *Handler) GetDashboardSummary(c *gin.Context) {
 	cfg := h.cfg
 	tenantID := effectiveTenantID(c)
+	principal, hasPrincipal := principalFromContext(c)
+	allTenantThroughput := hasPrincipal && principal.PlatformAdmin
 
 	// ── Provider key counts ──
 	geminiCount := 0
@@ -62,6 +67,13 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 
 	kpi, _ := usage.QueryDashboardKPIForTenant(tenantID, days)
 	trends, _ := usage.QueryDashboardTrendsForTenant(tenantID, days)
+	throughputScope := "tenant"
+	if allTenantThroughput {
+		if series, err := usage.QueryDashboardThroughputAcrossTenants(); err == nil {
+			trends.ThroughputSeries = series
+			throughputScope = "all_tenants"
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"kpi": gin.H{
@@ -89,7 +101,8 @@ func (h *Handler) GetDashboardSummary(c *gin.Context) {
 		},
 		"trends": trends,
 		"meta": gin.H{
-			"generated_at": time.Now().UTC().Format(time.RFC3339),
+			"generated_at":     time.Now().UTC().Format(time.RFC3339),
+			"throughput_scope": throughputScope,
 		},
 		"days": days,
 	})

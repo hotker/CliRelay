@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -166,7 +167,7 @@ func QueryDashboardTrendsForTenant(tenantID string, days int) (DashboardTrends, 
 		return DashboardTrends{}, fmt.Errorf("usage: iterate dashboard trends: %w", err)
 	}
 
-	throughputSeries, err := queryDashboardThroughputSeriesAt(tenantID, time.Now(), loc)
+	throughputSeries, err := queryDashboardThroughputSeriesAt(tenantID, time.Now(), loc, false)
 	if err != nil {
 		return DashboardTrends{}, err
 	}
@@ -174,6 +175,12 @@ func QueryDashboardTrendsForTenant(tenantID string, days int) (DashboardTrends, 
 	trends := dashboardTrendsFromBuckets(buckets)
 	trends.ThroughputSeries = throughputSeries
 	return trends, nil
+}
+
+// QueryDashboardThroughputAcrossTenants returns the recent 7 one-minute RPM/TPM
+// buckets aggregated across every tenant. Used by platform super-admins.
+func QueryDashboardThroughputAcrossTenants() ([]DashboardThroughputPoint, error) {
+	return queryDashboardThroughputSeriesAt("", time.Now(), getUsageLocation(), true)
 }
 
 func emptyDashboardTrends(days int) DashboardTrends {
@@ -241,7 +248,7 @@ func buildRecentThroughputBucketsAt(now time.Time, loc *time.Location) []dashboa
 	return buckets
 }
 
-func queryDashboardThroughputSeriesAt(tenantID string, now time.Time, loc *time.Location) ([]DashboardThroughputPoint, error) {
+func queryDashboardThroughputSeriesAt(tenantID string, now time.Time, loc *time.Location, allTenants bool) ([]DashboardThroughputPoint, error) {
 	db := getReadDB()
 	if db == nil {
 		return throughputSeriesFromBuckets(buildRecentThroughputBucketsAt(now, loc)), nil
@@ -257,11 +264,25 @@ func queryDashboardThroughputSeriesAt(tenantID string, now time.Time, loc *time.
 	}
 
 	start := now.In(loc).Truncate(time.Minute).Add(-time.Duration(dashboardThroughputBucketCount-1) * time.Minute)
-	rows, err := db.Query(`
-		SELECT timestamp, total_tokens
-		FROM request_logs
-		WHERE tenant_id = ? AND timestamp >= ?
-	`, normalizeTenantID(tenantID), start.UTC().Format(time.RFC3339))
+	startUTC := start.UTC().Format(time.RFC3339)
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if allTenants {
+		rows, err = db.Query(`
+			SELECT timestamp, total_tokens
+			FROM request_logs
+			WHERE timestamp >= ?
+		`, startUTC)
+	} else {
+		rows, err = db.Query(`
+			SELECT timestamp, total_tokens
+			FROM request_logs
+			WHERE tenant_id = ? AND timestamp >= ?
+		`, normalizeTenantID(tenantID), startUTC)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("usage: query dashboard throughput trends: %w", err)
 	}

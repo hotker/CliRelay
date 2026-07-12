@@ -48,4 +48,38 @@ func TestDashboardQueriesAreTenantScoped(t *testing.T) {
 	if kpiB.TotalRequests != 2 || kpiB.TotalTokens != 45 || kpiB.FailedRequests != 1 {
 		t.Fatalf("tenant B KPI = %+v", kpiB)
 	}
+
+	// Per-tenant throughput stays isolated.
+	trendsA, err := QueryDashboardTrendsForTenant(tenantA, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trendsB, err := QueryDashboardTrendsForTenant(tenantB, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpmA := latestThroughputRPM(trendsA.ThroughputSeries)
+	rpmB := latestThroughputRPM(trendsB.ThroughputSeries)
+	if rpmA != 1 {
+		t.Fatalf("tenant A latest RPM = %.0f, want 1", rpmA)
+	}
+	if rpmB != 2 {
+		t.Fatalf("tenant B latest RPM = %.0f, want 2", rpmB)
+	}
+
+	// Platform super-admin view aggregates every tenant.
+	allSeries, err := QueryDashboardThroughputAcrossTenants()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latestThroughputRPM(allSeries) != 3 {
+		t.Fatalf("all-tenant latest RPM = %.0f, want 3", latestThroughputRPM(allSeries))
+	}
+}
+
+func latestThroughputRPM(series []DashboardThroughputPoint) float64 {
+	if len(series) == 0 {
+		return 0
+	}
+	return series[len(series)-1].RPM
 }
