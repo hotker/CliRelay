@@ -221,36 +221,12 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		c.Header("X-CPA-UI-VERSION", currentUIVersion)
 		c.Header("X-CPA-UI-COMMIT", currentUICommit)
 
-		if token := bearerToken(c); strings.HasPrefix(token, "cps_") {
-			service := h.identity()
-			if service == nil {
-				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "identity_unavailable", "message": "identity service unavailable"}})
-				return
-			}
-			principal, err := service.Authenticate(c.Request.Context(), token, c.GetHeader("X-Effective-Tenant-ID"))
-			if err != nil {
-				identityError(c, err)
-				return
-			}
-			if principal.User.MustChangePassword {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "password_change_required", "message": "password change required"}})
-				return
-			}
-			permission := permissionForManagementRequest(c.Request.Method, c.Request.URL.Path)
-			if permission == "" || !principal.Has(permission) {
-				h.recordManagementAudit(c, principal, "denied")
-				identityError(c, identity.ErrPermissionDenied)
-				return
-			}
-			// Some runtime/config stores remain process-global. Non-system tenants may
-			// only use routes whose complete repository and scheduler paths are tenant-scoped.
-			if principal.EffectiveTenant.ID != identity.SystemTenantID && !isTenantScopedManagementPath(c.Request.URL.Path) {
-				h.recordManagementAudit(c, principal, "denied")
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "tenant_resource_scope_unavailable", "message": "tenant business resources are not enabled for this tenant"}})
-				return
-			}
-			c.Set(managementPrincipalKey, principal)
-			h.nextWithManagementAudit(c)
+		// Session tokens (cps_*) come from Authorization: Bearer on normal HTTP, or from
+		// ?token= on the system-stats WebSocket handshake (browsers cannot set WS headers).
+		// Resolve the session token before falling through to management-key auth so a
+		// valid user session is never bcrypt-compared against the remote management secret.
+		if token := resolveSessionToken(c); strings.HasPrefix(token, "cps_") {
+			_ = h.authenticateSessionToken(c, token)
 			return
 		}
 
@@ -341,8 +317,12 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		}
 		// Fallback: ?token= query param is accepted only for WebSocket handshakes;
 		// normal HTTP requests must not carry credentials in URLs.
+		// Session tokens (cps_*) were already handled above; remaining query tokens are
+		// treated as management keys (legacy panel / service credential).
 		if provided == "" && shouldReadManagementTokenFromQuery(c) {
-			provided = c.Query("token")
+			if queryToken := strings.TrimSpace(c.Query("token")); !strings.HasPrefix(queryToken, "cps_") {
+				provided = queryToken
+			}
 		}
 
 		if provided == "" {
@@ -393,6 +373,56 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 		h.nextWithManagementAudit(c)
 	}
+}
+
+// resolveSessionToken returns a user-session token for management auth.
+// Prefer Authorization Bearer; for WebSocket handshakes only, also accept ?token=cps_*.
+func resolveSessionToken(c *gin.Context) string {
+	if token := bearerToken(c); strings.HasPrefix(token, "cps_") {
+		return token
+	}
+	if !shouldReadManagementTokenFromQuery(c) {
+		return ""
+	}
+	if token := strings.TrimSpace(c.Query("token")); strings.HasPrefix(token, "cps_") {
+		return token
+	}
+	return ""
+}
+
+// authenticateSessionToken validates a cps_* identity session and enforces RBAC + tenant scope.
+// Returns false when the request was already aborted with an error response.
+func (h *Handler) authenticateSessionToken(c *gin.Context, token string) bool {
+	service := h.identity()
+	if service == nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "identity_unavailable", "message": "identity service unavailable"}})
+		return false
+	}
+	principal, err := service.Authenticate(c.Request.Context(), token, c.GetHeader("X-Effective-Tenant-ID"))
+	if err != nil {
+		identityError(c, err)
+		return false
+	}
+	if principal.User.MustChangePassword {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "password_change_required", "message": "password change required"}})
+		return false
+	}
+	permission := permissionForManagementRequest(c.Request.Method, c.Request.URL.Path)
+	if permission == "" || !principal.Has(permission) {
+		h.recordManagementAudit(c, principal, "denied")
+		identityError(c, identity.ErrPermissionDenied)
+		return false
+	}
+	// Some runtime/config stores remain process-global. Non-system tenants may
+	// only use routes whose complete repository and scheduler paths are tenant-scoped.
+	if principal.EffectiveTenant.ID != identity.SystemTenantID && !isTenantScopedManagementPath(c.Request.URL.Path) {
+		h.recordManagementAudit(c, principal, "denied")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "tenant_resource_scope_unavailable", "message": "tenant business resources are not enabled for this tenant"}})
+		return false
+	}
+	c.Set(managementPrincipalKey, principal)
+	h.nextWithManagementAudit(c)
+	return true
 }
 
 // persist saves the current in-memory config to disk.
