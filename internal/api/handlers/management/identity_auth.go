@@ -626,9 +626,10 @@ func permissionForManagementRequest(method, path string) string {
 			return "auth_files.write"
 		}
 		return "auth_files.read"
-	// Account/profile fingerprint APIs are auth-file scoped. Global preset PUT
-	// (/identity-fingerprint) still uses process runtime settings; tenants can
-	// read learned state but only platform admins rewrite the shared preset.
+	// Account/profile fingerprint APIs are auth-file scoped and read the shared
+	// AI-account catalog (same account_key → same fingerprints). Global preset
+	// PUT (/identity-fingerprint) still uses process runtime settings; tenants
+	// can read learned state but only platform admins rewrite the shared preset.
 	case relative == "/identity-fingerprint" && write:
 		return "system.config.write"
 	case strings.HasPrefix(relative, "/identity-fingerprint"):
