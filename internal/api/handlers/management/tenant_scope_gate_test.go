@@ -15,6 +15,8 @@ func TestTenantScopedManagementPathIncludesProviderRuntimeRoutes(t *testing.T) {
 		"/v0/management/openai-compatibility",
 		"/v0/management/oauth-model-alias",
 		"/v0/management/codex-oauth-admission",
+		// Auth-file quota preview for tenant-imported OAuth credentials.
+		"/v0/management/api-call",
 	} {
 		if !isTenantScopedManagementPath(path) {
 			t.Errorf("isTenantScopedManagementPath(%q) = false", path)
@@ -26,7 +28,6 @@ func TestTenantScopedManagementPathKeepsGlobalRuntimeRoutesBlocked(t *testing.T)
 	for _, path := range []string{
 		"/v0/management/config.yaml",
 		"/v0/management/oauth-excluded-models",
-		"/v0/management/api-call",
 		"/v0/management/proxy-url",
 		"/v0/management/request-retry",
 		"/v0/management/update/apply",

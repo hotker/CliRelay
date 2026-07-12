@@ -542,6 +542,12 @@ func isTenantScopedManagementPath(path string) bool {
 		relative == "/proxy-pool",
 		strings.HasPrefix(relative, "/proxy-pool/"):
 		return true
+	// Tenant auth-file quota/connectivity probes use /api-call with a
+	// tenant-scoped auth_index (AuthByIndex + ListForTenant). Blocking this
+	// path leaves imported OAuth cards stuck on "错误 / --" even when the
+	// credential file itself is valid.
+	case relative == "/api-call":
+		return true
 	case relative == "/usage/logs",
 		(strings.HasSuffix(relative, "/content") || strings.HasSuffix(relative, "/egress")) && strings.HasPrefix(relative, "/usage/logs/"),
 		relative == "/usage/chart-data",
