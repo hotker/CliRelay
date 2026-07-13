@@ -233,3 +233,49 @@ func TestDiscoveryCacheDoesNotReplaceRegistrar(t *testing.T) {
 		t.Fatalf("RegisterClient calls=%d want 0", reg.calls)
 	}
 }
+
+func TestXAISharedDiscoveryCacheAcrossAccounts(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	// Seed via grok alias; xai accounts must hit the same cache key.
+	storeDiscoveryCache("", "grok", []*registry.ModelInfo{
+		{ID: "grok-4", DisplayName: "Grok 4", Type: "xai", OwnedBy: "xai"},
+		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", Type: "xai", OwnedBy: "xai"},
+	})
+	manager := coreauth.NewManager(nil, nil, nil)
+	for _, auth := range []*coreauth.Auth{
+		{ID: "xai-a", FileName: "xai-a.json", Provider: "xai"},
+		{ID: "xai-b", FileName: "xai-b.json", Provider: "xai"},
+		{ID: "grok-c", FileName: "grok-c.json", Provider: "grok"},
+	} {
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatalf("Register %s: %v", auth.ID, err)
+		}
+	}
+	source := &modelSourceStub{models: []*registry.ModelInfo{{ID: "static-xai"}}}
+	reg := &modelRegistrarStub{}
+	for _, name := range []string{"xai-a.json", "xai-b.json", "grok-c.json"} {
+		models, label := ListModelEntriesLiveForTenant(
+			context.Background(), manager, source, reg, nil, "", name, false,
+		)
+		if label != "upstream" {
+			t.Fatalf("%s label=%q want upstream", name, label)
+		}
+		if len(models) != 2 || models[0]["id"] != "grok-4" {
+			t.Fatalf("%s models=%#v want shared xai discovery", name, models)
+		}
+	}
+	if reg.calls != 0 {
+		t.Fatalf("RegisterClient calls=%d want 0 for xai discovery path", reg.calls)
+	}
+}
+
+func TestSupportsSharedDiscoveryIncludesXAI(t *testing.T) {
+	for _, provider := range []string{"xai", "x-ai", "grok", "XAI", "Claude", "codex"} {
+		if !SupportsSharedDiscovery(provider) {
+			t.Fatalf("SupportsSharedDiscovery(%q)=false, want true", provider)
+		}
+	}
+	if SupportsSharedDiscovery("antigravity") {
+		t.Fatalf("antigravity must not use shared discovery")
+	}
+}

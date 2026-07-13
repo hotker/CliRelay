@@ -18,10 +18,11 @@ import (
 // - Owner: model availability query boundary.
 // - Responsibility: turn registry state plus stored capabilities into management-facing availability DTOs.
 //
-// Claude/Codex live discovery is intentionally NOT RegisterClient-written into
-// the runtime registry (subset risk, #673/#674). Management surfaces (plaza,
-// catalog) still need the same live list as the auth-file models panel, so we
-// merge the provider discovery cache here on every read (auto-warm on miss).
+// Claude/Codex/xAI live discovery is intentionally NOT RegisterClient-written
+// into the runtime registry from management panels (subset risk, #673/#674).
+// Management surfaces (plaza, catalog) still need the same live list as the
+// auth-file models panel, so we merge the provider discovery cache here on
+// every read (auto-warm on miss).
 func (s *Service) ConfiguredAvailability(allowedChannelsRaw, allowedGroupsRaw string) map[string]any {
 	modelRegistry := registry.GetGlobalRegistry()
 	authByID := s.authByID()
