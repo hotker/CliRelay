@@ -11,8 +11,8 @@ import (
 
 const (
 	// xAI SuperGrok weekly included usage window (matches frontend XAI_WEEKLY_WINDOW_SECONDS).
-	xaiWeeklyWindowMinutes = 10080
-	xaiWeeklyWindowLabel   = "week"
+	xaiWeeklyWindowMinutes   = 10080
+	xaiWeeklyWindowLabel     = "week"
 	xaiWeeklyCooldownDefault = 7 * 24 * time.Hour
 )
 

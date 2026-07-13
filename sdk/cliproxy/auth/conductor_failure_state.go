@@ -79,7 +79,6 @@ func applyAuthQuotaFailureState(auth *Auth, resultErr *Error, retryAfter *time.D
 	auth.NextRetryAfter = next
 }
 
-
 // nextQuotaCooldown returns the next cooldown duration and updated backoff level for repeated quota errors.
 func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) {
 	if prevLevel < 0 {
