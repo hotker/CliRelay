@@ -128,9 +128,13 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 	case "antigravity":
 		models = s.fetchAntigravityRegistryModels(ctx, a, excluded)
 	case "claude":
+		// Always use the static Claude catalog (+ optional config / OAuth model
+		// configs). Live Anthropic /v1/models can return a subset of models and
+		// must not replace the full registry list (same regression class as #674 codex).
 		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("claude")
 		if entry := s.resolveConfigClaudeKey(a); entry != nil {
 			if len(entry.Models) > 0 {
+				// Explicit config models still win for API-key channels that pin a list.
 				models = buildClaudeConfigModels(entry, lookupStaticModelThinking)
 			}
 			if authKind == "apikey" {
@@ -178,6 +182,9 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		}
 		models = applyExcludedModels(models, excluded)
 	case "codex":
+		// Always use the static Codex catalog (+ optional config / OAuth model
+		// configs). Live ChatGPT manifest returns only a subset of models and
+		// must not replace the full registry list (regression from #673).
 		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("codex")
 		if entry := s.resolveConfigCodexKey(a); entry != nil {
 			if len(entry.Models) > 0 {

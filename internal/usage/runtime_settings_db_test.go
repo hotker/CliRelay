@@ -250,3 +250,58 @@ func TestBuildTenantRuntimeConfigDoesNotInheritSystemCredentials(t *testing.T) {
 		t.Fatalf("tenant runtime config = %+v", got)
 	}
 }
+
+func TestBuildTenantRuntimeConfigDefaultsIdentityFingerprintEnabledWithoutRuntimeRow(t *testing.T) {
+	cleanup := setupConfigMigrationTestDB(t)
+	defer cleanup()
+
+	// System may carry custom identity presets; tenants must not inherit them,
+	// but learn/apply must still be on by default when the tenant has no row.
+	base := &config.Config{}
+	base.IdentityFingerprint = config.NormalizeIdentityFingerprintConfig(config.IdentityFingerprintConfig{
+		XAI: config.XAIIdentityFingerprintConfig{
+			Enabled:          true,
+			UserAgent:        "system-custom-ua",
+			ClientIdentifier: "system-custom-id",
+			ClientVersion:    "9.9.9",
+		},
+	})
+	const tenantID = "00000000-0000-0000-0000-00000000000b"
+	got := BuildTenantRuntimeConfig(base, tenantID)
+	if !got.IdentityFingerprint.XAI.Enabled ||
+		!got.IdentityFingerprint.Codex.Enabled ||
+		!got.IdentityFingerprint.Claude.Enabled ||
+		!got.IdentityFingerprint.Gemini.Enabled {
+		t.Fatalf("IdentityFingerprint = %#v, want all providers enabled by default for tenant without runtime row", got.IdentityFingerprint)
+	}
+	if got.IdentityFingerprint.XAI.UserAgent == "system-custom-ua" ||
+		got.IdentityFingerprint.XAI.ClientIdentifier == "system-custom-id" ||
+		got.IdentityFingerprint.XAI.ClientVersion == "9.9.9" {
+		t.Fatalf("tenant inherited system identity presets: %#v", got.IdentityFingerprint.XAI)
+	}
+}
+
+func TestBuildTenantRuntimeConfigPreservesExplicitDisabledIdentityFingerprint(t *testing.T) {
+	cleanup := setupConfigMigrationTestDB(t)
+	defer cleanup()
+
+	const tenantID = "00000000-0000-0000-0000-00000000000c"
+	if err := UpsertRuntimeSettingForTenant(tenantID, RuntimeSettingIdentityFingerprint, map[string]any{
+		"runtime-setting-version": 2,
+		"xai": map[string]any{
+			"enabled": false,
+		},
+		"codex": map[string]any{
+			"enabled": true,
+		},
+	}); err != nil {
+		t.Fatalf("UpsertRuntimeSettingForTenant: %v", err)
+	}
+	got := BuildTenantRuntimeConfig(&config.Config{}, tenantID)
+	if got.IdentityFingerprint.XAI.Enabled {
+		t.Fatalf("XAI.Enabled = true, want explicit false preserved")
+	}
+	if !got.IdentityFingerprint.Codex.Enabled {
+		t.Fatalf("Codex.Enabled = false, want true from tenant runtime row")
+	}
+}

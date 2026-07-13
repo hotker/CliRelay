@@ -139,6 +139,9 @@ func BuildTenantRuntimeConfig(base *config.Config, tenantID string) config.Confi
 	tenantCfg.VertexCompatAPIKey = nil
 	tenantCfg.ClaudeHeaderDefaults = config.ClaudeHeaderDefaults{}
 	tenantCfg.KimiHeaderDefaults = config.KimiHeaderDefaults{}
+	// Clear tenant identity presets so system custom UA/version never leak, but
+	// re-normalize after apply so missing runtime rows still default providers
+	// to enabled (otherwise XAI/Codex learn+apply is silently off for new tenants).
 	tenantCfg.IdentityFingerprint = config.IdentityFingerprintConfig{}
 	tenantCfg.CodexOAuthAdmission = config.CodexOAuthAdmissionConfig{}
 	tenantCfg.OAuthExcludedModels = nil
@@ -152,5 +155,6 @@ func BuildTenantRuntimeConfig(base *config.Config, tenantID string) config.Confi
 	}
 	tenantCfg.ProxyPool = ListProxyPoolForTenant(tenantID)
 	ApplyStoredRuntimeSettingsForTenant(tenantID, &tenantCfg)
+	tenantCfg.SanitizeIdentityFingerprint()
 	return tenantCfg
 }

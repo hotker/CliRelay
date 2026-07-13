@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -140,6 +141,35 @@ func TestIsRequestInvalidError_RecognizesUnsupportedCodexModelPayload(t *testing
 	}
 }
 
+func TestIsRequestInvalidError_RecognizesXAIInvalidArgumentImageTooSmall(t *testing.T) {
+	t.Parallel()
+
+	// xAI vision rejects undersized images with a top-level code/error payload.
+	// Failover to another auth cannot fix the request body.
+	err := &Error{
+		HTTPStatus: http.StatusBadRequest,
+		Message:    `{"code":"invalid-argument","error":"Image has 420 total pixels (21x20), which is below the minimum of 512 pixels."}`,
+	}
+
+	if !isRequestInvalidError(err) {
+		t.Fatal("expected xAI invalid-argument image size payload to be treated as invalid request")
+	}
+}
+
+func TestIsRequestInvalidError_RecognizesInvalidArgumentCodeField(t *testing.T) {
+	t.Parallel()
+
+	err := &Error{
+		Code:       "invalid-argument",
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "Image is too small",
+	}
+
+	if !isRequestInvalidError(err) {
+		t.Fatal("expected explicit invalid-argument code to be treated as invalid request")
+	}
+}
+
 func TestIsRequestInvalidError_IgnoresNonBadRequest(t *testing.T) {
 	t.Parallel()
 
@@ -150,5 +180,64 @@ func TestIsRequestInvalidError_IgnoresNonBadRequest(t *testing.T) {
 
 	if isRequestInvalidError(err) {
 		t.Fatal("expected non-400 upstream error to remain retryable/failover-eligible")
+	}
+}
+
+func TestIsRequestInvalidError_IgnoresGenericBadRequestWithoutInvalidSignal(t *testing.T) {
+	t.Parallel()
+
+	// Keep failover for ambiguous 400s that are not clearly request-shaped.
+	err := &Error{
+		HTTPStatus: http.StatusBadRequest,
+		Message:    `{"error":{"message":"temporary provider rejection"}}`,
+	}
+
+	if isRequestInvalidError(err) {
+		t.Fatal("expected generic 400 without invalid-request signal to remain failover-eligible")
+	}
+}
+
+func TestMarkResult_RequestInvalidErrorDoesNotCooldownAuth(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "xai-1",
+		Provider: "xai",
+		Status:   StatusActive,
+	}
+	if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "xai",
+		Model:    "grok-4.5",
+		Success:  false,
+		Error: &Error{
+			HTTPStatus: http.StatusBadRequest,
+			Message:    `{"code":"invalid-argument","error":"Image has 420 total pixels (21x20), which is below the minimum of 512 pixels."}`,
+		},
+	})
+
+	got, ok := m.GetByID(auth.ID)
+	if !ok || got == nil {
+		t.Fatal("auth missing after MarkResult")
+	}
+	if got.Status != StatusActive {
+		t.Fatalf("Status = %q, want %q", got.Status, StatusActive)
+	}
+	if got.Unavailable {
+		t.Fatal("Unavailable = true, want false for request-invalid error")
+	}
+	if got.Quota.Exceeded {
+		t.Fatal("Quota.Exceeded = true, want false")
+	}
+	if !got.NextRetryAfter.IsZero() {
+		t.Fatalf("NextRetryAfter = %v, want zero", got.NextRetryAfter)
+	}
+	if state := got.ModelStates["grok-4.5"]; state != nil {
+		t.Fatalf("ModelStates[grok-4.5] = %+v, want nil/unset for request-invalid error", state)
 	}
 }

@@ -75,3 +75,207 @@ func TestListModelEntriesBuildsPublicPayload(t *testing.T) {
 		t.Fatalf("minimal id = %#v, want minimal", got[1]["id"])
 	}
 }
+
+type modelRegistrarStub struct {
+	calls int
+	last  struct {
+		clientID string
+		provider string
+		models   []*registry.ModelInfo
+	}
+}
+
+func (s *modelRegistrarStub) RegisterClient(clientID, clientProvider string, models []*registry.ModelInfo) {
+	s.calls++
+	s.last.clientID = clientID
+	s.last.provider = clientProvider
+	s.last.models = models
+}
+
+func TestListModelEntriesLiveForTenantCodexDoesNotReplaceRegistry(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	// Without a real upstream, refresh falls back to registry; registrar must not be called
+	// when live is empty. When we inject via a custom path, codex updateRegistry is false.
+	// Here we only assert the empty-live path never registers.
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       "codex-auth",
+		FileName: "codex.json",
+		Provider: "codex",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	source := &modelSourceStub{
+		models: []*registry.ModelInfo{{ID: "gpt-5.5", DisplayName: "GPT-5.5", Type: "codex"}},
+	}
+	reg := &modelRegistrarStub{}
+	models, label := ListModelEntriesLiveForTenant(
+		context.Background(),
+		manager,
+		source,
+		reg,
+		nil,
+		"",
+		"codex.json",
+		true,
+	)
+	if label != "registry" {
+		t.Fatalf("source label = %q, want registry (no live without credentials)", label)
+	}
+	if reg.calls != 0 {
+		t.Fatalf("RegisterClient calls = %d, want 0 for failed/empty codex live", reg.calls)
+	}
+	if len(models) != 1 || models[0]["id"] != "gpt-5.5" {
+		t.Fatalf("fallback models = %#v", models)
+	}
+}
+
+func TestListModelEntriesLiveWithoutRefreshUsesRegistryWhenNoDiscoveryCache(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       "codex-auth",
+		FileName: "codex.json",
+		Provider: "codex",
+		// no credentials → warm fails → registry fallback
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	source := &modelSourceStub{
+		models: []*registry.ModelInfo{{ID: "gpt-static"}},
+	}
+	reg := &modelRegistrarStub{}
+	models, label := ListModelEntriesLiveForTenant(
+		context.Background(), manager, source, reg, nil, "", "codex.json", false,
+	)
+	if label != "registry" || reg.calls != 0 || len(models) != 1 || models[0]["id"] != "gpt-static" {
+		t.Fatalf("label=%q calls=%d models=%#v", label, reg.calls, models)
+	}
+}
+
+func TestDiscoveryCacheSharedAcrossSameProviderAccounts(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	storeDiscoveryCache("", "codex", []*registry.ModelInfo{
+		{ID: "gpt-5.6-sol", DisplayName: "GPT-5.6 Sol", Type: "codex", OwnedBy: "openai"},
+		{ID: "gpt-5.5", DisplayName: "GPT-5.5", Type: "codex", OwnedBy: "openai"},
+	})
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	for _, auth := range []*coreauth.Auth{
+		{ID: "codex-a", FileName: "codex-a.json", Provider: "codex"},
+		{ID: "codex-b", FileName: "codex-b.json", Provider: "codex"},
+	} {
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatalf("Register %s: %v", auth.ID, err)
+		}
+	}
+	source := &modelSourceStub{
+		models: []*registry.ModelInfo{{ID: "gpt-static-only"}},
+	}
+	reg := &modelRegistrarStub{}
+
+	// Open without refresh must serve discovery cache, not static registry.
+	for _, name := range []string{"codex-a.json", "codex-b.json"} {
+		models, label := ListModelEntriesLiveForTenant(
+			context.Background(), manager, source, reg, nil, "", name, false,
+		)
+		if label != "upstream" {
+			t.Fatalf("%s source=%q, want upstream", name, label)
+		}
+		if reg.calls != 0 {
+			t.Fatalf("RegisterClient must not run for shared discovery, calls=%d", reg.calls)
+		}
+		if len(models) != 2 || models[0]["id"] != "gpt-5.6-sol" {
+			t.Fatalf("%s models=%#v", name, models)
+		}
+	}
+
+	// Claude cache must not leak into codex and vice versa.
+	storeDiscoveryCache("", "claude", []*registry.ModelInfo{
+		{ID: "claude-sonnet-4", Type: "claude"},
+	})
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID: "claude-a", FileName: "claude-a.json", Provider: "claude",
+	}); err != nil {
+		t.Fatalf("Register claude: %v", err)
+	}
+	claudeModels, claudeLabel := ListModelEntriesLiveForTenant(
+		context.Background(), manager, source, reg, nil, "", "claude-a.json", false,
+	)
+	if claudeLabel != "upstream" || len(claudeModels) != 1 || claudeModels[0]["id"] != "claude-sonnet-4" {
+		t.Fatalf("claude models=%#v label=%q", claudeModels, claudeLabel)
+	}
+	// codex still its own cache
+	codexModels, codexLabel := ListModelEntriesLiveForTenant(
+		context.Background(), manager, source, reg, nil, "", "codex-a.json", false,
+	)
+	if codexLabel != "upstream" || len(codexModels) != 2 {
+		t.Fatalf("codex still shared cache: %#v label=%q", codexModels, codexLabel)
+	}
+}
+
+func TestDiscoveryCacheDoesNotReplaceRegistrar(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	storeDiscoveryCache("", "codex", []*registry.ModelInfo{{ID: "gpt-5.6-terra"}})
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID: "codex-auth", FileName: "codex.json", Provider: "codex",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	source := &modelSourceStub{models: []*registry.ModelInfo{{ID: "static"}}}
+	reg := &modelRegistrarStub{}
+	_, _ = ListModelEntriesLiveForTenant(
+		context.Background(), manager, source, reg, nil, "", "codex.json", true,
+	)
+	// force with no credentials fails warm; registrar still never called
+	if reg.calls != 0 {
+		t.Fatalf("RegisterClient calls=%d want 0", reg.calls)
+	}
+}
+
+func TestXAISharedDiscoveryCacheAcrossAccounts(t *testing.T) {
+	ResetDiscoveryCacheForTest()
+	// Seed via grok alias; xai accounts must hit the same cache key.
+	storeDiscoveryCache("", "grok", []*registry.ModelInfo{
+		{ID: "grok-4", DisplayName: "Grok 4", Type: "xai", OwnedBy: "xai"},
+		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", Type: "xai", OwnedBy: "xai"},
+	})
+	manager := coreauth.NewManager(nil, nil, nil)
+	for _, auth := range []*coreauth.Auth{
+		{ID: "xai-a", FileName: "xai-a.json", Provider: "xai"},
+		{ID: "xai-b", FileName: "xai-b.json", Provider: "xai"},
+		{ID: "grok-c", FileName: "grok-c.json", Provider: "grok"},
+	} {
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatalf("Register %s: %v", auth.ID, err)
+		}
+	}
+	source := &modelSourceStub{models: []*registry.ModelInfo{{ID: "static-xai"}}}
+	reg := &modelRegistrarStub{}
+	for _, name := range []string{"xai-a.json", "xai-b.json", "grok-c.json"} {
+		models, label := ListModelEntriesLiveForTenant(
+			context.Background(), manager, source, reg, nil, "", name, false,
+		)
+		if label != "upstream" {
+			t.Fatalf("%s label=%q want upstream", name, label)
+		}
+		if len(models) != 2 || models[0]["id"] != "grok-4" {
+			t.Fatalf("%s models=%#v want shared xai discovery", name, models)
+		}
+	}
+	if reg.calls != 0 {
+		t.Fatalf("RegisterClient calls=%d want 0 for xai discovery path", reg.calls)
+	}
+}
+
+func TestSupportsSharedDiscoveryIncludesXAI(t *testing.T) {
+	for _, provider := range []string{"xai", "x-ai", "grok", "XAI", "Claude", "codex"} {
+		if !SupportsSharedDiscovery(provider) {
+			t.Fatalf("SupportsSharedDiscovery(%q)=false, want true", provider)
+		}
+	}
+	if SupportsSharedDiscovery("antigravity") {
+		t.Fatalf("antigravity must not use shared discovery")
+	}
+}

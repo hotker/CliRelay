@@ -37,7 +37,16 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 	c.JSON(200, gin.H{"files": files})
 }
 
-// GetAuthFileModels returns the models supported by a specific auth file
+// GetAuthFileModels returns the models supported by a specific auth file.
+//
+// Query params:
+//   - name (required): auth file name or auth ID
+//   - refresh=1|true: force re-fetch live models from upstream.
+//     xai/antigravity: updates runtime registry when successful.
+//     claude/codex: provider-level discovery cache (shared by same-type accounts);
+//     open auto-warms once and subsequent opens reuse cache; force refreshes
+//     cache. Does NOT RegisterClient-replace the static channel catalog.
+//     Falls back to registry on failure.
 func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	name := c.Query("name")
 	if name == "" {
@@ -45,8 +54,25 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 		return
 	}
 
-	models := managementauthfiles.ListModelEntriesForTenant(h.authManager, registry.GetGlobalRegistry(), effectiveTenantID(c), name)
-	c.JSON(200, gin.H{"models": models})
+	refresh := false
+	switch strings.ToLower(strings.TrimSpace(c.Query("refresh"))) {
+	case "1", "true", "yes", "force":
+		refresh = true
+	}
+
+	reg := registry.GetGlobalRegistry()
+	tenantID := effectiveTenantID(c)
+	models, source := managementauthfiles.ListModelEntriesLiveForTenant(
+		c.Request.Context(),
+		h.authManager,
+		reg,
+		reg,
+		h.cfg,
+		tenantID,
+		name,
+		refresh,
+	)
+	c.JSON(200, gin.H{"models": models, "source": source})
 }
 
 // List auth files from disk when the auth manager is unavailable.

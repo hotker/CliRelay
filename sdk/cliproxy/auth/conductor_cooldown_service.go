@@ -198,6 +198,12 @@ func (s cooldownService) applyFailureLocked(auth *Auth, result Result, now time.
 	if auth == nil {
 		return
 	}
+	// Client request errors (400 invalid payload/image/etc.) are not auth health
+	// signals. Do not mark the credential unavailable or start any cooldown;
+	// failover is already suppressed by isRequestInvalidError.
+	if result.Error != nil && isRequestInvalidError(result.Error) {
+		return
+	}
 	if applyClaudeOAuthFailureLocked(auth, result, now, effects) {
 		return
 	}

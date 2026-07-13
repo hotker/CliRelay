@@ -293,6 +293,37 @@ func TestRequestExecutionMetadata_CapturesSessionStickyHeader(t *testing.T) {
 	}
 }
 
+func TestRequestExecutionMetadata_CapturesGrokSessionStickyHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("session id", func(t *testing.T) {
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		ginCtx.Request.Header.Set("X-Grok-Session-Id", "019f5a53-5c9c-7222-a74c-3dbab60349d3")
+		ginCtx.Request.Header.Set("X-Grok-Conv-Id", "should-not-win")
+
+		ctx := context.WithValue(context.Background(), util.ContextKeyGin, ginCtx)
+		meta := requestExecutionMetadata(ctx)
+		want := "header:x-grok-session-id:019f5a53-5c9c-7222-a74c-3dbab60349d3"
+		if got := meta[coreexecutor.SessionStickyMetadataKey]; got != want {
+			t.Fatalf("session sticky key = %v, want %s", got, want)
+		}
+	})
+
+	t.Run("conv id fallback", func(t *testing.T) {
+		ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ginCtx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		ginCtx.Request.Header.Set("X-Grok-Conv-Id", "019f5a53-5c9c-7222-a74c-3dbab60349d3")
+
+		ctx := context.WithValue(context.Background(), util.ContextKeyGin, ginCtx)
+		meta := requestExecutionMetadata(ctx)
+		want := "header:x-grok-conv-id:019f5a53-5c9c-7222-a74c-3dbab60349d3"
+		if got := meta[coreexecutor.SessionStickyMetadataKey]; got != want {
+			t.Fatalf("session sticky key = %v, want %s", got, want)
+		}
+	})
+}
+
 func TestRequestExecutionMetadata_UsesGinRequestContextPathRouteAfterHandleContextReset(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
