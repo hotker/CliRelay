@@ -185,12 +185,10 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		}
 		models = applyExcludedModels(models, excluded)
 	case "codex":
-		// Prefer live Codex models manifest / OpenAI-compatible /models when credentials work.
-		if live := s.fetchCodexRegistryModels(ctx, a, nil); len(live) > 0 {
-			models = live
-		} else {
-			models = sdkmodelcatalog.StaticModelDefinitionsByChannel("codex")
-		}
+		// Always use the static Codex catalog (+ optional config / OAuth model
+		// configs). Live ChatGPT manifest returns only a subset of models and
+		// must not replace the full registry list (regression from #673).
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("codex")
 		if entry := s.resolveConfigCodexKey(a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry, lookupStaticModelThinking)
