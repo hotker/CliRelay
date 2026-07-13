@@ -10,9 +10,7 @@ import (
 func TestServiceStartAndGetLifecycle(t *testing.T) {
 	t.Parallel()
 
-	done := make(chan struct{})
 	svc := NewService(func(ctx context.Context, tenantID string, payload []byte, alt string) ([]byte, error) {
-		close(done)
 		return []byte(`{"data":[{"b64_json":"abc"}]}`), nil
 	}, "test")
 
@@ -21,19 +19,7 @@ func TestServiceStartAndGetLifecycle(t *testing.T) {
 		t.Fatalf("Start() returned empty task id")
 	}
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("task did not finish in time")
-	}
-
-	got, ok := svc.Get("tenant-a", snapshot.ID)
-	if !ok {
-		t.Fatalf("Get(%q) returned not found", snapshot.ID)
-	}
-	if got.Status != "succeeded" {
-		t.Fatalf("task status = %q, want succeeded", got.Status)
-	}
+	got := waitTaskStatus(t, svc, "tenant-a", snapshot.ID, "succeeded")
 	if got.Result == nil {
 		t.Fatalf("task result is nil")
 	}
@@ -55,26 +41,14 @@ func (e fakeStatusError) StatusCode() int {
 func TestServiceCapturesStatusError(t *testing.T) {
 	t.Parallel()
 
-	done := make(chan struct{})
 	svc := NewService(func(ctx context.Context, tenantID string, payload []byte, alt string) ([]byte, error) {
-		close(done)
 		return nil, fakeStatusError{code: 429, err: errors.New("rate limited")}
 	}, "test")
 
 	snapshot := svc.Start("tenant-a", []byte(`{"prompt":"hello"}`), "images/generations")
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("task did not finish in time")
-	}
-
-	got, ok := svc.Get("tenant-a", snapshot.ID)
-	if !ok {
-		t.Fatalf("Get(%q) returned not found", snapshot.ID)
-	}
-	if got.Status != "failed" {
-		t.Fatalf("task status = %q, want failed", got.Status)
-	}
+	// Wait for the terminal status update after execute returns; closing a channel
+	// inside execute races the status write and can still observe "running".
+	got := waitTaskStatus(t, svc, "tenant-a", snapshot.ID, "failed")
 	if got.Error == nil {
 		t.Fatalf("task error is nil")
 	}
@@ -86,21 +60,41 @@ func TestServiceCapturesStatusError(t *testing.T) {
 func TestServiceTaskIsTenantScoped(t *testing.T) {
 	t.Parallel()
 
-	done := make(chan struct{})
 	svc := NewService(func(_ context.Context, tenantID string, _ []byte, _ string) ([]byte, error) {
 		if tenantID != "tenant-a" {
 			t.Errorf("tenantID = %q", tenantID)
 		}
-		close(done)
 		return []byte(`{"data":[]}`), nil
 	}, "test")
 
 	task := svc.Start("tenant-a", []byte(`{"prompt":"hello"}`), "images/generations")
-	<-done
+	_ = waitTaskStatus(t, svc, "tenant-a", task.ID, "succeeded")
 	if _, ok := svc.Get("tenant-b", task.ID); ok {
 		t.Fatal("tenant B can read tenant A task")
 	}
 	if _, ok := svc.Get("tenant-a", task.ID); !ok {
 		t.Fatal("tenant A task missing")
 	}
+}
+
+// waitTaskStatus polls until the async task reaches wantStatus or the timeout fires.
+// Execute callbacks finish before Service.run writes the terminal status, so tests
+// must wait on the stored status rather than a channel closed inside execute.
+func waitTaskStatus(t *testing.T, svc *Service, tenantID, taskID, wantStatus string) Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last Snapshot
+	for time.Now().Before(deadline) {
+		got, ok := svc.Get(tenantID, taskID)
+		if !ok {
+			t.Fatalf("Get(%q) returned not found", taskID)
+		}
+		last = got
+		if got.Status == wantStatus {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("task status = %q, want %q", last.Status, wantStatus)
+	return Snapshot{}
 }
