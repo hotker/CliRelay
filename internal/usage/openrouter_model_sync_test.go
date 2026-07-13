@@ -1266,7 +1266,6 @@ func TestOpenRouterModelSyncIsTenantScoped(t *testing.T) {
 	}
 }
 
-
 func TestSyncOpenRouterModelsFillsMissingMetadataOnExistingRows(t *testing.T) {
 	initModelConfigTestDB(t)
 
