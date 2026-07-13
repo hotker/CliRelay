@@ -41,9 +41,11 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 //
 // Query params:
 //   - name (required): auth file name or auth ID
-//   - refresh=1|true: re-fetch live models from upstream (xai/antigravity)
-//     and update the runtime registry when successful; falls back to registry on failure.
-//     Claude and Codex are intentionally not live-refreshed (static catalog only).
+//   - refresh=1|true: re-fetch live models from upstream for discovery.
+//     xai/antigravity: updates runtime registry when successful.
+//     claude/codex: returns upstream list with source=upstream but does NOT
+//     replace the static registry catalog (avoids incomplete-manifest wipe).
+//     Falls back to registry on failure.
 func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	name := c.Query("name")
 	if name == "" {
