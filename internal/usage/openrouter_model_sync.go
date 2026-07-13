@@ -22,9 +22,10 @@ const defaultOpenRouterModelSyncIntervalMinutes = 24 * 60
 const minOpenRouterModelSyncIntervalMinutes = 60
 
 type OpenRouterRemotePricing struct {
-	Prompt         string `json:"prompt"`
-	Completion     string `json:"completion"`
-	InputCacheRead string `json:"input_cache_read"`
+	Prompt          string `json:"prompt"`
+	Completion      string `json:"completion"`
+	InputCacheRead  string `json:"input_cache_read"`
+	InputCacheWrite string `json:"input_cache_write"`
 }
 
 type OpenRouterRemoteArchitecture struct {
@@ -33,12 +34,31 @@ type OpenRouterRemoteArchitecture struct {
 	OutputModalities []string `json:"output_modalities"`
 }
 
+type OpenRouterRemoteTopProvider struct {
+	ContextLength       int  `json:"context_length"`
+	MaxCompletionTokens int  `json:"max_completion_tokens"`
+	IsModerated         bool `json:"is_moderated"`
+}
+
+type OpenRouterRemoteReasoning struct {
+	Mandatory        bool     `json:"mandatory"`
+	DefaultEnabled   bool     `json:"default_enabled"`
+	SupportedEfforts []string `json:"supported_efforts"`
+	DefaultEffort    string   `json:"default_effort"`
+	Exclude          bool     `json:"exclude"`
+}
+
 type OpenRouterRemoteModel struct {
-	ID           string                       `json:"id"`
-	Name         string                       `json:"name"`
-	Description  string                       `json:"description"`
-	Architecture OpenRouterRemoteArchitecture `json:"architecture"`
-	Pricing      OpenRouterRemotePricing      `json:"pricing"`
+	ID                  string                       `json:"id"`
+	Name                string                       `json:"name"`
+	Description         string                       `json:"description"`
+	ContextLength       int                          `json:"context_length"`
+	KnowledgeCutoff     string                       `json:"knowledge_cutoff"`
+	SupportedParameters []string                     `json:"supported_parameters"`
+	Architecture        OpenRouterRemoteArchitecture `json:"architecture"`
+	Pricing             OpenRouterRemotePricing      `json:"pricing"`
+	TopProvider         OpenRouterRemoteTopProvider  `json:"top_provider"`
+	Reasoning           *OpenRouterRemoteReasoning   `json:"reasoning"`
 }
 
 type OpenRouterModelSyncResult struct {
@@ -145,18 +165,14 @@ func SyncOpenRouterModelListForTenant(ctx context.Context, tenantID string, mode
 		}
 
 		row := ModelConfigRow{
-			ModelID:               modelID,
-			OwnedBy:               owner,
-			Description:           openRouterModelDescription(model),
-			Enabled:               true,
-			PricingMode:           "token",
-			InputPricePerMillion:  openRouterPricePerMillion(model.Pricing.Prompt),
-			OutputPricePerMillion: openRouterPricePerMillion(model.Pricing.Completion),
-			CachedPricePerMillion: openRouterPricePerMillion(model.Pricing.InputCacheRead),
-			Source:                openRouterModelSource,
+			ModelID:     modelID,
+			OwnedBy:     owner,
+			Description: openRouterModelDescription(model),
+			Enabled:     true,
+			Source:      openRouterModelSource,
 		}
-		row.InputModalities, row.OutputModalities = openRouterModelModalities(model)
-		openRouterApplyImageGenerationSemantics(&row, model)
+		// Populate pricing, modalities, and OpenRouter metadata through the shared update path.
+		openRouterApplyModelSyncValues(&row, model)
 		if err := UpsertModelConfigForTenant(tenantID, row); err != nil {
 			return result, fmt.Errorf("sync openrouter model %s: %w", modelID, err)
 		}
@@ -487,12 +503,20 @@ func openRouterApplyModelSyncValues(row *ModelConfigRow, model OpenRouterRemoteM
 		return
 	}
 	if openRouterApplyImageGenerationSemantics(row, model) {
+		openRouterApplyModelMetadata(row, model)
 		return
 	}
 	row.PricingMode = "token"
 	row.InputPricePerMillion = openRouterPricePerMillion(model.Pricing.Prompt)
 	row.OutputPricePerMillion = openRouterPricePerMillion(model.Pricing.Completion)
 	row.CachedPricePerMillion = openRouterPricePerMillion(model.Pricing.InputCacheRead)
+	if cacheWrite := openRouterPricePerMillion(model.Pricing.InputCacheWrite); cacheWrite > 0 {
+		row.CacheWritePricePerMillion = cacheWrite
+	}
+	// Keep cache-read aligned with OpenRouter when available.
+	if cacheRead := openRouterPricePerMillion(model.Pricing.InputCacheRead); cacheRead > 0 {
+		row.CacheReadPricePerMillion = cacheRead
+	}
 	row.PricePerCall = 0
 	inputModalities, outputModalities := openRouterModelModalities(model)
 	if len(inputModalities) > 0 {
@@ -501,6 +525,96 @@ func openRouterApplyModelSyncValues(row *ModelConfigRow, model OpenRouterRemoteM
 	if len(outputModalities) > 0 {
 		row.OutputModalities = outputModalities
 	}
+	openRouterApplyModelMetadata(row, model)
+}
+
+func openRouterApplyModelMetadata(row *ModelConfigRow, model OpenRouterRemoteModel) {
+	if row == nil {
+		return
+	}
+	if displayName := openRouterModelDisplayName(model); displayName != "" && openRouterShouldSyncDisplayName(*row) {
+		row.DisplayName = displayName
+	}
+	if contextLength := openRouterModelContextLength(model); contextLength > 0 {
+		row.ContextLength = contextLength
+	}
+	if maxCompletion := openRouterModelMaxCompletionTokens(model); maxCompletion > 0 {
+		row.MaxCompletionTokens = maxCompletion
+	}
+	if params := openRouterModelSupportedParameters(model); len(params) > 0 {
+		row.SupportedParameters = params
+	}
+	if reasoning := openRouterModelReasoningJSON(model); reasoning != "" {
+		row.Reasoning = reasoning
+	}
+	if cutoff := strings.TrimSpace(model.KnowledgeCutoff); cutoff != "" {
+		row.KnowledgeCutoff = cutoff
+	}
+}
+
+func openRouterShouldSyncDisplayName(row ModelConfigRow) bool {
+	if strings.TrimSpace(row.DisplayName) == "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(row.Source)) {
+	case openRouterModelSource, "seed":
+		return true
+	default:
+		return false
+	}
+}
+
+func openRouterModelDisplayName(model OpenRouterRemoteModel) string {
+	name := strings.TrimSpace(model.Name)
+	if name == "" {
+		return ""
+	}
+	// OpenRouter names often look like "OpenAI: GPT-5". Prefer the model label.
+	if _, right, found := strings.Cut(name, ":"); found {
+		if trimmed := strings.TrimSpace(right); trimmed != "" {
+			return trimmed
+		}
+	}
+	return name
+}
+
+func openRouterModelContextLength(model OpenRouterRemoteModel) int {
+	if model.ContextLength > 0 {
+		return model.ContextLength
+	}
+	if model.TopProvider.ContextLength > 0 {
+		return model.TopProvider.ContextLength
+	}
+	return 0
+}
+
+func openRouterModelMaxCompletionTokens(model OpenRouterRemoteModel) int {
+	if model.TopProvider.MaxCompletionTokens > 0 {
+		return model.TopProvider.MaxCompletionTokens
+	}
+	return 0
+}
+
+func openRouterModelSupportedParameters(model OpenRouterRemoteModel) []string {
+	return normalizeModelModalities(model.SupportedParameters)
+}
+
+func openRouterModelReasoningJSON(model OpenRouterRemoteModel) string {
+	if model.Reasoning == nil {
+		return ""
+	}
+	payload := map[string]any{
+		"mandatory":         model.Reasoning.Mandatory,
+		"default_enabled":   model.Reasoning.DefaultEnabled,
+		"supported_efforts": normalizeModelModalities(model.Reasoning.SupportedEfforts),
+		"default_effort":    strings.TrimSpace(model.Reasoning.DefaultEffort),
+		"exclude":           model.Reasoning.Exclude,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func openRouterApplyImageGenerationSemantics(row *ModelConfigRow, model OpenRouterRemoteModel) bool {
@@ -673,12 +787,16 @@ func openRouterStaticBaseModelRow(modelID string) (ModelConfigRow, bool) {
 		description = strings.TrimSpace(info.DisplayName)
 	}
 	return ModelConfigRow{
-		ModelID:     modelID,
-		OwnedBy:     ownedBy,
-		Description: description,
-		Enabled:     true,
-		PricingMode: "token",
-		Source:      "seed",
+		ModelID:             modelID,
+		OwnedBy:             ownedBy,
+		DisplayName:         strings.TrimSpace(info.DisplayName),
+		Description:         description,
+		Enabled:             true,
+		ContextLength:       info.ContextLength,
+		MaxCompletionTokens: info.MaxCompletionTokens,
+		SupportedParameters: append([]string(nil), info.SupportedParameters...),
+		PricingMode:         "token",
+		Source:              "seed",
 	}, true
 }
 
@@ -721,15 +839,23 @@ func openRouterMergeVariantGroups(tenantID string, models []OpenRouterRemoteMode
 			}
 		}
 		imageGenerationBase := openRouterIsImageGenerationRow(baseModel)
-		// Aggregate: highest prices, best description, most complete modalities.
+		// Aggregate: highest prices, best description, most complete modalities/metadata.
 		bestInputPrice := baseModel.InputPricePerMillion
 		bestOutputPrice := baseModel.OutputPricePerMillion
 		bestCachedPrice := baseModel.CachedPricePerMillion
+		bestCacheWritePrice := baseModel.CacheWritePricePerMillion
+		bestCacheReadPrice := baseModel.CacheReadPricePerMillion
 		bestModalities := struct {
 			input  []string
 			output []string
 		}{baseModel.InputModalities, baseModel.OutputModalities}
 		bestDesc := ""
+		bestDisplayName := ""
+		bestContextLength := baseModel.ContextLength
+		bestMaxCompletion := baseModel.MaxCompletionTokens
+		bestParams := append([]string(nil), baseModel.SupportedParameters...)
+		bestReasoning := baseModel.Reasoning
+		bestKnowledgeCutoff := baseModel.KnowledgeCutoff
 
 		for _, e := range entries {
 			price := openRouterPricePerMillion(e.model.Pricing.Prompt)
@@ -744,8 +870,31 @@ func openRouterMergeVariantGroups(tenantID string, models []OpenRouterRemoteMode
 			if price > bestCachedPrice {
 				bestCachedPrice = price
 			}
+			if price > bestCacheReadPrice {
+				bestCacheReadPrice = price
+			}
+			price = openRouterPricePerMillion(e.model.Pricing.InputCacheWrite)
+			if price > bestCacheWritePrice {
+				bestCacheWritePrice = price
+			}
 			if desc := openRouterModelDescription(e.model); desc != "" && (bestDesc == "" || len(desc) > len(bestDesc)) {
 				bestDesc = desc
+			}
+			if displayName := openRouterModelDisplayName(e.model); displayName != "" && (bestDisplayName == "" || len(displayName) > len(bestDisplayName)) {
+				bestDisplayName = displayName
+			}
+			if contextLength := openRouterModelContextLength(e.model); contextLength > bestContextLength {
+				bestContextLength = contextLength
+			}
+			if maxCompletion := openRouterModelMaxCompletionTokens(e.model); maxCompletion > bestMaxCompletion {
+				bestMaxCompletion = maxCompletion
+			}
+			bestParams = unionModalities(bestParams, openRouterModelSupportedParameters(e.model))
+			if reasoning := openRouterModelReasoningJSON(e.model); reasoning != "" && (bestReasoning == "" || len(reasoning) > len(bestReasoning)) {
+				bestReasoning = reasoning
+			}
+			if cutoff := strings.TrimSpace(e.model.KnowledgeCutoff); cutoff != "" {
+				bestKnowledgeCutoff = cutoff
 			}
 			inMod, outMod := openRouterModelModalities(e.model)
 			bestModalities.input = unionModalities(bestModalities.input, inMod)
@@ -761,11 +910,15 @@ func openRouterMergeVariantGroups(tenantID string, models []OpenRouterRemoteMode
 
 		if !imageGenerationBase && (bestInputPrice != baseModel.InputPricePerMillion ||
 			bestOutputPrice != baseModel.OutputPricePerMillion ||
-			bestCachedPrice != baseModel.CachedPricePerMillion) {
+			bestCachedPrice != baseModel.CachedPricePerMillion ||
+			bestCacheReadPrice != baseModel.CacheReadPricePerMillion ||
+			bestCacheWritePrice != baseModel.CacheWritePricePerMillion) {
 			baseModel.PricingMode = "token"
 			baseModel.InputPricePerMillion = bestInputPrice
 			baseModel.OutputPricePerMillion = bestOutputPrice
 			baseModel.CachedPricePerMillion = bestCachedPrice
+			baseModel.CacheReadPricePerMillion = bestCacheReadPrice
+			baseModel.CacheWritePricePerMillion = bestCacheWritePrice
 			updated = true
 		}
 
@@ -778,6 +931,30 @@ func openRouterMergeVariantGroups(tenantID string, models []OpenRouterRemoteMode
 
 		if bestDesc != "" && openRouterShouldSyncDescription(baseModel) {
 			baseModel.Description = bestDesc
+			updated = true
+		}
+		if bestDisplayName != "" && openRouterShouldSyncDisplayName(baseModel) {
+			baseModel.DisplayName = bestDisplayName
+			updated = true
+		}
+		if bestContextLength > baseModel.ContextLength {
+			baseModel.ContextLength = bestContextLength
+			updated = true
+		}
+		if bestMaxCompletion > baseModel.MaxCompletionTokens {
+			baseModel.MaxCompletionTokens = bestMaxCompletion
+			updated = true
+		}
+		if len(bestParams) > len(baseModel.SupportedParameters) {
+			baseModel.SupportedParameters = bestParams
+			updated = true
+		}
+		if bestReasoning != "" && (baseModel.Reasoning == "" || len(bestReasoning) > len(baseModel.Reasoning)) {
+			baseModel.Reasoning = bestReasoning
+			updated = true
+		}
+		if bestKnowledgeCutoff != "" && bestKnowledgeCutoff != baseModel.KnowledgeCutoff {
+			baseModel.KnowledgeCutoff = bestKnowledgeCutoff
 			updated = true
 		}
 

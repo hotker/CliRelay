@@ -7,8 +7,8 @@ import (
 
 func TestRuntimeMigrationsCoverCoreTables(t *testing.T) {
 	migrations := RuntimeMigrations()
-	if len(migrations) != 9 {
-		t.Fatalf("RuntimeMigrations len = %d, want 9", len(migrations))
+	if len(migrations) != 10 {
+		t.Fatalf("RuntimeMigrations len = %d, want 10", len(migrations))
 	}
 	sqlText := migrations[0].SQL
 	for _, table := range []string{

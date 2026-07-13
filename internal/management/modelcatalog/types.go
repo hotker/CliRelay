@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,13 +20,19 @@ type ModelConfigPricingPayload struct {
 }
 
 type ModelConfigPayload struct {
-	ID               string                    `json:"id"`
-	OwnedBy          string                    `json:"owned_by"`
-	Description      string                    `json:"description"`
-	Enabled          bool                      `json:"enabled"`
-	InputModalities  *[]string                 `json:"input_modalities"`
-	OutputModalities *[]string                 `json:"output_modalities"`
-	Pricing          ModelConfigPricingPayload `json:"pricing"`
+	ID                  string                    `json:"id"`
+	OwnedBy             string                    `json:"owned_by"`
+	DisplayName         string                    `json:"display_name"`
+	Description         string                    `json:"description"`
+	Enabled             bool                      `json:"enabled"`
+	InputModalities     *[]string                 `json:"input_modalities"`
+	OutputModalities    *[]string                 `json:"output_modalities"`
+	ContextLength       *int                      `json:"context_length"`
+	MaxCompletionTokens *int                      `json:"max_completion_tokens"`
+	SupportedParameters *[]string                 `json:"supported_parameters"`
+	Reasoning           *any                      `json:"reasoning"`
+	KnowledgeCutoff     string                    `json:"knowledge_cutoff"`
+	Pricing             ModelConfigPricingPayload `json:"pricing"`
 }
 
 type ModelPricingUpdateItem struct {
@@ -93,6 +100,9 @@ func modelConfigResponse(row usage.ModelConfigRow) map[string]any {
 		"source":     row.Source,
 		"updated_at": row.UpdatedAt,
 	}
+	if row.DisplayName != "" {
+		response["display_name"] = row.DisplayName
+	}
 	attachModelConfigCapabilities(response, row)
 	return response
 }
@@ -117,6 +127,29 @@ func attachModelConfigCapabilities(target map[string]any, row usage.ModelConfigR
 	target["input_modalities"] = modelConfigModalitiesJSON(row.InputModalities)
 	target["output_modalities"] = modelConfigModalitiesJSON(row.OutputModalities)
 	target["supports_vision"] = modelConfigSupportsVision(row)
+	if row.DisplayName != "" {
+		target["display_name"] = row.DisplayName
+	}
+	if row.ContextLength > 0 {
+		target["context_length"] = row.ContextLength
+	}
+	if row.MaxCompletionTokens > 0 {
+		target["max_completion_tokens"] = row.MaxCompletionTokens
+	}
+	if len(row.SupportedParameters) > 0 {
+		target["supported_parameters"] = modelConfigModalitiesJSON(row.SupportedParameters)
+	}
+	if reasoning := strings.TrimSpace(row.Reasoning); reasoning != "" {
+		var payload any
+		if err := json.Unmarshal([]byte(reasoning), &payload); err == nil {
+			target["reasoning"] = payload
+		} else {
+			target["reasoning"] = reasoning
+		}
+	}
+	if row.KnowledgeCutoff != "" {
+		target["knowledge_cutoff"] = row.KnowledgeCutoff
+	}
 }
 
 func capabilityPath(prefix, suffix string) string {

@@ -11,6 +11,7 @@ func RuntimeMigrations() []Migration {
 		{Version: "202607110005_ccswitch_tenant_primary_key", SQL: ccSwitchTenantPrimaryKeySQL},
 		{Version: "202607120001_dynamic_menus", SQL: dynamicMenusSQL},
 		{Version: "202607120002_menu_management_v2", SQL: menuManagementV2SQL},
+		{Version: "202607130001_model_config_openrouter_metadata", SQL: modelConfigOpenRouterMetadataSQL},
 	}
 }
 
@@ -615,4 +616,13 @@ ALTER TABLE menus ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
 ALTER TABLE menus ADD COLUMN IF NOT EXISTS badge_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE menus ADD COLUMN IF NOT EXISTS badge_content TEXT NOT NULL DEFAULT '';
 ALTER TABLE menus ADD COLUMN IF NOT EXISTS hide_menu BOOLEAN NOT NULL DEFAULT false;
+`
+
+const modelConfigOpenRouterMetadataSQL = `
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS context_length INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS max_completion_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS supported_parameters TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_configs ADD COLUMN IF NOT EXISTS knowledge_cutoff TEXT NOT NULL DEFAULT '';
 `

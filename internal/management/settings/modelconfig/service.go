@@ -2,6 +2,7 @@ package modelconfig
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -18,10 +19,16 @@ type UpsertConfigInput struct {
 	Scope                     string
 	ModelID                   string
 	OwnedBy                   string
+	DisplayName               string
 	Description               string
 	Enabled                   bool
 	InputModalities           *[]string
 	OutputModalities          *[]string
+	ContextLength             *int
+	MaxCompletionTokens       *int
+	SupportedParameters       *[]string
+	Reasoning                 *any
+	KnowledgeCutoff           string
 	PricingMode               string
 	InputPricePerMillion      float64
 	OutputPricePerMillion     float64
@@ -78,8 +85,10 @@ func UpsertConfigForTenant(tenantID string, input UpsertConfigInput) (usage.Mode
 	row := usage.ModelConfigRow{
 		ModelID:                   strings.TrimSpace(input.ModelID),
 		OwnedBy:                   strings.TrimSpace(input.OwnedBy),
+		DisplayName:               strings.TrimSpace(input.DisplayName),
 		Description:               strings.TrimSpace(input.Description),
 		Enabled:                   input.Enabled,
+		KnowledgeCutoff:           strings.TrimSpace(input.KnowledgeCutoff),
 		PricingMode:               strings.TrimSpace(input.PricingMode),
 		InputPricePerMillion:      input.InputPricePerMillion,
 		OutputPricePerMillion:     input.OutputPricePerMillion,
@@ -94,6 +103,18 @@ func UpsertConfigForTenant(tenantID string, input UpsertConfigInput) (usage.Mode
 	}
 	if input.OutputModalities != nil {
 		row.OutputModalities = *input.OutputModalities
+	}
+	if input.ContextLength != nil {
+		row.ContextLength = *input.ContextLength
+	}
+	if input.MaxCompletionTokens != nil {
+		row.MaxCompletionTokens = *input.MaxCompletionTokens
+	}
+	if input.SupportedParameters != nil {
+		row.SupportedParameters = *input.SupportedParameters
+	}
+	if input.Reasoning != nil {
+		row.Reasoning = encodeReasoningPayload(*input.Reasoning)
 	}
 	if row.ModelID == "" {
 		row.ModelID = originalID
@@ -112,6 +133,24 @@ func UpsertConfigForTenant(tenantID string, input UpsertConfigInput) (usage.Mode
 		}
 		if input.OutputModalities == nil {
 			row.OutputModalities = existing.OutputModalities
+		}
+		if strings.TrimSpace(input.DisplayName) == "" {
+			row.DisplayName = existing.DisplayName
+		}
+		if input.ContextLength == nil {
+			row.ContextLength = existing.ContextLength
+		}
+		if input.MaxCompletionTokens == nil {
+			row.MaxCompletionTokens = existing.MaxCompletionTokens
+		}
+		if input.SupportedParameters == nil {
+			row.SupportedParameters = existing.SupportedParameters
+		}
+		if input.Reasoning == nil {
+			row.Reasoning = existing.Reasoning
+		}
+		if strings.TrimSpace(input.KnowledgeCutoff) == "" {
+			row.KnowledgeCutoff = existing.KnowledgeCutoff
 		}
 	}
 
@@ -312,4 +351,20 @@ func filterRowsByScope(rows []usage.ModelConfigRow, scope string) []usage.ModelC
 		}
 	}
 	return filtered
+}
+
+func encodeReasoningPayload(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	}
 }

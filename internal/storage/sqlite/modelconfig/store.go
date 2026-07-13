@@ -15,10 +15,16 @@ import (
 type ModelConfigRow struct {
 	ModelID                   string   `json:"model_id"`
 	OwnedBy                   string   `json:"owned_by"`
+	DisplayName               string   `json:"display_name,omitempty"`
 	Description               string   `json:"description"`
 	Enabled                   bool     `json:"enabled"`
 	InputModalities           []string `json:"input_modalities,omitempty"`
 	OutputModalities          []string `json:"output_modalities,omitempty"`
+	ContextLength             int      `json:"context_length,omitempty"`
+	MaxCompletionTokens       int      `json:"max_completion_tokens,omitempty"`
+	SupportedParameters       []string `json:"supported_parameters,omitempty"`
+	Reasoning                 string   `json:"reasoning,omitempty"`
+	KnowledgeCutoff           string   `json:"knowledge_cutoff,omitempty"`
 	PricingMode               string   `json:"pricing_mode"`
 	InputPricePerMillion      float64  `json:"input_price_per_million"`
 	OutputPricePerMillion     float64  `json:"output_price_per_million"`
@@ -43,10 +49,16 @@ CREATE TABLE IF NOT EXISTS model_configs (
   tenant_id                     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
   model_id                      TEXT NOT NULL,
   owned_by                      TEXT NOT NULL DEFAULT '',
+  display_name                  TEXT NOT NULL DEFAULT '',
   description                   TEXT NOT NULL DEFAULT '',
   enabled                       INTEGER NOT NULL DEFAULT 1,
   input_modalities              TEXT NOT NULL DEFAULT '',
   output_modalities             TEXT NOT NULL DEFAULT '',
+  context_length                INTEGER NOT NULL DEFAULT 0,
+  max_completion_tokens         INTEGER NOT NULL DEFAULT 0,
+  supported_parameters          TEXT NOT NULL DEFAULT '',
+  reasoning                     TEXT NOT NULL DEFAULT '',
+  knowledge_cutoff              TEXT NOT NULL DEFAULT '',
   pricing_mode                  TEXT NOT NULL DEFAULT 'token',
   input_price_per_million        REAL NOT NULL DEFAULT 0,
   output_price_per_million       REAL NOT NULL DEFAULT 0,
@@ -234,7 +246,7 @@ func (s Store) ListModelConfigs() []ModelConfigRow {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT model_id, owned_by, description, enabled, input_modalities, output_modalities, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at FROM model_configs WHERE tenant_id = ? ORDER BY lower(model_id)`, s.tenantID)
+	rows, err := s.db.Query(`SELECT model_id, owned_by, display_name, description, enabled, input_modalities, output_modalities, context_length, max_completion_tokens, supported_parameters, reasoning, knowledge_cutoff, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at FROM model_configs WHERE tenant_id = ? ORDER BY lower(model_id)`, s.tenantID)
 	if err != nil {
 		log.Errorf("sqlite/modelconfig: list tenant model configs: %v", err)
 		return nil
@@ -254,7 +266,7 @@ func (s Store) GetModelConfig(modelID string) (ModelConfigRow, bool) {
 	if s.db == nil {
 		return ModelConfigRow{}, false
 	}
-	return scanModelConfigRow(s.db.QueryRow(`SELECT model_id, owned_by, description, enabled, input_modalities, output_modalities, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at FROM model_configs WHERE tenant_id = ? AND model_id = ?`, s.tenantID, strings.TrimSpace(modelID)))
+	return scanModelConfigRow(s.db.QueryRow(`SELECT model_id, owned_by, display_name, description, enabled, input_modalities, output_modalities, context_length, max_completion_tokens, supported_parameters, reasoning, knowledge_cutoff, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at FROM model_configs WHERE tenant_id = ? AND model_id = ?`, s.tenantID, strings.TrimSpace(modelID)))
 }
 
 func (s Store) UpsertModelConfig(row ModelConfigRow) error {
@@ -273,16 +285,26 @@ func (s Store) UpsertModelConfig(row ModelConfigRow) error {
 		row.Source = "user"
 	}
 	row.UpdatedAt = nowRFC3339()
+	row.DisplayName = strings.TrimSpace(row.DisplayName)
+	row.KnowledgeCutoff = strings.TrimSpace(row.KnowledgeCutoff)
+	row.SupportedParameters = NormalizeModelParameterNames(row.SupportedParameters)
+	row.Reasoning = NormalizeModelReasoningJSON(row.Reasoning)
 	_, err := s.db.Exec(
 		`INSERT INTO model_configs
-		 (tenant_id, model_id, owned_by, description, enabled, input_modalities, output_modalities, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (tenant_id, model_id, owned_by, display_name, description, enabled, input_modalities, output_modalities, context_length, max_completion_tokens, supported_parameters, reasoning, knowledge_cutoff, pricing_mode, input_price_per_million, output_price_per_million, cached_price_per_million, cache_read_price_per_million, cache_write_price_per_million, price_per_call, source, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, model_id) DO UPDATE SET
 		   owned_by = excluded.owned_by,
+		   display_name = excluded.display_name,
 		   description = excluded.description,
 		   enabled = excluded.enabled,
 		   input_modalities = excluded.input_modalities,
 		   output_modalities = excluded.output_modalities,
+		   context_length = excluded.context_length,
+		   max_completion_tokens = excluded.max_completion_tokens,
+		   supported_parameters = excluded.supported_parameters,
+		   reasoning = excluded.reasoning,
+		   knowledge_cutoff = excluded.knowledge_cutoff,
 		   pricing_mode = excluded.pricing_mode,
 		   input_price_per_million = excluded.input_price_per_million,
 		   output_price_per_million = excluded.output_price_per_million,
@@ -295,10 +317,16 @@ func (s Store) UpsertModelConfig(row ModelConfigRow) error {
 		s.tenantID,
 		row.ModelID,
 		row.OwnedBy,
+		row.DisplayName,
 		row.Description,
 		boolToInt(row.Enabled),
 		encodeModelModalities(row.InputModalities),
 		encodeModelModalities(row.OutputModalities),
+		row.ContextLength,
+		row.MaxCompletionTokens,
+		encodeModelModalities(row.SupportedParameters),
+		row.Reasoning,
+		row.KnowledgeCutoff,
 		row.PricingMode,
 		row.InputPricePerMillion,
 		row.OutputPricePerMillion,
@@ -461,7 +489,7 @@ func migrateModelConfigTenantSchema(db *sql.DB) {
 	tables := []struct {
 		name, create, columns string
 	}{
-		{"model_configs", `CREATE TABLE model_configs (tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', model_id TEXT NOT NULL, owned_by TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, input_modalities TEXT NOT NULL DEFAULT '', output_modalities TEXT NOT NULL DEFAULT '', pricing_mode TEXT NOT NULL DEFAULT 'token', input_price_per_million REAL NOT NULL DEFAULT 0, output_price_per_million REAL NOT NULL DEFAULT 0, cached_price_per_million REAL NOT NULL DEFAULT 0, cache_read_price_per_million REAL NOT NULL DEFAULT 0, cache_write_price_per_million REAL NOT NULL DEFAULT 0, price_per_call REAL NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'user', updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, model_id))`, "tenant_id,model_id,owned_by,description,enabled,input_modalities,output_modalities,pricing_mode,input_price_per_million,output_price_per_million,cached_price_per_million,cache_read_price_per_million,cache_write_price_per_million,price_per_call,source,updated_at"},
+		{"model_configs", `CREATE TABLE model_configs (tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', model_id TEXT NOT NULL, owned_by TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, input_modalities TEXT NOT NULL DEFAULT '', output_modalities TEXT NOT NULL DEFAULT '', context_length INTEGER NOT NULL DEFAULT 0, max_completion_tokens INTEGER NOT NULL DEFAULT 0, supported_parameters TEXT NOT NULL DEFAULT '', reasoning TEXT NOT NULL DEFAULT '', knowledge_cutoff TEXT NOT NULL DEFAULT '', pricing_mode TEXT NOT NULL DEFAULT 'token', input_price_per_million REAL NOT NULL DEFAULT 0, output_price_per_million REAL NOT NULL DEFAULT 0, cached_price_per_million REAL NOT NULL DEFAULT 0, cache_read_price_per_million REAL NOT NULL DEFAULT 0, cache_write_price_per_million REAL NOT NULL DEFAULT 0, price_per_call REAL NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'user', updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, model_id))`, "tenant_id,model_id,owned_by,description,enabled,input_modalities,output_modalities,pricing_mode,input_price_per_million,output_price_per_million,cached_price_per_million,cache_read_price_per_million,cache_write_price_per_million,price_per_call,source,updated_at"},
 		{"model_owner_presets", `CREATE TABLE model_owner_presets (tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', value TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, value))`, "tenant_id,value,label,description,enabled,updated_at"},
 		{"auth_group_model_owner_mappings", `CREATE TABLE auth_group_model_owner_mappings (tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', auth_group TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, auth_group))`, "tenant_id,auth_group,owner,updated_at"},
 		{"model_openrouter_sync_state", `CREATE TABLE model_openrouter_sync_state (tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001', id INTEGER NOT NULL CHECK(id = 1), enabled INTEGER NOT NULL DEFAULT 0, interval_minutes INTEGER NOT NULL DEFAULT 1440, last_sync_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', last_seen INTEGER NOT NULL DEFAULT 0, last_added INTEGER NOT NULL DEFAULT 0, last_updated INTEGER NOT NULL DEFAULT 0, last_skipped INTEGER NOT NULL DEFAULT 0, updated_at DATETIME NOT NULL, PRIMARY KEY (tenant_id, id))`, "tenant_id,id,enabled,interval_minutes,last_sync_at,last_success_at,last_error,last_seen,last_added,last_updated,last_skipped,updated_at"},
@@ -533,14 +561,27 @@ func ensureModelConfigSchema(db *sql.DB) {
 	if db == nil {
 		return
 	}
-	if !sqliteColumnExists(db, "model_configs", "input_modalities") {
-		if _, err := db.Exec("ALTER TABLE model_configs ADD COLUMN input_modalities TEXT NOT NULL DEFAULT ''"); err != nil {
-			log.Warnf("sqlite/modelconfig: add model config input_modalities column: %v", err)
+	textColumns := []string{
+		"display_name",
+		"input_modalities",
+		"output_modalities",
+		"supported_parameters",
+		"reasoning",
+		"knowledge_cutoff",
+	}
+	for _, col := range textColumns {
+		if !sqliteColumnExists(db, "model_configs", col) {
+			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE model_configs ADD COLUMN %s TEXT NOT NULL DEFAULT ''", col)); err != nil {
+				log.Warnf("sqlite/modelconfig: add model config column %s: %v", col, err)
+			}
 		}
 	}
-	if !sqliteColumnExists(db, "model_configs", "output_modalities") {
-		if _, err := db.Exec("ALTER TABLE model_configs ADD COLUMN output_modalities TEXT NOT NULL DEFAULT ''"); err != nil {
-			log.Warnf("sqlite/modelconfig: add model config output_modalities column: %v", err)
+	intColumns := []string{"context_length", "max_completion_tokens"}
+	for _, col := range intColumns {
+		if !sqliteColumnExists(db, "model_configs", col) {
+			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE model_configs ADD COLUMN %s INTEGER NOT NULL DEFAULT 0", col)); err != nil {
+				log.Warnf("sqlite/modelconfig: add model config column %s: %v", col, err)
+			}
 		}
 	}
 	for _, col := range []string{"cache_read_price_per_million", "cache_write_price_per_million"} {
@@ -585,6 +626,26 @@ func decodeModelModalities(value string) []string {
 	return NormalizeModelModalities(values)
 }
 
+func NormalizeModelParameterNames(values []string) []string {
+	return NormalizeModelModalities(values)
+}
+
+func NormalizeModelReasoningJSON(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(value), &payload); err != nil {
+		return ""
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
 func defaultModelConfigRows() []ModelConfigRow {
 	channels := []string{
 		"claude",
@@ -627,12 +688,16 @@ func defaultModelConfigRows() []ModelConfigRow {
 			}
 
 			row := ModelConfigRow{
-				ModelID:     modelID,
-				OwnedBy:     ownedBy,
-				Description: description,
-				Enabled:     true,
-				PricingMode: "token",
-				Source:      "seed",
+				ModelID:             modelID,
+				OwnedBy:             ownedBy,
+				DisplayName:         strings.TrimSpace(model.DisplayName),
+				Description:         description,
+				Enabled:             true,
+				ContextLength:       model.ContextLength,
+				MaxCompletionTokens: model.MaxCompletionTokens,
+				SupportedParameters: append([]string(nil), model.SupportedParameters...),
+				PricingMode:         "token",
+				Source:              "seed",
 			}
 			if modelID == "gpt-image-2" {
 				row.Description = "Image generation model billed per invocation"
@@ -826,14 +891,38 @@ func repairDefaultPerCallModelConfigRows(db *sql.DB) {
 func scanModelConfigRow(scanner interface{ Scan(...any) error }) (ModelConfigRow, bool) {
 	var row ModelConfigRow
 	var enabled int
-	var inputModalities, outputModalities string
-	err := scanner.Scan(&row.ModelID, &row.OwnedBy, &row.Description, &enabled, &inputModalities, &outputModalities, &row.PricingMode, &row.InputPricePerMillion, &row.OutputPricePerMillion, &row.CachedPricePerMillion, &row.CacheReadPricePerMillion, &row.CacheWritePricePerMillion, &row.PricePerCall, &row.Source, &row.UpdatedAt)
+	var inputModalities, outputModalities, supportedParameters string
+	err := scanner.Scan(
+		&row.ModelID,
+		&row.OwnedBy,
+		&row.DisplayName,
+		&row.Description,
+		&enabled,
+		&inputModalities,
+		&outputModalities,
+		&row.ContextLength,
+		&row.MaxCompletionTokens,
+		&supportedParameters,
+		&row.Reasoning,
+		&row.KnowledgeCutoff,
+		&row.PricingMode,
+		&row.InputPricePerMillion,
+		&row.OutputPricePerMillion,
+		&row.CachedPricePerMillion,
+		&row.CacheReadPricePerMillion,
+		&row.CacheWritePricePerMillion,
+		&row.PricePerCall,
+		&row.Source,
+		&row.UpdatedAt,
+	)
 	if err != nil {
 		return ModelConfigRow{}, false
 	}
 	row.Enabled = intToBool(enabled)
 	row.InputModalities = decodeModelModalities(inputModalities)
 	row.OutputModalities = decodeModelModalities(outputModalities)
+	row.SupportedParameters = decodeModelModalities(supportedParameters)
+	row.Reasoning = NormalizeModelReasoningJSON(row.Reasoning)
 	row.PricingMode = NormalizePricingMode(row.PricingMode)
 	return row, true
 }
