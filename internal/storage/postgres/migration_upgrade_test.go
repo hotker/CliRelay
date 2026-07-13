@@ -46,22 +46,33 @@ func TestApplyMigrationsUpgradeFromPublishedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer adminDB.Close()
 	if err := adminDB.PingContext(ctx); err != nil {
+		_ = adminDB.Close()
 		t.Fatal(err)
 	}
 
 	dbName := fmt.Sprintf("mig_upgrade_%d", time.Now().UnixNano())
 	if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+dbName); err != nil {
+		_ = adminDB.Close()
 		t.Fatalf("create disposable db: %v", err)
 	}
+	// Register admin teardown first so LIFO runs: runtime close → drop → admin close.
+	// Do not defer adminDB.Close(); that runs before t.Cleanup and leaves the DB behind.
 	t.Cleanup(func() {
-		_, _ = adminDB.ExecContext(context.Background(), `
+		cleanupCtx := context.Background()
+		if _, err := adminDB.ExecContext(cleanupCtx, `
 			SELECT pg_terminate_backend(pid)
 			  FROM pg_stat_activity
 			 WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, dbName)
-		_, _ = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+dbName)
+		`, dbName); err != nil {
+			t.Errorf("terminate connections on disposable db %s: %v", dbName, err)
+		}
+		if _, err := adminDB.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS "+dbName); err != nil {
+			t.Errorf("drop disposable db %s: %v", dbName, err)
+		}
+		if err := adminDB.Close(); err != nil {
+			t.Errorf("close admin db: %v", err)
+		}
 	})
 
 	testDSN, err := replacePostgresDatabase(dsn, dbName)
@@ -72,7 +83,11 @@ func TestApplyMigrationsUpgradeFromPublishedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close runtime db: %v", err)
+		}
+	})
 	if err := db.PingContext(ctx); err != nil {
 		t.Fatal(err)
 	}
