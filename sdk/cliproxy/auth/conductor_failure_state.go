@@ -66,9 +66,8 @@ func applyAuthQuotaFailureState(auth *Auth, resultErr *Error, retryAfter *time.D
 	var next time.Time
 	if retryAfter != nil {
 		next = now.Add(*retryAfter)
-	} else if resultErr != nil && resultErr.QuotaWindowMinutes > 0 {
-		next = now.Add(time.Duration(resultErr.QuotaWindowMinutes) * time.Minute)
 	} else {
+		// WindowMinutes is window length metadata (e.g. week=10080), not remaining cooldown.
 		cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, quotaCooldownDisabledForAuth(auth))
 		if cooldown > 0 {
 			next = now.Add(cooldown)

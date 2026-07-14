@@ -19,12 +19,9 @@ func TestNewXAIStatusErr_BalanceExhaustedMapsToWeeklyQuota(t *testing.T) {
 	if window != "week" || minutes != 10080 {
 		t.Fatalf("QuotaWindow() = %q/%d, want week/10080", window, minutes)
 	}
-	retryAfter := err.RetryAfter()
-	if retryAfter == nil {
-		t.Fatal("RetryAfter() = nil, want weekly cooldown")
-	}
-	if *retryAfter != 7*24*time.Hour {
-		t.Fatalf("RetryAfter() = %v, want 7d", *retryAfter)
+	// Unknown remaining time: do not invent now+7d from window length.
+	if got := err.RetryAfter(); got != nil {
+		t.Fatalf("RetryAfter() = %v, want nil when upstream omits reset", *got)
 	}
 }
 
@@ -45,6 +42,20 @@ func TestNewXAIStatusErr_PrefersRetryAfterHeader(t *testing.T) {
 	window, minutes := err.QuotaWindow()
 	if window != "week" || minutes != 10080 {
 		t.Fatalf("QuotaWindow() = %q/%d, want week/10080", window, minutes)
+	}
+}
+
+func TestNewXAIStatusErr_UsesResetsInSeconds(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"error":{"message":"Grok Build usage balance exhausted","resets_in_seconds":7200}}`)
+	err := newXAIStatusErr(http.StatusPaymentRequired, body)
+	retryAfter := err.RetryAfter()
+	if retryAfter == nil {
+		t.Fatal("RetryAfter() = nil")
+	}
+	if *retryAfter != 2*time.Hour {
+		t.Fatalf("RetryAfter() = %v, want 2h", *retryAfter)
 	}
 }
 

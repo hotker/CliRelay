@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	// xAI SuperGrok weekly included usage window (matches frontend XAI_WEEKLY_WINDOW_SECONDS).
-	xaiWeeklyWindowMinutes   = 10080
-	xaiWeeklyWindowLabel     = "week"
-	xaiWeeklyCooldownDefault = 7 * 24 * time.Hour
+	// xAI SuperGrok weekly included usage window label/metadata only.
+	// Do not treat this length as remaining cooldown when reset is unknown.
+	xaiWeeklyWindowMinutes = 10080
+	xaiWeeklyWindowLabel   = "week"
 )
 
 func newXAIStatusErr(statusCode int, body []byte, headers ...http.Header) statusErr {
@@ -72,12 +72,8 @@ func parseXAIRetryAfter(statusCode int, errorBody []byte, header http.Header, no
 			return &retryAfter
 		}
 	}
-	// Weekly balance exhausted without an explicit reset: cool down until the
-	// typical weekly window would roll rather than probing every 30 minutes.
-	if statusCode == http.StatusPaymentRequired && isXAIUsageBalanceExhausted(errorBody) {
-		retryAfter := xaiWeeklyCooldownDefault
-		return &retryAfter
-	}
+	// No explicit reset from upstream. Leave retryAfter unset so conductor uses
+	// short probe backoff instead of inventing now+7d (window length ≠ remaining).
 	return nil
 }
 

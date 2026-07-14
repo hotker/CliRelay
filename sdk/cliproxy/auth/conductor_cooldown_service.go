@@ -289,10 +289,8 @@ func applyModelQuotaFailureLocked(auth *Auth, state *ModelState, result Result, 
 	backoffLevel := state.Quota.BackoffLevel
 	if result.RetryAfter != nil {
 		next = now.Add(*result.RetryAfter)
-	} else if result.Error != nil && result.Error.QuotaWindowMinutes > 0 {
-		// Prefer the full provider window when known (week/5h) over short exponential probes.
-		next = now.Add(time.Duration(result.Error.QuotaWindowMinutes) * time.Minute)
 	} else {
+		// WindowMinutes is window length metadata (e.g. week=10080), not remaining cooldown.
 		cooldown, nextLevel := nextQuotaCooldown(backoffLevel, quotaCooldownDisabledForAuth(auth))
 		if cooldown > 0 {
 			next = now.Add(cooldown)
