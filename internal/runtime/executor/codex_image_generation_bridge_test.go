@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -106,33 +107,13 @@ func TestNormalizeCodexImageGenerationCallStatusSkipsWithoutResult(t *testing.T)
 	}
 }
 
-func TestMaybeEnsureCodexImageGenerationToolSkipsInjectForDesktop(t *testing.T) {
+func TestMaybeEnsureStripsHostedWhenLocalImageGenPresent(t *testing.T) {
 	auth := &cliproxyauth.Auth{
 		Provider: "codex",
 		Metadata: map[string]any{"codex_image_generation_bridge": true},
 	}
-	headers := http.Header{}
-	headers.Set("Originator", "Codex Desktop")
-	headers.Set("User-Agent", "Codex Desktop/0.144.2 (Mac OS 26.5.2; arm64)")
-	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"function","name":"shell"}]}`)
-	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", headers)
-	if gjson.GetBytes(out, "tools.#").Int() != 1 {
-		t.Fatalf("tools count = %d, want 1 (no inject); body=%s", gjson.GetBytes(out, "tools.#").Int(), out)
-	}
-	if got := gjson.GetBytes(out, "tools.0.type").String(); got != "function" {
-		t.Fatalf("tools.0.type = %q, want function; body=%s", got, out)
-	}
-}
-
-func TestMaybeEnsureCodexImageGenerationToolStripsHostedForDesktop(t *testing.T) {
-	auth := &cliproxyauth.Auth{
-		Provider: "codex",
-		Metadata: map[string]any{"codex_image_generation_bridge": true},
-	}
-	headers := http.Header{}
-	headers.Set("User-Agent", "Codex Desktop/0.144.2")
-	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation","output_format":"png"},{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}],"tool_choice":{"type":"image_generation"}}`)
-	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", headers)
+	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation"},{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}],"tool_choice":{"type":"image_generation"}}`)
+	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", nil)
 	if gjson.GetBytes(out, "tools.#").Int() != 1 {
 		t.Fatalf("tools count = %d, want 1; body=%s", gjson.GetBytes(out, "tools.#").Int(), out)
 	}
@@ -141,5 +122,42 @@ func TestMaybeEnsureCodexImageGenerationToolStripsHostedForDesktop(t *testing.T)
 	}
 	if got := gjson.GetBytes(out, "tool_choice").String(); got != "auto" {
 		t.Fatalf("tool_choice = %q, want auto; body=%s", got, out)
+	}
+}
+
+func TestMaybeEnsureInjectsHostedWhenNoLocalImageGenEvenForDesktop(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider: "codex",
+		Metadata: map[string]any{"codex_image_generation_bridge": true},
+	}
+	headers := http.Header{}
+	headers.Set("Originator", "Codex Desktop")
+	headers.Set("User-Agent", "Codex Desktop/0.144.2")
+	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"function","name":"shell"}],"instructions":"base"}`)
+	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", headers)
+	if got := gjson.GetBytes(out, "tools.1.type").String(); got != "image_generation" {
+		t.Fatalf("tools.1.type = %q, want image_generation; body=%s", got, out)
+	}
+	if !strings.Contains(gjson.GetBytes(out, "instructions").String(), "cliproxy-codex-image-generation") {
+		t.Fatalf("instructions missing bridge text; body=%s", out)
+	}
+}
+
+func TestSynthesizeCodexImageDisplayMessageEvent(t *testing.T) {
+	in := []byte(`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"iVBORw0KGgo=","output_format":"png","revised_prompt":"cute cat"}}`)
+	events := normalizeCodexImageGenerationOutboundEvent(in)
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	display := bytes.TrimSpace(events[1][len(dataTag):])
+	if got := gjson.GetBytes(display, "item.type").String(); got != "message" {
+		t.Fatalf("display item.type = %q, want message; %s", got, display)
+	}
+	if got := gjson.GetBytes(display, "item.role").String(); got != "assistant" {
+		t.Fatalf("display role = %q, want assistant", got)
+	}
+	text := gjson.GetBytes(display, "item.content.0.text").String()
+	if !strings.Contains(text, "data:image/png;base64,iVBORw0KGgo=") {
+		t.Fatalf("display text missing data url: %s", text)
 	}
 }

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,11 @@ import (
 const (
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
 	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+
+	// Sub2API-style guidance: hosted image_generation is intentional for clients that
+	// cannot expose the local image_gen namespace (API-key custom providers).
+	codexImageGenerationBridgeMarker = "<cliproxy-codex-image-generation>"
+	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace under custom/API-key providers; that does not mean image generation is unavailable. Do not claim the environment lacks image tooling solely because `image_gen` is absent, and do not ask the user to switch to CLI fallback as the primary fix.\n</cliproxy-codex-image-generation>"
 )
 
 var (
@@ -21,37 +27,73 @@ var (
 	imageGenToolArrayJSON = []byte(`[{"type":"image_generation","output_format":"png"}]`)
 )
 
-// maybeEnsureCodexImageGenerationTool injects the Responses-native
-// image_generation tool when the Codex OAuth account has the bridge enabled.
+// maybeEnsureCodexImageGenerationTool prepares outbound /responses tools for image gen.
 //
-// Codex Desktop must keep the local image_gen extension path (Images API +
-// generated_images disk save). Hosted image_generation returns base64-only
-// image_generation_call items that Desktop does not render, so Desktop
-// requests never inject and any hosted tool is stripped.
+// Policy (root-cause fix for Desktop):
+//  1. If the client already advertises local image_gen (namespace/function), keep it and
+//     strip hosted image_generation so Desktop uses /v1/images + disk save path.
+//  2. Else if account bridge is enabled, inject hosted image_generation + bridge instructions.
+//     API-key custom providers typically do not expose local image_gen, so hosted is required.
 func maybeEnsureCodexImageGenerationTool(body []byte, auth *cliproxyauth.Auth, baseModel string, headers http.Header) []byte {
-	if isCodexDesktopClient(headers) {
+	if requestHasLocalImageGenTool(body) {
 		return stripHostedImageGenerationTools(body)
 	}
 	if !codexImageGenerationBridgeEnabled(auth) {
 		return body
 	}
-	return ensureCodexImageGenerationTool(body, baseModel, auth, headers)
+	body = ensureCodexImageGenerationTool(body, baseModel, auth, headers)
+	if requestHasHostedImageGenerationTool(body) {
+		body = ensureCodexImageGenerationBridgeInstructions(body)
+	}
+	return body
 }
 
-func isCodexDesktopClient(headers http.Header) bool {
-	if headers == nil {
+func requestHasLocalImageGenTool(body []byte) bool {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		for _, tool := range tools.Array() {
+			if isImageGenerationFunctionTool(tool) {
+				return true
+			}
+		}
+	}
+	// Responses Lite embeds tools inside input additional_tools items.
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
 		return false
 	}
-	originator := strings.ToLower(strings.TrimSpace(headers.Get("Originator")))
-	if strings.Contains(originator, "codex desktop") || strings.Contains(originator, "codex_desktop") {
-		return true
+	for _, item := range input.Array() {
+		if strings.TrimSpace(item.Get("type").String()) != "additional_tools" {
+			continue
+		}
+		nested := item.Get("tools")
+		if !nested.IsArray() {
+			continue
+		}
+		for _, tool := range nested.Array() {
+			if isImageGenerationFunctionTool(tool) {
+				return true
+			}
+		}
 	}
-	ua := strings.ToLower(strings.TrimSpace(headers.Get("User-Agent")))
-	return strings.Contains(ua, "codex desktop")
+	return false
+}
+
+func requestHasHostedImageGenerationTool(body []byte) bool {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return false
+	}
+	for _, tool := range tools.Array() {
+		if strings.TrimSpace(tool.Get("type").String()) == "image_generation" {
+			return true
+		}
+	}
+	return false
 }
 
 // stripHostedImageGenerationTools removes Responses-native image_generation tools
-// so the model falls back to the client's local image_gen namespace when present.
+// so the model prefers the client's local image_gen namespace when present.
 func stripHostedImageGenerationTools(body []byte) []byte {
 	tools := gjson.GetBytes(body, "tools")
 	if tools.IsArray() {
@@ -76,6 +118,24 @@ func stripHostedImageGenerationTools(body []byte) []byte {
 	if choiceType == "image_generation" {
 		body, _ = sjson.SetBytes(body, "tool_choice", "auto")
 	}
+	return body
+}
+
+func ensureCodexImageGenerationBridgeInstructions(body []byte) []byte {
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Exists() && instructions.Type == gjson.String {
+		text := instructions.String()
+		if strings.Contains(text, codexImageGenerationBridgeMarker) {
+			return body
+		}
+		if strings.TrimSpace(text) == "" {
+			body, _ = sjson.SetBytes(body, "instructions", codexImageGenerationBridgeText)
+			return body
+		}
+		body, _ = sjson.SetBytes(body, "instructions", text+"\n\n"+codexImageGenerationBridgeText)
+		return body
+	}
+	body, _ = sjson.SetBytes(body, "instructions", codexImageGenerationBridgeText)
 	return body
 }
 
@@ -118,7 +178,8 @@ func ensureCodexImageGenerationTool(body []byte, baseModel string, auth *cliprox
 func isImageGenerationFunctionTool(tool gjson.Result) bool {
 	switch tool.Get("type").String() {
 	case "function":
-		return tool.Get("name").String() == "image_gen.imagegen"
+		name := tool.Get("name").String()
+		return name == "image_gen.imagegen" || name == "imagegen"
 	case "namespace":
 		if tool.Get("name").String() != "image_gen" {
 			return false
@@ -157,9 +218,23 @@ func isCodexFreePlanAuth(auth *cliproxyauth.Auth) bool {
 	return strings.EqualFold(strings.TrimSpace(auth.Attributes["plan_type"]), "free")
 }
 
+// normalizeCodexImageGenerationOutboundEvent normalizes hosted image events for clients:
+//  1. force status=completed when result is present
+//  2. synthesize an assistant markdown image message so Desktop can render without saved_path
+func normalizeCodexImageGenerationOutboundEvent(payload []byte) [][]byte {
+	if len(payload) == 0 {
+		return nil
+	}
+	normalized := normalizeCodexImageGenerationCallStatus(payload)
+	out := [][]byte{normalized}
+	if msg := synthesizeCodexImageDisplayMessageEvent(normalized); len(msg) > 0 {
+		out = append(out, msg)
+	}
+	return out
+}
+
 // normalizeCodexImageGenerationCallStatus upgrades image_generation_call items that already
-// carry a finished image payload but remain status=generating. Codex Desktop skips rendering
-// and local persistence unless status is completed.
+// carry a finished image payload but remain status=generating.
 func normalizeCodexImageGenerationCallStatus(payload []byte) []byte {
 	if len(payload) == 0 {
 		return payload
@@ -210,6 +285,65 @@ func normalizeCodexImageGenerationCallStatus(payload []byte) []byte {
 	default:
 		return payload
 	}
+}
+
+// synthesizeCodexImageDisplayMessageEvent turns a completed hosted image_generation_call
+// into an assistant markdown image message. Desktop custom/API-key providers often cannot
+// expose local image_gen, so hosted base64 results otherwise stay invisible.
+func synthesizeCodexImageDisplayMessageEvent(payload []byte) []byte {
+	hadSSEPrefix := bytes.HasPrefix(payload, dataTag)
+	body := payload
+	if hadSSEPrefix {
+		body = bytes.TrimSpace(payload[len(dataTag):])
+	}
+	if !gjson.ValidBytes(body) {
+		return nil
+	}
+	if gjson.GetBytes(body, "type").String() != "response.output_item.done" {
+		return nil
+	}
+	item := gjson.GetBytes(body, "item")
+	if strings.TrimSpace(item.Get("type").String()) != "image_generation_call" {
+		return nil
+	}
+	result := strings.TrimSpace(item.Get("result").String())
+	if result == "" {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(item.Get("status").String()))
+	if status != "" && status != "completed" && status != "generating" && status != "in_progress" && status != "incomplete" {
+		return nil
+	}
+	format := strings.ToLower(strings.TrimSpace(item.Get("output_format").String()))
+	mime := "image/png"
+	switch format {
+	case "jpeg", "jpg":
+		mime = "image/jpeg"
+	case "webp":
+		mime = "image/webp"
+	case "gif":
+		mime = "image/gif"
+	}
+	// Markdown image so Desktop/agent markdown renderers can show the asset inline.
+	text := fmt.Sprintf("![generated image](data:%s;base64,%s)", mime, result)
+	msgID := strings.TrimSpace(item.Get("id").String())
+	if msgID == "" {
+		msgID = "msg_image_display"
+	} else {
+		msgID = "msg_" + msgID + "_display"
+	}
+	event := []byte(`{"type":"response.output_item.done","item":{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":""}]}}`)
+	event, _ = sjson.SetBytes(event, "item.id", msgID)
+	event, _ = sjson.SetBytes(event, "item.content.0.text", text)
+	if revised := strings.TrimSpace(item.Get("revised_prompt").String()); revised != "" {
+		// Keep caption short; full prompt can be huge.
+		if len(revised) > 200 {
+			revised = revised[:200] + "…"
+		}
+		caption := "Generated image: " + revised + "\n\n" + text
+		event, _ = sjson.SetBytes(event, "item.content.0.text", caption)
+	}
+	return maybeWrapSSEData(hadSSEPrefix, event)
 }
 
 func shouldCompleteImageGenerationCall(item gjson.Result) bool {

@@ -400,28 +400,33 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		completed := false
 		for scanner.Scan() {
 			line := scanner.Bytes()
-			line = normalizeCodexImageGenerationCallStatus(bytes.Clone(line))
-			recorder.AppendResponseChunk(line)
-			reporter.appendOutputChunk(line)
-
-			var terminalErr error
-
-			if bytes.HasPrefix(line, dataTag) {
-				data := bytes.TrimSpace(line[len(dataTag):])
-				switch gjson.GetBytes(data, "type").String() {
-				case "response.completed":
-					completed = true
-					if detail, ok := parseCodexUsage(data); ok {
-						reporter.publish(execCtx.Context, detail)
-					}
-				case "response.failed", "error":
-					terminalErr = codexResponsesFailedStatusErr(data)
-				}
+			normalizedEvents := normalizeCodexImageGenerationOutboundEvent(bytes.Clone(line))
+			if len(normalizedEvents) == 0 {
+				normalizedEvents = [][]byte{bytes.Clone(line)}
 			}
 
-			chunks := sdktranslator.TranslateStream(execCtx.Context, to, execCtx.SourceFormat, req.Model, execCtx.OriginalPayload, body, line, &param)
-			for i := range chunks {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+			var terminalErr error
+			for _, eventLine := range normalizedEvents {
+				recorder.AppendResponseChunk(eventLine)
+				reporter.appendOutputChunk(eventLine)
+
+				if bytes.HasPrefix(eventLine, dataTag) {
+					data := bytes.TrimSpace(eventLine[len(dataTag):])
+					switch gjson.GetBytes(data, "type").String() {
+					case "response.completed":
+						completed = true
+						if detail, ok := parseCodexUsage(data); ok {
+							reporter.publish(execCtx.Context, detail)
+						}
+					case "response.failed", "error":
+						terminalErr = codexResponsesFailedStatusErr(data)
+					}
+				}
+
+				chunks := sdktranslator.TranslateStream(execCtx.Context, to, execCtx.SourceFormat, req.Model, execCtx.OriginalPayload, body, eventLine, &param)
+				for i := range chunks {
+					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+				}
 			}
 			if terminalErr != nil {
 				recorder.RecordResponseError(terminalErr)
