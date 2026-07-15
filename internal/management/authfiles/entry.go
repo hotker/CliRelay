@@ -137,5 +137,8 @@ func BuildEntry(auth *coreauth.Auth, opts EntryOptions) map[string]any {
 		entry["codex_cli_only"] = admission["enabled"]
 		entry["codex_cli_only_allowed_clients"] = admission["allowed_clients"]
 	}
+	if bridge := CodexImageGenerationBridgePayload(auth); len(bridge) > 0 {
+		entry["codex_image_generation_bridge"] = bridge
+	}
 	return entry
 }

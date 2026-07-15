@@ -160,6 +160,39 @@ func TestBuildEntryIncludesCodexOAuthAdmissionPayload(t *testing.T) {
 	if !ok || len(available) == 0 || available[0].ID != codexadmission.AllowedClientClaudeCode {
 		t.Fatalf("admission.available_allowed_clients = %#v, want claude_code preset info", admission["available_allowed_clients"])
 	}
+	bridge, ok := entry["codex_image_generation_bridge"].(map[string]any)
+	if !ok {
+		t.Fatalf("codex_image_generation_bridge = %#v, want map", entry["codex_image_generation_bridge"])
+	}
+	if enabled, _ := bridge["enabled"].(bool); enabled {
+		t.Fatalf("bridge.enabled = %#v, want false by default", bridge["enabled"])
+	}
+}
+
+func TestBuildEntryIncludesCodexImageGenerationBridgeEnabled(t *testing.T) {
+	auth := &coreauth.Auth{
+		ID:       "codex-oauth",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"runtime_only": "true",
+		},
+		Metadata: map[string]any{
+			"codex_image_generation_bridge": true,
+			"email":                         "codex@example.com",
+		},
+	}
+
+	entry := BuildEntry(auth, EntryOptions{})
+	if entry == nil {
+		t.Fatal("expected entry")
+	}
+	bridge, ok := entry["codex_image_generation_bridge"].(map[string]any)
+	if !ok {
+		t.Fatalf("codex_image_generation_bridge = %#v, want map", entry["codex_image_generation_bridge"])
+	}
+	if enabled, _ := bridge["enabled"].(bool); !enabled {
+		t.Fatalf("bridge.enabled = %#v, want true", bridge["enabled"])
+	}
 }
 
 func TestBuildEntryUsesInjectedStat(t *testing.T) {

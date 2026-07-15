@@ -155,6 +155,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		sysContent := extractSystemMessagesAsInstructions(execCtx.Request.Payload)
 		body, _ = sjson.SetBytes(body, "instructions", sysContent)
 	}
+	body = maybeEnsureCodexImageGenerationTool(body, auth, execCtx.BaseModel, codexAdmissionHeadersFromContext(execCtx.Context))
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(execCtx.Context, auth, execCtx.SourceFormat, url, req, body)
@@ -349,6 +350,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		sysContent := extractSystemMessagesAsInstructions(execCtx.Request.Payload)
 		body, _ = sjson.SetBytes(body, "instructions", sysContent)
 	}
+	body = maybeEnsureCodexImageGenerationTool(body, auth, execCtx.BaseModel, codexAdmissionHeadersFromContext(execCtx.Context))
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	httpReq, err := e.cacheHelper(execCtx.Context, auth, execCtx.SourceFormat, url, req, body)
