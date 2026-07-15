@@ -23,13 +23,60 @@ var (
 
 // maybeEnsureCodexImageGenerationTool injects the Responses-native
 // image_generation tool when the Codex OAuth account has the bridge enabled.
-// Independent /v1/images/* paths already force the tool; this covers normal
-// Codex CLI /responses text turns that lack a local image_gen namespace.
+//
+// Codex Desktop must keep the local image_gen extension path (Images API +
+// generated_images disk save). Hosted image_generation returns base64-only
+// image_generation_call items that Desktop does not render, so Desktop
+// requests never inject and any hosted tool is stripped.
 func maybeEnsureCodexImageGenerationTool(body []byte, auth *cliproxyauth.Auth, baseModel string, headers http.Header) []byte {
+	if isCodexDesktopClient(headers) {
+		return stripHostedImageGenerationTools(body)
+	}
 	if !codexImageGenerationBridgeEnabled(auth) {
 		return body
 	}
 	return ensureCodexImageGenerationTool(body, baseModel, auth, headers)
+}
+
+func isCodexDesktopClient(headers http.Header) bool {
+	if headers == nil {
+		return false
+	}
+	originator := strings.ToLower(strings.TrimSpace(headers.Get("Originator")))
+	if strings.Contains(originator, "codex desktop") || strings.Contains(originator, "codex_desktop") {
+		return true
+	}
+	ua := strings.ToLower(strings.TrimSpace(headers.Get("User-Agent")))
+	return strings.Contains(ua, "codex desktop")
+}
+
+// stripHostedImageGenerationTools removes Responses-native image_generation tools
+// so the model falls back to the client's local image_gen namespace when present.
+func stripHostedImageGenerationTools(body []byte) []byte {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		kept := make([]any, 0, len(tools.Array()))
+		removed := false
+		for _, tool := range tools.Array() {
+			if strings.TrimSpace(tool.Get("type").String()) == "image_generation" {
+				removed = true
+				continue
+			}
+			kept = append(kept, tool.Value())
+		}
+		if removed {
+			if len(kept) == 0 {
+				body, _ = sjson.DeleteBytes(body, "tools")
+			} else {
+				body, _ = sjson.SetBytes(body, "tools", kept)
+			}
+		}
+	}
+	choiceType := strings.TrimSpace(gjson.GetBytes(body, "tool_choice.type").String())
+	if choiceType == "image_generation" {
+		body, _ = sjson.SetBytes(body, "tool_choice", "auto")
+	}
+	return body
 }
 
 func codexImageGenerationBridgeEnabled(auth *cliproxyauth.Auth) bool {

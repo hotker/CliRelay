@@ -105,3 +105,41 @@ func TestNormalizeCodexImageGenerationCallStatusSkipsWithoutResult(t *testing.T)
 		t.Fatalf("payload changed without result: %s", out)
 	}
 }
+
+func TestMaybeEnsureCodexImageGenerationToolSkipsInjectForDesktop(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider: "codex",
+		Metadata: map[string]any{"codex_image_generation_bridge": true},
+	}
+	headers := http.Header{}
+	headers.Set("Originator", "Codex Desktop")
+	headers.Set("User-Agent", "Codex Desktop/0.144.2 (Mac OS 26.5.2; arm64)")
+	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"function","name":"shell"}]}`)
+	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", headers)
+	if gjson.GetBytes(out, "tools.#").Int() != 1 {
+		t.Fatalf("tools count = %d, want 1 (no inject); body=%s", gjson.GetBytes(out, "tools.#").Int(), out)
+	}
+	if got := gjson.GetBytes(out, "tools.0.type").String(); got != "function" {
+		t.Fatalf("tools.0.type = %q, want function; body=%s", got, out)
+	}
+}
+
+func TestMaybeEnsureCodexImageGenerationToolStripsHostedForDesktop(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider: "codex",
+		Metadata: map[string]any{"codex_image_generation_bridge": true},
+	}
+	headers := http.Header{}
+	headers.Set("User-Agent", "Codex Desktop/0.144.2")
+	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation","output_format":"png"},{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}],"tool_choice":{"type":"image_generation"}}`)
+	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.4", headers)
+	if gjson.GetBytes(out, "tools.#").Int() != 1 {
+		t.Fatalf("tools count = %d, want 1; body=%s", gjson.GetBytes(out, "tools.#").Int(), out)
+	}
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "image_gen" {
+		t.Fatalf("remaining tool = %q, want image_gen; body=%s", got, out)
+	}
+	if got := gjson.GetBytes(out, "tool_choice").String(); got != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", got, out)
+	}
+}
