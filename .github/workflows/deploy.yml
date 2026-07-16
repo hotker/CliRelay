@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 15
     env:
       SHOULD_DEPLOY: ${{ github.event_name == 'workflow_dispatch' || vars.CLIRELAY_DEV_AUTO_DEPLOY == 'true' }}
-      EXPECTED_SCRIPT_VERSION: '2026.07.14'
+      EXPECTED_SCRIPT_VERSION: '2026.07.16'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
