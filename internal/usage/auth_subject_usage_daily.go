@@ -26,6 +26,20 @@ type AuthSubjectUsageSummary struct {
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
+// commitLogWithAuthSubjectUsageDaily projects daily card counters then commits the request_log tx.
+func commitLogWithAuthSubjectUsageDaily(tx *sql.Tx, tenantID, authSubjectID string, failed bool, cost float64, at time.Time) error {
+	if authSubjectID != "" {
+		if err := projectAuthSubjectUsageDailyTx(tx, tenantID, authSubjectID, failed, cost, at); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("project auth subject usage daily: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // projectAuthSubjectUsageDailyTx increments the day projection inside the request_log write tx.
 func projectAuthSubjectUsageDailyTx(tx *sql.Tx, tenantID, authSubjectID string, failed bool, cost float64, at time.Time) error {
 	if tx == nil {

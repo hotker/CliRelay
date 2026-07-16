@@ -243,51 +243,6 @@ CREATE TABLE IF NOT EXISTS auth_subject_quota_cycles (
 
 CREATE INDEX IF NOT EXISTS idx_auth_subject_quota_cycles_subject_window
   ON auth_subject_quota_cycles(subject_id, window_seconds, last_verified_at);
-
-CREATE TABLE IF NOT EXISTS auth_subject_usage_daily (
-  tenant_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
-  auth_subject_id TEXT NOT NULL,
-  day_key         TEXT NOT NULL,
-  request_count   INTEGER NOT NULL DEFAULT 0,
-  success_count   INTEGER NOT NULL DEFAULT 0,
-  failure_count   INTEGER NOT NULL DEFAULT 0,
-  cost_total      REAL NOT NULL DEFAULT 0,
-  updated_at      DATETIME NOT NULL,
-  PRIMARY KEY (tenant_id, auth_subject_id, day_key)
-);
-CREATE INDEX IF NOT EXISTS idx_auth_subject_usage_daily_tenant_day
-  ON auth_subject_usage_daily(tenant_id, day_key);
-
-CREATE TABLE IF NOT EXISTS ai_account_status (
-  tenant_id                 TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
-  auth_subject_id           TEXT NOT NULL,
-  auth_index                TEXT NOT NULL DEFAULT '',
-  provider                  TEXT NOT NULL DEFAULT '',
-  refresh_state             TEXT NOT NULL DEFAULT 'idle',
-  health_status             TEXT NOT NULL DEFAULT '',
-  plan_type                 TEXT NOT NULL DEFAULT '',
-  restriction_summary       TEXT NOT NULL DEFAULT '',
-  error_summary             TEXT NOT NULL DEFAULT '',
-  error_code                TEXT NOT NULL DEFAULT '',
-  error_message             TEXT NOT NULL DEFAULT '',
-  quota_json                TEXT NOT NULL DEFAULT '[]',
-  reset_credit_count        INTEGER,
-  reset_credit_expirations  TEXT NOT NULL DEFAULT '[]',
-  upstream_checked_at       DATETIME,
-  usage_updated_at          DATETIME,
-  expires_at                DATETIME,
-  version                   INTEGER NOT NULL DEFAULT 0,
-  updated_at                DATETIME NOT NULL,
-  PRIMARY KEY (tenant_id, auth_subject_id)
-);
-CREATE INDEX IF NOT EXISTS idx_ai_account_status_tenant_auth_index
-  ON ai_account_status(tenant_id, auth_index);
-
-CREATE TABLE IF NOT EXISTS usage_projection_markers (
-  marker_key   TEXT NOT NULL PRIMARY KEY,
-  marker_value TEXT NOT NULL DEFAULT '',
-  updated_at   DATETIME NOT NULL
-);
 `
 
 // migrateContentColumns adds input_content/output_content columns to an
@@ -362,7 +317,7 @@ func ensureRequestLogLookupIndexes(db *sql.DB) {
 		"CREATE INDEX IF NOT EXISTS idx_logs_api_key_id_timestamp ON request_logs(api_key_id, timestamp DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_logs_api_key_chart_cover ON request_logs(api_key, api_key_id, timestamp DESC, model, failed, input_tokens, output_tokens, total_tokens, cost, cached_tokens)",
 		"CREATE INDEX IF NOT EXISTS idx_logs_api_key_id_chart_cover ON request_logs(api_key_id, timestamp DESC, model, failed, input_tokens, output_tokens, total_tokens, cost, cached_tokens)",
-		// AI Accounts entity-stats / auth-file-trend: tenant + auth identity + time.
+		// AI Accounts entity-stats / auth-file-trend: tenant + auth identity + time (SQLite-only path).
 		"CREATE INDEX IF NOT EXISTS idx_logs_tenant_auth_index_timestamp ON request_logs(tenant_id, auth_index, timestamp DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_logs_tenant_auth_subject_timestamp ON request_logs(tenant_id, auth_subject_id, timestamp DESC)",
 	} {
@@ -868,15 +823,8 @@ func initOpenedDBLocked(db, readDB *sql.DB, dbPath, driver string, storageCfg co
 		migrateRequestLogContentSessionIDColumn(db)
 		log.Debugf("usage: ensuring request log detail indexes")
 		ensureRequestLogDetailIndexes(db)
-		log.Debugf("usage: ensuring ai account status read models")
-		ensureAIAccountStatusReadModels(db)
 	}
-	if !runSQLiteBootstrap {
-		ensureAIAccountStatusReadModels(db)
-	}
-	if err := runAuthSubjectUsageDailyBackfillAtInitDB(db, authSubjectUsageDailyBackfillDays, loc); err != nil {
-		log.Warnf("usage: auth subject usage daily backfill: %v", err)
-	}
+	bootstrapAIAccountStatusReadModels(db, loc)
 	log.Debugf("usage: initializing pricing table")
 	initPricingTable(db)
 	log.Debugf("usage: initializing model config tables")
@@ -1058,16 +1006,7 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		return
 	}
 
-	// Same-tx projection: one commit for request_log + daily card summary.
-	if authSubjectID != "" {
-		if errProj := projectAuthSubjectUsageDailyTx(tx, tenantID, authSubjectID, failed, cost, timestamp); errProj != nil {
-			_ = tx.Rollback()
-			log.Errorf("usage: project auth subject usage daily: %v", errProj)
-			return
-		}
-	}
-
-	if errCommit := tx.Commit(); errCommit != nil {
+	if errCommit := commitLogWithAuthSubjectUsageDaily(tx, tenantID, authSubjectID, failed, cost, timestamp); errCommit != nil {
 		log.Errorf("usage: commit log insert: %v", errCommit)
 		return
 	}

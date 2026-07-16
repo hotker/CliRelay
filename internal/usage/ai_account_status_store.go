@@ -87,10 +87,18 @@ CREATE INDEX IF NOT EXISTS idx_auth_subject_usage_daily_tenant_day
   ON auth_subject_usage_daily(tenant_id, day_key);
 `
 
+func bootstrapAIAccountStatusReadModels(db *sql.DB, loc *time.Location) {
+	ensureAIAccountStatusReadModels(db)
+	if err := runAuthSubjectUsageDailyBackfillAtInitDB(db, authSubjectUsageDailyBackfillDays, loc); err != nil {
+		log.Warnf("usage: auth subject usage daily backfill: %v", err)
+	}
+}
+
 func ensureAIAccountStatusReadModels(db *sql.DB) {
 	if db == nil {
 		return
 	}
+	log.Debugf("usage: ensuring ai account status read models")
 	if _, err := db.Exec(aiAccountStatusTablesSQL); err != nil {
 		log.Warnf("usage: ensure ai account status tables: %v", err)
 	}
@@ -101,9 +109,7 @@ func ensureAIAccountStatusReadModels(db *sql.DB) {
 		`ALTER TABLE ai_account_status ADD COLUMN reset_credit_count INTEGER`,
 		`ALTER TABLE ai_account_status ADD COLUMN reset_credit_expirations TEXT NOT NULL DEFAULT '[]'`,
 	} {
-		if _, err := db.Exec(stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-			// ignore already-exists
-		}
+		_, _ = db.Exec(stmt) // ignore duplicate-column on older SQLite installs
 	}
 }
 
