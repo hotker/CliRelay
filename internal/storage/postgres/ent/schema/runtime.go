@@ -179,6 +179,7 @@ func (APIKeyPermissionProfile) Fields() []ent.Field {
 		field.String("name").Default(""),
 		field.Int("daily_limit").Default(0),
 		field.Int("total_quota").Default(0),
+		field.Float("daily_spending_limit").Default(0),
 		field.Int("concurrency_limit").Default(0),
 		field.Int("rpm_limit").Default(0),
 		field.Int("tpm_limit").Default(0),

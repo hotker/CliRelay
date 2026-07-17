@@ -19,8 +19,15 @@ func RuntimeMigrations() []Migration {
 		{Version: "202607160002_ai_account_status_read_model", SQL: aiAccountStatusReadModelSQL},
 		// Manual same-day daily spending reset baseline per API key (does not delete request_logs).
 		{Version: "202607160003_api_key_daily_spending_resets", SQL: apiKeyDailySpendingResetsSQL},
+		// Daily USD spending limit belongs on reusable permission profiles.
+		{Version: "202607170001_profile_daily_spending_limit", SQL: profileDailySpendingLimitSQL},
 	}
 }
+
+const profileDailySpendingLimitSQL = `
+ALTER TABLE api_key_permission_profiles
+  ADD COLUMN IF NOT EXISTS daily_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+`
 
 // TIMESTAMPTZ matches other PG runtime tables; SQLite bootstrap uses TIMESTAMP (see usage package).
 const apiKeyDailySpendingResetsSQL = `

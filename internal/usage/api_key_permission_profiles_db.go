@@ -109,6 +109,9 @@ func normalizeAPIKeyPermissionProfile(profile APIKeyPermissionProfileRow) APIKey
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.DailyLimit = normalizeNonNegativeInt(profile.DailyLimit)
 	profile.TotalQuota = normalizeNonNegativeInt(profile.TotalQuota)
+	if profile.DailySpendingLimit < 0 {
+		profile.DailySpendingLimit = 0
+	}
 	profile.ConcurrencyLimit = normalizeNonNegativeInt(profile.ConcurrencyLimit)
 	profile.RPMLimit = normalizeNonNegativeInt(profile.RPMLimit)
 	profile.TPMLimit = normalizeNonNegativeInt(profile.TPMLimit)

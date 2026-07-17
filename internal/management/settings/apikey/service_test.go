@@ -432,12 +432,13 @@ func TestResetDailySpendingAndRejectsUnlimited(t *testing.T) {
 	}
 }
 
-func TestEffectiveRowKeepsKeyDailySpendingLimitWithProfile(t *testing.T) {
+func TestEffectiveRowAppliesProfileDailySpendingLimit(t *testing.T) {
 	setupTestDB(t)
 	if err := usage.ReplaceAllAPIKeyPermissionProfiles([]usage.APIKeyPermissionProfileRow{{
-		ID:         "p1",
-		Name:       "P1",
-		DailyLimit: 5,
+		ID:                 "p1",
+		Name:               "P1",
+		DailyLimit:         5,
+		DailySpendingLimit: 12.5,
 	}}); err != nil {
 		t.Fatalf("profiles: %v", err)
 	}
@@ -445,7 +446,7 @@ func TestEffectiveRowKeepsKeyDailySpendingLimitWithProfile(t *testing.T) {
 		ID:                  "key-1",
 		Key:                 "sk-profile",
 		PermissionProfileID: "p1",
-		DailySpendingLimit:  12.5,
+		DailySpendingLimit:  1, // stale key copy; profile wins
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -455,7 +456,7 @@ func TestEffectiveRowKeepsKeyDailySpendingLimitWithProfile(t *testing.T) {
 		t.Fatalf("len = %d", len(entries))
 	}
 	if entries[0].DailySpendingLimit != 12.5 {
-		t.Fatalf("DailySpendingLimit = %v, want 12.5 (key-owned, not cleared by profile)", entries[0].DailySpendingLimit)
+		t.Fatalf("DailySpendingLimit = %v, want 12.5 from profile", entries[0].DailySpendingLimit)
 	}
 	if entries[0].DailyLimit != 5 {
 		t.Fatalf("DailyLimit from profile = %v, want 5", entries[0].DailyLimit)

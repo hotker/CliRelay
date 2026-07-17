@@ -125,7 +125,8 @@ type APIKeyEntry struct {
 	SpendingLimit float64 `yaml:"spending-limit,omitempty" json:"spending-limit,omitempty"`
 
 	// DailySpendingLimit is the maximum allowed spending in US dollars per day. 0 means
-	// unlimited. It resets at the project timezone day boundary.
+	// unlimited. It resets at the project timezone day boundary. When permission-profile-id
+	// is set, the effective value comes from the permission profile.
 	DailySpendingLimit float64 `yaml:"daily-spending-limit,omitempty" json:"daily-spending-limit,omitempty"`
 
 	// DailySpendingUsed is the effective project-day USD cost for this key (management list only).

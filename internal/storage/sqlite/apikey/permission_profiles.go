@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS api_key_permission_profiles (
   name                   TEXT NOT NULL DEFAULT '',
   daily_limit            INTEGER NOT NULL DEFAULT 0,
   total_quota            INTEGER NOT NULL DEFAULT 0,
+  daily_spending_limit   REAL NOT NULL DEFAULT 0,
   concurrency_limit      INTEGER NOT NULL DEFAULT 0,
   rpm_limit              INTEGER NOT NULL DEFAULT 0,
   tpm_limit              INTEGER NOT NULL DEFAULT 0,
@@ -35,6 +37,7 @@ type PermissionProfileRow struct {
 	Name                 string   `json:"name" yaml:"name"`
 	DailyLimit           int      `json:"daily-limit" yaml:"daily-limit"`
 	TotalQuota           int      `json:"total-quota" yaml:"total-quota"`
+	DailySpendingLimit   float64  `json:"daily-spending-limit" yaml:"daily-spending-limit"`
 	ConcurrencyLimit     int      `json:"concurrency-limit" yaml:"concurrency-limit"`
 	RPMLimit             int      `json:"rpm-limit" yaml:"rpm-limit"`
 	TPMLimit             int      `json:"tpm-limit" yaml:"tpm-limit"`
@@ -56,6 +59,9 @@ func InitPermissionProfilesTable(db *sql.DB) {
 	if _, err := db.Exec("ALTER TABLE api_key_permission_profiles ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 		log.Warnf("sqlite/apikey: migrate api_key_permission_profiles tenant_id: %v", err)
 	}
+	if _, err := db.Exec("ALTER TABLE api_key_permission_profiles ADD COLUMN daily_spending_limit REAL NOT NULL DEFAULT 0"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		log.Warnf("sqlite/apikey: migrate api_key_permission_profiles daily_spending_limit: %v", err)
+	}
 }
 
 func (s Store) ListPermissionProfiles() []PermissionProfileRow {
@@ -63,7 +69,7 @@ func (s Store) ListPermissionProfiles() []PermissionProfileRow {
 		return nil
 	}
 
-	rows, err := s.db.Query(`SELECT id, name, daily_limit, total_quota, concurrency_limit,
+	rows, err := s.db.Query(`SELECT id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit,
 		rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups,
 		system_prompt, created_at, updated_at
 		FROM api_key_permission_profiles WHERE tenant_id = ? ORDER BY created_at ASC, id ASC`, s.tenantID)
@@ -103,9 +109,9 @@ func (s Store) ReplaceAllPermissionProfiles(profiles []PermissionProfileRow) err
 	}
 
 	stmt, err := tx.Prepare(`INSERT INTO api_key_permission_profiles
-		(tenant_id, id, name, daily_limit, total_quota, concurrency_limit, rpm_limit, tpm_limit,
+		(tenant_id, id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		 allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -135,7 +141,7 @@ func (s Store) ReplaceAllPermissionProfiles(profiles []PermissionProfileRow) err
 		profile.UpdatedAt = now
 
 		if _, err := stmt.Exec(
-			s.tenantID, profile.ID, profile.Name, profile.DailyLimit, profile.TotalQuota,
+			s.tenantID, profile.ID, profile.Name, profile.DailyLimit, profile.TotalQuota, profile.DailySpendingLimit,
 			profile.ConcurrencyLimit, profile.RPMLimit, profile.TPMLimit,
 			mustJSONStringList(profile.AllowedModels), mustJSONStringList(profile.AllowedChannels),
 			mustJSONStringList(profile.AllowedChannelGroups), profile.SystemPrompt,
@@ -154,6 +160,9 @@ func normalizePermissionProfile(profile PermissionProfileRow) PermissionProfileR
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.DailyLimit = normalizeNonNegativeInt(profile.DailyLimit)
 	profile.TotalQuota = normalizeNonNegativeInt(profile.TotalQuota)
+	if profile.DailySpendingLimit < 0 || math.IsNaN(profile.DailySpendingLimit) || math.IsInf(profile.DailySpendingLimit, 0) {
+		profile.DailySpendingLimit = 0
+	}
 	profile.ConcurrencyLimit = normalizeNonNegativeInt(profile.ConcurrencyLimit)
 	profile.RPMLimit = normalizeNonNegativeInt(profile.RPMLimit)
 	profile.TPMLimit = normalizeNonNegativeInt(profile.TPMLimit)
@@ -170,7 +179,7 @@ func scanPermissionProfileRow(row scanner) (*PermissionProfileRow, bool) {
 	var channelsJSON string
 	var channelGroupsJSON string
 	if err := row.Scan(
-		&profile.ID, &profile.Name, &profile.DailyLimit, &profile.TotalQuota, &profile.ConcurrencyLimit,
+		&profile.ID, &profile.Name, &profile.DailyLimit, &profile.TotalQuota, &profile.DailySpendingLimit, &profile.ConcurrencyLimit,
 		&profile.RPMLimit, &profile.TPMLimit, &modelsJSON, &channelsJSON, &channelGroupsJSON,
 		&profile.SystemPrompt, &profile.CreatedAt, &profile.UpdatedAt,
 	); err != nil {

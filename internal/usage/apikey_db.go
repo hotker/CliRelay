@@ -247,6 +247,7 @@ func toPermissionProfileSnapshots(profiles []APIKeyPermissionProfileRow) []sqlap
 			ID:                   profile.ID,
 			DailyLimit:           profile.DailyLimit,
 			TotalQuota:           profile.TotalQuota,
+			DailySpendingLimit:   profile.DailySpendingLimit,
 			ConcurrencyLimit:     profile.ConcurrencyLimit,
 			RPMLimit:             profile.RPMLimit,
 			TPMLimit:             profile.TPMLimit,

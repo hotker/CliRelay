@@ -44,6 +44,7 @@ var (
 		{Name: "name", Type: field.TypeString, Default: ""},
 		{Name: "daily_limit", Type: field.TypeInt, Default: 0},
 		{Name: "total_quota", Type: field.TypeInt, Default: 0},
+		{Name: "daily_spending_limit", Type: field.TypeFloat64, Default: 0},
 		{Name: "concurrency_limit", Type: field.TypeInt, Default: 0},
 		{Name: "rpm_limit", Type: field.TypeInt, Default: 0},
 		{Name: "tpm_limit", Type: field.TypeInt, Default: 0},

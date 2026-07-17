@@ -65,6 +65,7 @@ type PermissionProfileSnapshot struct {
 	ID                   string
 	DailyLimit           int
 	TotalQuota           int
+	DailySpendingLimit   float64
 	ConcurrencyLimit     int
 	RPMLimit             int
 	TPMLimit             int
@@ -495,7 +496,7 @@ func EffectiveAPIKeyRowWithProfiles(row APIKeyRow, profiles []PermissionProfileS
 	row.DailyLimit = matched.DailyLimit
 	row.TotalQuota = matched.TotalQuota
 	row.SpendingLimit = 0
-	// daily-spending-limit is key-owned and independent of permission profiles.
+	row.DailySpendingLimit = matched.DailySpendingLimit
 	row.ConcurrencyLimit = matched.ConcurrencyLimit
 	row.RPMLimit = matched.RPMLimit
 	row.TPMLimit = matched.TPMLimit
