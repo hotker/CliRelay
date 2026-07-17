@@ -7,10 +7,22 @@ import (
 
 func TestRuntimeMigrationsCoverCoreTables(t *testing.T) {
 	migrations := RuntimeMigrations()
-	if len(migrations) != 14 {
-		t.Fatalf("RuntimeMigrations len = %d, want 14", len(migrations))
+	if len(migrations) != 15 {
+		t.Fatalf("RuntimeMigrations len = %d, want 15", len(migrations))
 	}
-	// Latest migration: daily spending limit on permission profiles.
+	// Latest: append-only daily spending reset history.
+	resetEventsSQL := migrations[14].SQL
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS api_key_daily_spending_reset_events",
+		"effective_used_before",
+		"raw_today_cost",
+		"actor_username",
+	} {
+		if !strings.Contains(resetEventsSQL, fragment) {
+			t.Fatalf("daily spending reset events migration missing %q", fragment)
+		}
+	}
+	// Prior: daily spending limit on permission profiles.
 	profileSpendSQL := migrations[13].SQL
 	if !strings.Contains(profileSpendSQL, "daily_spending_limit") {
 		t.Fatalf("profile daily spending migration missing daily_spending_limit")

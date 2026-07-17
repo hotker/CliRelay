@@ -299,11 +299,12 @@ func postgresSmokeBody(method, routePath string) string {
 
 func postgresSmokeAllowsStatus(routePath string, status int, body string) bool {
 	if status == http.StatusNotFound {
-		// The generic smoke sends an empty JSON object. This body-targeted route
-		// therefore has no key to resolve; dedicated handler tests cover its success path.
-		bodyTargetedLookup := routePath == "/v0/management/api-key-entries/daily-spending/reset"
+		// The generic smoke sends an empty JSON object / no query target. These
+		// routes therefore have no key to resolve; dedicated handler tests cover success.
+		targetedLookup := routePath == "/v0/management/api-key-entries/daily-spending/reset" ||
+			routePath == "/v0/management/api-key-entries/daily-spending/reset-history"
 		return strings.Contains(body, "not found") &&
-			(strings.Contains(routePath, ":") || strings.Contains(routePath, "*") || bodyTargetedLookup)
+			(strings.Contains(routePath, ":") || strings.Contains(routePath, "*") || targetedLookup)
 	}
 	if status == http.StatusBadGateway {
 		return routePath == "/v0/management/update/progress" && strings.Contains(body, "update_progress_failed") ||

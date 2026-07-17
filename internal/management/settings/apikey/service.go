@@ -285,6 +285,10 @@ func (s *Service) attachDailySpendingRuntime(entries []config.APIKeyEntry, rows 
 	if err != nil {
 		return err
 	}
+	counts, err := usage.ListDailySpendingResetEventCounts(s.tenantID, ids)
+	if err != nil {
+		return err
+	}
 	for i := range entries {
 		id := strings.TrimSpace(rows[i].ID)
 		key := strings.TrimSpace(rows[i].Key)
@@ -308,47 +312,83 @@ func (s *Service) attachDailySpendingRuntime(entries []config.APIKeyEntry, rows 
 		}
 		entries[i].DailySpendingUsed = used
 		entries[i].DailySpendingRemaining = usage.DailySpendingRemaining(entries[i].DailySpendingLimit, used)
+		if id != "" {
+			entries[i].DailySpendingResetCount = counts[id]
+		}
 	}
 	return nil
 }
 
+type DailySpendingResetActor struct {
+	UserID   string
+	Username string
+	Kind     string
+}
+
 type DailySpendingResetResult struct {
-	ID                     string   `json:"id"`
-	Key                    string   `json:"key,omitempty"`
-	DailySpendingLimit     float64  `json:"daily-spending-limit"`
-	DailySpendingUsed      float64  `json:"daily-spending-used"`
-	DailySpendingRemaining *float64 `json:"daily-spending-remaining"`
+	ID                      string   `json:"id"`
+	Key                     string   `json:"key,omitempty"`
+	DailySpendingLimit      float64  `json:"daily-spending-limit"`
+	DailySpendingUsed       float64  `json:"daily-spending-used"`
+	DailySpendingRemaining  *float64 `json:"daily-spending-remaining"`
+	DailySpendingResetCount int      `json:"daily-spending-reset-count"`
 }
 
 // ResetDailySpending sets today's cost baseline to the current raw today cost so effective used becomes 0.
-func (s *Service) ResetDailySpending(id *string, match *string) (DailySpendingResetResult, error) {
+func (s *Service) ResetDailySpending(id *string, match *string, actor DailySpendingResetActor) (DailySpendingResetResult, error) {
 	row := s.resolvePatchTargetRow(id, nil, match)
 	if row == nil {
 		return DailySpendingResetResult{}, ErrItemNotFound
 	}
-	// Use stored row (not profile-effective) for the key-owned daily spending limit.
-	stored := usage.GetAPIKeyByIDForTenant(s.tenantID, row.ID)
-	if stored == nil {
-		stored = row
-	}
-	if stored.DailySpendingLimit <= 0 {
+	// Effective row includes permission-profile daily spending limit.
+	effective := usage.EffectiveAPIKeyRowForTenant(s.tenantID, *row)
+	if effective.DailySpendingLimit <= 0 {
 		return DailySpendingResetResult{}, ErrDailySpendingLimitMissing
 	}
-	raw, err := usage.QueryRawTodayCostByKeyForTenant(s.tenantID, stored.Key)
+	raw, err := usage.QueryRawTodayCostByKeyForTenant(s.tenantID, effective.Key)
 	if err != nil {
 		return DailySpendingResetResult{}, err
 	}
-	if err := usage.UpsertDailySpendingReset(s.tenantID, stored.ID, raw); err != nil {
+	baselineBefore, _, err := usage.GetDailySpendingResetBaseline(s.tenantID, effective.ID)
+	if err != nil {
 		return DailySpendingResetResult{}, err
 	}
+	usedBefore := raw - baselineBefore
+	if usedBefore < 0 {
+		usedBefore = 0
+	}
+	if err := usage.UpsertDailySpendingReset(s.tenantID, effective.ID, raw); err != nil {
+		return DailySpendingResetResult{}, err
+	}
+	_ = usage.InsertDailySpendingResetEvent(usage.APIKeyDailySpendingResetEvent{
+		TenantID:            s.tenantID,
+		APIKeyID:            effective.ID,
+		CostBaseline:        raw,
+		EffectiveUsedBefore: usedBefore,
+		RawTodayCost:        raw,
+		ActorUserID:         actor.UserID,
+		ActorUsername:       actor.Username,
+		ActorKind:           actor.Kind,
+	})
+	count, _ := usage.CountDailySpendingResetEvents(s.tenantID, effective.ID)
 	used := 0.0
 	return DailySpendingResetResult{
-		ID:                     stored.ID,
-		Key:                    stored.Key,
-		DailySpendingLimit:     stored.DailySpendingLimit,
-		DailySpendingUsed:      used,
-		DailySpendingRemaining: usage.DailySpendingRemaining(stored.DailySpendingLimit, used),
+		ID:                      effective.ID,
+		Key:                     effective.Key,
+		DailySpendingLimit:      effective.DailySpendingLimit,
+		DailySpendingUsed:       used,
+		DailySpendingRemaining:  usage.DailySpendingRemaining(effective.DailySpendingLimit, used),
+		DailySpendingResetCount: count,
 	}, nil
+}
+
+// ListDailySpendingResetHistory returns newest-first reset events for a key.
+func (s *Service) ListDailySpendingResetHistory(id *string, match *string, limit int) ([]usage.APIKeyDailySpendingResetEvent, error) {
+	row := s.resolvePatchTargetRow(id, nil, match)
+	if row == nil {
+		return nil, ErrItemNotFound
+	}
+	return usage.ListDailySpendingResetEvents(s.tenantID, row.ID, limit)
 }
 
 func (s *Service) ReplaceEntries(entries []config.APIKeyEntry) error {
@@ -445,6 +485,7 @@ func (s *Service) DeleteEntry(key string, id *string, index *int, deleteLogs boo
 		return DeleteEntryResult{}, err
 	}
 	_ = usage.DeleteDailySpendingReset(s.tenantID, apiKeyID)
+	_ = usage.DeleteDailySpendingResetEvents(s.tenantID, apiKeyID)
 
 	result := DeleteEntryResult{}
 	if deleteLogs && s != nil && s.deleteLogs != nil {

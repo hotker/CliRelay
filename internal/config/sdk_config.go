@@ -137,6 +137,10 @@ type APIKeyEntry struct {
 	// Management list only; not persisted.
 	DailySpendingRemaining *float64 `yaml:"-" json:"daily-spending-remaining"`
 
+	// DailySpendingResetCount is how many times this key's daily spending was manually reset.
+	// Management list only; not persisted.
+	DailySpendingResetCount int `yaml:"-" json:"daily-spending-reset-count,omitempty"`
+
 	// ConcurrencyLimit is the maximum number of concurrent requests. 0 means unlimited.
 	ConcurrencyLimit int `yaml:"concurrency-limit,omitempty" json:"concurrency-limit,omitempty"`
 

@@ -269,3 +269,66 @@ func TestEnsureAPIKeyDailySpendingResetsTableSQLHasNoDATETIME(t *testing.T) {
 		t.Fatalf("ensure table: %v", err)
 	}
 }
+
+func TestDailySpendingResetEventHistory(t *testing.T) {
+	setupDailySpendingResetDB(t)
+	if err := UpsertAPIKey(APIKeyRow{ID: "key-1", Key: "sk-hist", DailySpendingLimit: 50}); err != nil {
+		t.Fatalf("UpsertAPIKey: %v", err)
+	}
+	if err := InsertDailySpendingResetEvent(APIKeyDailySpendingResetEvent{
+		TenantID:            systemTenantID,
+		APIKeyID:            "key-1",
+		CostBaseline:        12,
+		EffectiveUsedBefore: 5,
+		RawTodayCost:        12,
+		ActorUsername:       "bob",
+		ActorKind:           "user",
+	}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := InsertDailySpendingResetEvent(APIKeyDailySpendingResetEvent{
+		TenantID:            systemTenantID,
+		APIKeyID:            "key-1",
+		CostBaseline:        18,
+		EffectiveUsedBefore: 6,
+		RawTodayCost:        18,
+		ActorUsername:       "carol",
+		ActorKind:           "user",
+	}); err != nil {
+		t.Fatalf("insert event 2: %v", err)
+	}
+	n, err := CountDailySpendingResetEvents(systemTenantID, "key-1")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("count = %d, want 2", n)
+	}
+	counts, err := ListDailySpendingResetEventCounts(systemTenantID, []string{"key-1", "missing"})
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if counts["key-1"] != 2 {
+		t.Fatalf("counts[key-1] = %d, want 2", counts["key-1"])
+	}
+	events, err := ListDailySpendingResetEvents(systemTenantID, "key-1", 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("len events = %d, want 2", len(events))
+	}
+	if events[0].ActorUsername != "carol" {
+		t.Fatalf("newest actor = %q, want carol", events[0].ActorUsername)
+	}
+	if err := DeleteDailySpendingResetEvents(systemTenantID, "key-1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	n, err = CountDailySpendingResetEvents(systemTenantID, "key-1")
+	if err != nil {
+		t.Fatalf("count after delete: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("count after delete = %d, want 0", n)
+	}
+}

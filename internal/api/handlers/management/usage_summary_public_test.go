@@ -51,15 +51,18 @@ func TestGetPublicUsageSummary(t *testing.T) {
 		keyNoUsage  = "sk-test-key-no-usage"
 		keyDisabled = "sk-test-key-disabled"
 		keyUnknown  = "sk-test-key-unknown"
+		keyLimited  = "sk-test-key-limited"
 	)
 
 	insertTestLog(t, keyWithData)
 	insertTestLog(t, keyWithData)
+	insertTestLog(t, keyLimited)
 
 	if err := usage.ReplaceAllAPIKeys([]usage.APIKeyRow{
 		{Key: keyWithData, Disabled: false},
 		{Key: keyNoUsage, Disabled: false},
 		{Key: keyDisabled, Disabled: true},
+		{Key: keyLimited, Disabled: false, DailyLimit: 10, TotalQuota: 100, SpendingLimit: 50, DailySpendingLimit: 5},
 	}); err != nil {
 		t.Fatalf("ReplaceAllAPIKeys: %v", err)
 	}
@@ -233,6 +236,73 @@ func TestGetPublicUsageSummary(t *testing.T) {
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 (query param api_key must be rejected); body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("includes limits only when configured", func(t *testing.T) {
+		body := []byte(`{"api_key":"` + keyLimited + `"}`)
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/public/usage/summary", bytes.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		h := NewHandler(&config.Config{}, "", nil)
+		h.GetPublicUsageSummary(ctx)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Limits *struct {
+				DailyLimit         *int     `json:"daily-limit"`
+				DailyUsed          *int64   `json:"daily-used"`
+				TotalQuota         *int     `json:"total-quota"`
+				TotalUsed          *int64   `json:"total-used"`
+				SpendingLimit      *float64 `json:"spending-limit"`
+				SpendingUsed       *float64 `json:"spending-used"`
+				DailySpendingLimit *float64 `json:"daily-spending-limit"`
+				DailySpendingUsed  *float64 `json:"daily-spending-used"`
+			} `json:"limits"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.Limits == nil {
+			t.Fatal("limits = nil, want configured limits")
+		}
+		if got.Limits.DailyLimit == nil || *got.Limits.DailyLimit != 10 {
+			t.Fatalf("daily-limit = %v, want 10", got.Limits.DailyLimit)
+		}
+		if got.Limits.DailyUsed == nil || *got.Limits.DailyUsed != 1 {
+			t.Fatalf("daily-used = %v, want 1", got.Limits.DailyUsed)
+		}
+		if got.Limits.TotalQuota == nil || *got.Limits.TotalQuota != 100 {
+			t.Fatalf("total-quota = %v, want 100", got.Limits.TotalQuota)
+		}
+		if got.Limits.SpendingLimit == nil || *got.Limits.SpendingLimit != 50 {
+			t.Fatalf("spending-limit = %v, want 50", got.Limits.SpendingLimit)
+		}
+		if got.Limits.DailySpendingLimit == nil || *got.Limits.DailySpendingLimit != 5 {
+			t.Fatalf("daily-spending-limit = %v, want 5", got.Limits.DailySpendingLimit)
+		}
+
+		// unlimited key omits limits
+		body = []byte(`{"api_key":"` + keyWithData + `"}`)
+		rec = httptest.NewRecorder()
+		ctx, _ = gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/public/usage/summary", bytes.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		h.GetPublicUsageSummary(ctx)
+		var unlimited struct {
+			Limits *struct {
+				DailyLimit *int `json:"daily-limit"`
+			} `json:"limits"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &unlimited); err != nil {
+			t.Fatalf("unmarshal unlimited: %v", err)
+		}
+		if unlimited.Limits != nil {
+			t.Fatalf("limits = %+v, want nil for unlimited key", unlimited.Limits)
 		}
 	})
 }

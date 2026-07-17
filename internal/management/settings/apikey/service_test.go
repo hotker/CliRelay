@@ -394,7 +394,8 @@ func TestResetDailySpendingAndRejectsUnlimited(t *testing.T) {
 	}
 
 	id := "key-1"
-	result, err := svc.ResetDailySpending(&id, nil)
+	actor := DailySpendingResetActor{UserID: "u1", Username: "alice", Kind: "user"}
+	result, err := svc.ResetDailySpending(&id, nil, actor)
 	if err != nil {
 		t.Fatalf("ResetDailySpending: %v", err)
 	}
@@ -403,6 +404,9 @@ func TestResetDailySpendingAndRejectsUnlimited(t *testing.T) {
 	}
 	if result.DailySpendingRemaining == nil || *result.DailySpendingRemaining != 100 {
 		t.Fatalf("remaining after reset = %v", result.DailySpendingRemaining)
+	}
+	if result.DailySpendingResetCount != 1 {
+		t.Fatalf("reset count = %d, want 1", result.DailySpendingResetCount)
 	}
 
 	// request logs must remain
@@ -422,12 +426,26 @@ func TestResetDailySpendingAndRejectsUnlimited(t *testing.T) {
 		t.Fatalf("middleware-facing cost = %v, want 0", got)
 	}
 
+	events, err := svc.ListDailySpendingResetHistory(&id, nil, 10)
+	if err != nil {
+		t.Fatalf("ListDailySpendingResetHistory: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if events[0].ActorUsername != "alice" || events[0].EffectiveUsedBefore != 20 {
+		t.Fatalf("event = %+v", events[0])
+	}
+	if events[0].RawTodayCost != 20 {
+		t.Fatalf("raw_today_cost = %v, want 20", events[0].RawTodayCost)
+	}
+
 	// unlimited rejects reset
 	zero := 0.0
 	if err := svc.PatchEntry(&id, nil, nil, EntryPatch{DailySpendingLimit: &zero}); err != nil {
 		t.Fatalf("clear limit: %v", err)
 	}
-	if _, err := svc.ResetDailySpending(&id, nil); !errors.Is(err, ErrDailySpendingLimitMissing) {
+	if _, err := svc.ResetDailySpending(&id, nil, actor); !errors.Is(err, ErrDailySpendingLimitMissing) {
 		t.Fatalf("err = %v, want ErrDailySpendingLimitMissing", err)
 	}
 }

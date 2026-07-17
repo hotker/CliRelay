@@ -13,9 +13,10 @@ import (
 )
 
 type usageSummaryResponse struct {
-	Found bool           `json:"found"`
-	Range string         `json:"range"`
-	Stats usageStatsBody `json:"stats"`
+	Found  bool             `json:"found"`
+	Range  string           `json:"range"`
+	Stats  usageStatsBody   `json:"stats"`
+	Limits *usageLimitsBody `json:"limits,omitempty"`
 }
 
 type usageStatsBody struct {
@@ -23,9 +24,22 @@ type usageStatsBody struct {
 	QuotaCost  float64 `json:"quota_cost"`
 }
 
+// usageLimitsBody exposes only limits that are configured (>0) plus live usage.
+type usageLimitsBody struct {
+	DailyLimit         *int     `json:"daily-limit,omitempty"`
+	DailyUsed          *int64   `json:"daily-used,omitempty"`
+	TotalQuota         *int     `json:"total-quota,omitempty"`
+	TotalUsed          *int64   `json:"total-used,omitempty"`
+	SpendingLimit      *float64 `json:"spending-limit,omitempty"`
+	SpendingUsed       *float64 `json:"spending-used,omitempty"`
+	DailySpendingLimit *float64 `json:"daily-spending-limit,omitempty"`
+	DailySpendingUsed  *float64 `json:"daily-spending-used,omitempty"`
+}
+
 // GetPublicUsageSummary returns today's call count and quota cost for an API key.
 // This is a lightweight endpoint designed for CC Switch Provider card polling.
 // `found` reflects API Key existence (not disabled), not whether it was used today.
+// When the key has daily/total/spending limits, `limits` includes only those fields.
 func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 	apiKey := ""
 	var req publicLookupRequest
@@ -79,6 +93,56 @@ func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 			TotalCalls: stats.Total,
 			QuotaCost:  stats.TotalCost,
 		},
+		Limits: buildPublicUsageLimits(apiKey, row),
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func buildPublicUsageLimits(apiKey string, row *usage.APIKeyRow) *usageLimitsBody {
+	if row == nil || row.Disabled {
+		return nil
+	}
+	tenantID := strings.TrimSpace(row.TenantID)
+	if tenantID == "" {
+		tenantID = usage.ResolveAPIKeyTenant(apiKey)
+	}
+	effective := usage.EffectiveAPIKeyRowForTenant(tenantID, *row)
+	out := &usageLimitsBody{}
+	has := false
+	if effective.DailyLimit > 0 {
+		has = true
+		limit := effective.DailyLimit
+		out.DailyLimit = &limit
+		if n, err := usage.CountTodayByKey(apiKey); err == nil {
+			out.DailyUsed = &n
+		}
+	}
+	if effective.TotalQuota > 0 {
+		has = true
+		limit := effective.TotalQuota
+		out.TotalQuota = &limit
+		if n, err := usage.CountTotalByKey(apiKey); err == nil {
+			out.TotalUsed = &n
+		}
+	}
+	if effective.SpendingLimit > 0 {
+		has = true
+		limit := effective.SpendingLimit
+		out.SpendingLimit = &limit
+		if n, err := usage.QueryTotalCostByKey(apiKey); err == nil {
+			out.SpendingUsed = &n
+		}
+	}
+	if effective.DailySpendingLimit > 0 {
+		has = true
+		limit := effective.DailySpendingLimit
+		out.DailySpendingLimit = &limit
+		if n, err := usage.QueryTodayCostByKey(apiKey); err == nil {
+			out.DailySpendingUsed = &n
+		}
+	}
+	if !has {
+		return nil
+	}
+	return out
 }

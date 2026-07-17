@@ -184,7 +184,19 @@ func (h *Handler) ResetAPIKeyDailySpending(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	result, err := h.apiKeySettings(c).ResetDailySpending(body.ID, body.Key)
+	actor := apikeysettings.DailySpendingResetActor{Kind: "service_credential"}
+	if principal, ok := principalFromContext(c); ok {
+		actor.Kind = strings.TrimSpace(principal.Kind)
+		if actor.Kind == "" {
+			actor.Kind = "service_credential"
+		}
+		actor.UserID = strings.TrimSpace(principal.User.ID)
+		actor.Username = strings.TrimSpace(principal.User.Username)
+		if actor.Username == "" {
+			actor.Username = strings.TrimSpace(principal.User.DisplayName)
+		}
+	}
+	result, err := h.apiKeySettings(c).ResetDailySpending(body.ID, body.Key, actor)
 	if err != nil {
 		switch {
 		case errors.Is(err, apikeysettings.ErrItemNotFound):
@@ -198,13 +210,47 @@ func (h *Handler) ResetAPIKeyDailySpending(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":                   "ok",
-		"id":                       result.ID,
-		"key":                      result.Key,
-		"daily-spending-limit":     result.DailySpendingLimit,
-		"daily-spending-used":      result.DailySpendingUsed,
-		"daily-spending-remaining": result.DailySpendingRemaining,
+		"status":                     "ok",
+		"id":                         result.ID,
+		"key":                        result.Key,
+		"daily-spending-limit":       result.DailySpendingLimit,
+		"daily-spending-used":        result.DailySpendingUsed,
+		"daily-spending-remaining":   result.DailySpendingRemaining,
+		"daily-spending-reset-count": result.DailySpendingResetCount,
 	})
+}
+
+// GetAPIKeyDailySpendingResetHistory lists manual reset events for a key.
+// GET /v0/management/api-key-entries/daily-spending/reset-history?id=... or ?key=...
+func (h *Handler) GetAPIKeyDailySpendingResetHistory(c *gin.Context) {
+	id := strings.TrimSpace(c.Query("id"))
+	key := strings.TrimSpace(c.Query("key"))
+	var idPtr, keyPtr *string
+	if id != "" {
+		idPtr = &id
+	}
+	if key != "" {
+		keyPtr = &key
+	}
+	limit := 100
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	events, err := h.apiKeySettings(c).ListDailySpendingResetHistory(idPtr, keyPtr, limit)
+	if err != nil {
+		if errors.Is(err, apikeysettings.ErrItemNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if events == nil {
+		events = []usage.APIKeyDailySpendingResetEvent{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": events, "total": len(events)})
 }
 
 func (h *Handler) PutAPIKeyEntries(c *gin.Context) {

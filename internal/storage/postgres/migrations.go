@@ -21,6 +21,8 @@ func RuntimeMigrations() []Migration {
 		{Version: "202607160003_api_key_daily_spending_resets", SQL: apiKeyDailySpendingResetsSQL},
 		// Daily USD spending limit belongs on reusable permission profiles.
 		{Version: "202607170001_profile_daily_spending_limit", SQL: profileDailySpendingLimitSQL},
+		// Append-only history of manual daily spending resets (who/when/amount).
+		{Version: "202607170002_api_key_daily_spending_reset_events", SQL: apiKeyDailySpendingResetEventsSQL},
 	}
 }
 
@@ -41,6 +43,25 @@ CREATE TABLE IF NOT EXISTS api_key_daily_spending_resets (
 );
 CREATE INDEX IF NOT EXISTS idx_api_key_daily_spending_resets_day
   ON api_key_daily_spending_resets(tenant_id, day_key);
+`
+
+// BIGSERIAL for PG; SQLite bootstrap uses INTEGER PRIMARY KEY AUTOINCREMENT.
+const apiKeyDailySpendingResetEventsSQL = `
+CREATE TABLE IF NOT EXISTS api_key_daily_spending_reset_events (
+  id                     BIGSERIAL PRIMARY KEY,
+  tenant_id              UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+  api_key_id             TEXT NOT NULL,
+  day_key                TEXT NOT NULL DEFAULT '',
+  reset_at               TIMESTAMPTZ NOT NULL,
+  actor_user_id          TEXT NOT NULL DEFAULT '',
+  actor_username         TEXT NOT NULL DEFAULT '',
+  actor_kind             TEXT NOT NULL DEFAULT '',
+  cost_baseline          DOUBLE PRECISION NOT NULL DEFAULT 0,
+  effective_used_before  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  raw_today_cost         DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_api_key_daily_spending_reset_events_key
+  ON api_key_daily_spending_reset_events(tenant_id, api_key_id, reset_at DESC);
 `
 
 const requestLogsAuthLookupIndexesSQL = `

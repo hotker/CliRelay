@@ -732,6 +732,11 @@ func initOpenedDBLocked(db, readDB *sql.DB, dbPath, driver string, storageCfg co
 		usageDB, usageReadDB = nil, nil
 		return err
 	}
+	if err := bootstrapAPIKeyDailySpendingResetEvents(db); err != nil {
+		_ = db.Close()
+		usageDB, usageReadDB = nil, nil
+		return err
+	}
 	log.Debugf("usage: initializing pricing table")
 	initPricingTable(db)
 	log.Debugf("usage: initializing model config tables")

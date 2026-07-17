@@ -263,6 +263,25 @@ func TestResetAPIKeyDailySpendingSuccessAndGuards(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
+
+	// history endpoint after successful reset
+	rec = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api-key-entries/daily-spending/reset-history?id=reset-id-1",
+		nil,
+	)
+	h.GetAPIKeyDailySpendingResetHistory(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("history status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"items"`)) {
+		t.Fatalf("history body missing items: %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`effective_used_before`)) {
+		t.Fatalf("history body missing effective_used_before: %s", rec.Body.String())
+	}
 }
 
 func TestGetAPIKeyEntriesIncludesDailySpendingFields(t *testing.T) {
