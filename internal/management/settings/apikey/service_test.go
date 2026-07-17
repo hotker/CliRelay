@@ -125,8 +125,9 @@ func TestPatchEntryUpdatesDailySpendingLimit(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected patched key")
 	}
-	if got.DailySpendingLimit != limit {
-		t.Fatalf("DailySpendingLimit = %v, want %v", got.DailySpendingLimit, limit)
+	// Fractional USD is ceiled to a whole dollar on save.
+	if got.DailySpendingLimit != 5 {
+		t.Fatalf("DailySpendingLimit = %v, want 5 (ceil whole USD)", got.DailySpendingLimit)
 	}
 }
 
@@ -456,7 +457,7 @@ func TestEffectiveRowAppliesProfileDailySpendingLimit(t *testing.T) {
 		ID:                 "p1",
 		Name:               "P1",
 		DailyLimit:         5,
-		DailySpendingLimit: 12.5,
+		DailySpendingLimit: 12.5, // ceiled to whole USD on save
 	}}); err != nil {
 		t.Fatalf("profiles: %v", err)
 	}
@@ -473,8 +474,8 @@ func TestEffectiveRowAppliesProfileDailySpendingLimit(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("len = %d", len(entries))
 	}
-	if entries[0].DailySpendingLimit != 12.5 {
-		t.Fatalf("DailySpendingLimit = %v, want 12.5 from profile", entries[0].DailySpendingLimit)
+	if entries[0].DailySpendingLimit != 13 {
+		t.Fatalf("DailySpendingLimit = %v, want 13 from profile (ceil whole USD)", entries[0].DailySpendingLimit)
 	}
 	if entries[0].DailyLimit != 5 {
 		t.Fatalf("DailyLimit from profile = %v, want 5", entries[0].DailyLimit)

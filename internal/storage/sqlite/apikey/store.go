@@ -649,6 +649,8 @@ func normalizeRow(row APIKeyRow) APIKeyRow {
 	row.Key = strings.TrimSpace(row.Key)
 	row.Name = strings.TrimSpace(row.Name)
 	row.PermissionProfileID = strings.TrimSpace(row.PermissionProfileID)
+	row.SpendingLimit = normalizeWholeUSD(row.SpendingLimit)
+	row.DailySpendingLimit = normalizeWholeUSD(row.DailySpendingLimit)
 	return row
 }
 

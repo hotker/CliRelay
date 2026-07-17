@@ -160,9 +160,7 @@ func normalizePermissionProfile(profile PermissionProfileRow) PermissionProfileR
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.DailyLimit = normalizeNonNegativeInt(profile.DailyLimit)
 	profile.TotalQuota = normalizeNonNegativeInt(profile.TotalQuota)
-	if profile.DailySpendingLimit < 0 || math.IsNaN(profile.DailySpendingLimit) || math.IsInf(profile.DailySpendingLimit, 0) {
-		profile.DailySpendingLimit = 0
-	}
+	profile.DailySpendingLimit = normalizeWholeUSD(profile.DailySpendingLimit)
 	profile.ConcurrencyLimit = normalizeNonNegativeInt(profile.ConcurrencyLimit)
 	profile.RPMLimit = normalizeNonNegativeInt(profile.RPMLimit)
 	profile.TPMLimit = normalizeNonNegativeInt(profile.TPMLimit)
@@ -199,6 +197,14 @@ func normalizeNonNegativeInt(value int) int {
 		return 0
 	}
 	return value
+}
+
+// normalizeWholeUSD keeps spending limits as whole dollars (ceil partial input).
+func normalizeWholeUSD(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return math.Ceil(value)
 }
 
 func normalizeStringSlice(values []string) []string {
