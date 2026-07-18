@@ -837,6 +837,15 @@ func (s *Service) CreateKey(ctx context.Context, tenantID, endUserID, name strin
 }
 
 func (s *Service) SetDefaultKey(ctx context.Context, tenantID, endUserID, keyID string) error {
+	if err := requireUUID(tenantID); err != nil {
+		return err
+	}
+	if err := requireUUID(endUserID); err != nil {
+		return err
+	}
+	if err := requireUUID(keyID); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -909,6 +918,15 @@ func (s *Service) RotateKey(ctx context.Context, tenantID, endUserID, keyID stri
 }
 
 func (s *Service) DeleteKey(ctx context.Context, tenantID, endUserID, keyID string) error {
+	if err := requireUUID(tenantID); err != nil {
+		return err
+	}
+	if err := requireUUID(endUserID); err != nil {
+		return err
+	}
+	if err := requireUUID(keyID); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
