@@ -39,6 +39,7 @@ type Service struct {
 type EntryPatch struct {
 	Key                  *string   `json:"key"`
 	Name                 *string   `json:"name"`
+	Disabled             *bool     `json:"disabled"`
 	PermissionProfileID  *string   `json:"permission-profile-id"`
 	DailyLimit           *int      `json:"daily-limit"`
 	TotalQuota           *int      `json:"total-quota"`
@@ -52,6 +53,8 @@ type EntryPatch struct {
 	AllowedChannelGroups *[]string `json:"allowed-channel-groups"`
 	SystemPrompt         *string   `json:"system-prompt"`
 	CreatedAt            *string   `json:"created-at"`
+	EndUserID            *string   `json:"end_user_id"`
+	IsDefault            *bool     `json:"is_default"`
 }
 
 type DeleteEntryResult struct {
@@ -418,6 +421,9 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 	if patch.Name != nil {
 		entry.Name = strings.TrimSpace(*patch.Name)
 	}
+	if patch.Disabled != nil {
+		entry.Disabled = *patch.Disabled
+	}
 	if patch.PermissionProfileID != nil {
 		entry.PermissionProfileID = strings.TrimSpace(*patch.PermissionProfileID)
 	}
@@ -457,6 +463,12 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 	if patch.CreatedAt != nil {
 		entry.CreatedAt = strings.TrimSpace(*patch.CreatedAt)
 	}
+	if patch.EndUserID != nil {
+		entry.EndUserID = strings.TrimSpace(*patch.EndUserID)
+	}
+	if patch.IsDefault != nil {
+		entry.IsDefault = *patch.IsDefault
+	}
 
 	normalized, err := s.prepareEntryForSave(entry.ToConfigEntry())
 	if err != nil {
@@ -470,6 +482,9 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 	}
 	updated := usage.APIKeyRowFromConfig(normalized)
 	updated.ID = originalID
+	// prepareEntryForSave works on config entry; ownership fields must survive the round-trip.
+	updated.EndUserID = entry.EndUserID
+	updated.IsDefault = entry.IsDefault
 	return usage.UpdateAPIKeyByIDForTenant(s.tenantID, updated)
 }
 

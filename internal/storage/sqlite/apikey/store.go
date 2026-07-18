@@ -138,6 +138,8 @@ func (r APIKeyRow) ToConfigEntry() config.APIKeyEntry {
 		AllowedChannelGroups: r.AllowedChannelGroups,
 		SystemPrompt:         r.SystemPrompt,
 		CreatedAt:            r.CreatedAt,
+		EndUserID:            r.EndUserID,
+		IsDefault:            r.IsDefault,
 	}
 }
 
@@ -160,6 +162,8 @@ func APIKeyRowFromConfig(entry config.APIKeyEntry) APIKeyRow {
 		AllowedChannelGroups: entry.AllowedChannelGroups,
 		SystemPrompt:         entry.SystemPrompt,
 		CreatedAt:            entry.CreatedAt,
+		EndUserID:            entry.EndUserID,
+		IsDefault:            entry.IsDefault,
 	}
 }
 
