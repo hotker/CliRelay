@@ -915,12 +915,18 @@ func (s *Service) DeleteKey(ctx context.Context, tenantID, endUserID, keyID stri
 	}
 	defer func() { _ = tx.Rollback() }()
 	// Lock end user row so concurrent deletes cannot drop below one key.
+	// SQLite may not support FOR UPDATE; fall back without the lock clause.
 	var lockID string
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM end_users WHERE id = ? AND tenant_id = ? FOR UPDATE`, endUserID, tenantID).Scan(&lockID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		return err
+		if err2 := tx.QueryRowContext(ctx, `SELECT id FROM end_users WHERE id = ? AND tenant_id = ?`, endUserID, tenantID).Scan(&lockID); err2 != nil {
+			if errors.Is(err2, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err2
+		}
 	}
 	var count int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys WHERE tenant_id = ? AND end_user_id = ?`, tenantID, endUserID).Scan(&count); err != nil {

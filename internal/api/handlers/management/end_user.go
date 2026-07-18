@@ -177,7 +177,7 @@ func (h *Handler) PostEndUserResetPassword(c *gin.Context) {
 
 func (h *Handler) GetEndUserAPIKeys(c *gin.Context) {
 	principal, _ := principalFromContext(c)
-	if !principal.Has("end_users.read") && !principal.PlatformAdmin {
+	if !principal.Has("api_keys.read") && !principal.Has("end_users.read") && !principal.PlatformAdmin {
 		identityError(c, identity.ErrPermissionDenied)
 		return
 	}
@@ -196,7 +196,7 @@ func (h *Handler) GetEndUserAPIKeys(c *gin.Context) {
 
 func (h *Handler) PostEndUserAPIKey(c *gin.Context) {
 	principal, _ := principalFromContext(c)
-	if !principal.Has("end_users.write") && !principal.PlatformAdmin {
+	if !principal.Has("api_keys.write") && !principal.Has("end_users.write") && !principal.PlatformAdmin {
 		identityError(c, identity.ErrPermissionDenied)
 		return
 	}
