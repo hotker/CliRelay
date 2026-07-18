@@ -570,10 +570,10 @@ func (s Store) ReplaceAll(entries []APIKeyRow) error {
 				entry.ID = uuid.NewString()
 			}
 		}
-		if entry.EndUserID == "" {
+		// Ownership is not client-authoritative on full replace: always preserve
+		// previous end_user_id when the row is an update of an existing key.
+		if prev.endUserID != "" {
 			entry.EndUserID = prev.endUserID
-		}
-		if !entry.IsDefault {
 			entry.IsDefault = prev.isDefault
 		}
 		if entry.CreatedAt == "" {
@@ -601,7 +601,143 @@ func (s Store) ReplaceAll(entries []APIKeyRow) error {
 		}
 	}
 
+	// Ensure every remaining owned user has exactly one default key.
+	if _, err := tx.Exec(`
+		UPDATE api_keys
+		   SET is_default = 1, updated_at = ?
+		 WHERE tenant_id = ?
+		   AND end_user_id IS NOT NULL
+		   AND end_user_id <> ''
+		   AND id IN (
+		     SELECT id FROM (
+		       SELECT id,
+		              ROW_NUMBER() OVER (
+		                PARTITION BY end_user_id
+		                ORDER BY CASE WHEN is_default THEN 0 ELSE 1 END, created_at ASC, id ASC
+		              ) AS rn,
+		              SUM(CASE WHEN is_default THEN 1 ELSE 0 END) OVER (PARTITION BY end_user_id) AS defaults
+		         FROM api_keys
+		        WHERE tenant_id = ? AND end_user_id IS NOT NULL AND end_user_id <> ''
+		     ) ranked
+		    WHERE defaults = 0 AND rn = 1
+		   )
+	`, now, s.tenantID, s.tenantID); err != nil {
+		// SQLite without window functions: fall back to a simpler promote path.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "window") || strings.Contains(msg, "syntax") || strings.Contains(msg, "over") {
+			if err2 := promoteMissingDefaultsSQLite(tx, s.tenantID, now); err2 != nil {
+				_ = tx.Rollback()
+				return err2
+			}
+		} else {
+			_ = tx.Rollback()
+			return err
+		}
+	} else {
+		// Clear extra defaults if any (keep earliest default).
+		if _, err := tx.Exec(`
+			UPDATE api_keys SET is_default = 0, updated_at = ?
+			 WHERE tenant_id = ? AND end_user_id IS NOT NULL AND end_user_id <> '' AND is_default = 1
+			   AND id NOT IN (
+			     SELECT id FROM (
+			       SELECT id, ROW_NUMBER() OVER (PARTITION BY end_user_id ORDER BY created_at ASC, id ASC) AS rn
+			         FROM api_keys
+			        WHERE tenant_id = ? AND end_user_id IS NOT NULL AND end_user_id <> '' AND is_default = 1
+			     ) d WHERE rn = 1
+			   )
+		`, now, s.tenantID, s.tenantID); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !(strings.Contains(msg, "window") || strings.Contains(msg, "syntax") || strings.Contains(msg, "over")) {
+				_ = tx.Rollback()
+				return err
+			}
+			if err2 := demoteExtraDefaultsSQLite(tx, s.tenantID, now); err2 != nil {
+				_ = tx.Rollback()
+				return err2
+			}
+		}
+	}
+
 	return tx.Commit()
+}
+
+func promoteMissingDefaultsSQLite(tx *sql.Tx, tenantID, now string) error {
+	rows, err := tx.Query(`
+		SELECT end_user_id FROM api_keys
+		 WHERE tenant_id = ? AND end_user_id IS NOT NULL AND end_user_id <> ''
+		 GROUP BY end_user_id
+		HAVING SUM(CASE WHEN is_default THEN 1 ELSE 0 END) = 0
+	`, tenantID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var users []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		users = append(users, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, endUserID := range users {
+		var keyID string
+		if err := tx.QueryRow(`
+			SELECT id FROM api_keys
+			 WHERE tenant_id = ? AND end_user_id = ?
+			 ORDER BY created_at ASC, id ASC LIMIT 1
+		`, tenantID, endUserID).Scan(&keyID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE api_keys SET is_default = 1, updated_at = ? WHERE tenant_id = ? AND id = ?`, now, tenantID, keyID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func demoteExtraDefaultsSQLite(tx *sql.Tx, tenantID, now string) error {
+	rows, err := tx.Query(`
+		SELECT end_user_id FROM api_keys
+		 WHERE tenant_id = ? AND end_user_id IS NOT NULL AND end_user_id <> '' AND is_default = 1
+		 GROUP BY end_user_id
+		HAVING COUNT(*) > 1
+	`, tenantID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var users []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		users = append(users, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, endUserID := range users {
+		var keepID string
+		if err := tx.QueryRow(`
+			SELECT id FROM api_keys
+			 WHERE tenant_id = ? AND end_user_id = ? AND is_default = 1
+			 ORDER BY created_at ASC, id ASC LIMIT 1
+		`, tenantID, endUserID).Scan(&keepID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			UPDATE api_keys SET is_default = 0, updated_at = ?
+			 WHERE tenant_id = ? AND end_user_id = ? AND is_default = 1 AND id <> ?
+		`, now, tenantID, endUserID, keepID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func EffectiveAPIKeyRowWithProfiles(row APIKeyRow, profiles []PermissionProfileSnapshot) APIKeyRow {
