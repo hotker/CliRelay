@@ -52,6 +52,8 @@ func endUserError(c *gin.Context, err error) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "tenant_expired", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrLastKey):
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "last_key", "message": err.Error()}})
+	case errors.Is(err, enduser.ErrDuplicateKeyName):
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "duplicate_key_name", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrNotFound):
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "not_found", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrValidation):
