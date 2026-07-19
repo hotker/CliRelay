@@ -33,6 +33,7 @@ var (
 	ErrTenantSuspended    = errors.New("tenant suspended")
 	ErrTenantExpired      = errors.New("tenant expired")
 	ErrValidation         = errors.New("validation failed")
+	ErrDuplicateKeyName   = errors.New("duplicate key name")
 	ErrLastKey            = errors.New("cannot delete last api key")
 	ErrNotFound           = errors.New("not found")
 )
@@ -917,6 +918,9 @@ func (s *Service) CreateKey(ctx context.Context, tenantID, endUserID, name strin
 	if name == "" {
 		return result, fmt.Errorf("%w: key name is required", ErrValidation)
 	}
+	if err = ensureUniqueKeyName(ctx, tx, tenantID, endUserID, name, ""); err != nil {
+		return result, err
+	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO api_keys (key, id, name, disabled, end_user_id, is_default, tenant_id, created_at, updated_at,
 			permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit,
@@ -970,6 +974,18 @@ func (s *Service) UpdateKeyName(ctx context.Context, tenantID, endUserID, keyID,
 	if name == "" {
 		return fmt.Errorf("%w: name required", ErrValidation)
 	}
+	if err := requireUUID(tenantID); err != nil {
+		return err
+	}
+	if err := requireUUID(endUserID); err != nil {
+		return err
+	}
+	if err := requireUUID(keyID); err != nil {
+		return err
+	}
+	if err := ensureUniqueKeyName(ctx, s.db, tenantID, endUserID, name, keyID); err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET name = ?, updated_at = ? WHERE tenant_id = ? AND end_user_id = ? AND id = ?`,
 		name, time.Now().UTC().Format(time.RFC3339), tenantID, endUserID, keyID)
 	if err != nil {
@@ -979,6 +995,35 @@ func (s *Service) UpdateKeyName(ctx context.Context, tenantID, endUserID, keyID,
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ensureUniqueKeyName rejects case-insensitive name collisions within one end user.
+// excludeKeyID is empty on create; on rename pass the current key id so it can keep its name.
+func ensureUniqueKeyName(ctx context.Context, q queryRower, tenantID, endUserID, name, excludeKeyID string) error {
+	var exists int
+	var err error
+	if excludeKeyID == "" {
+		err = q.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM api_keys
+			WHERE tenant_id = ? AND end_user_id = ? AND LOWER(name) = LOWER(?)
+		`, tenantID, endUserID, name).Scan(&exists)
+	} else {
+		err = q.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM api_keys
+			WHERE tenant_id = ? AND end_user_id = ? AND LOWER(name) = LOWER(?) AND id != ?
+		`, tenantID, endUserID, name, excludeKeyID).Scan(&exists)
+	}
+	if err != nil {
+		return err
+	}
+	if exists > 0 {
+		return fmt.Errorf("%w: key name %q already exists", ErrDuplicateKeyName, name)
+	}
+	return nil
+}
+
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func (s *Service) RotateKey(ctx context.Context, tenantID, endUserID, keyID string) (CreateKeyResult, error) {

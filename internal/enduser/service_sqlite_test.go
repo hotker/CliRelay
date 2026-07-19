@@ -124,6 +124,15 @@ func TestSetDefaultKeyOnSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create b: %v", err)
 	}
+	if _, err := svc.CreateKey(ctx, tenantID, userID, "A"); !errors.Is(err, ErrDuplicateKeyName) {
+		t.Fatalf("duplicate name err = %v, want ErrDuplicateKeyName", err)
+	}
+	if err := svc.UpdateKeyName(ctx, tenantID, userID, b.APIKey.ID, "a"); !errors.Is(err, ErrDuplicateKeyName) {
+		t.Fatalf("rename to duplicate err = %v, want ErrDuplicateKeyName", err)
+	}
+	if err := svc.UpdateKeyName(ctx, tenantID, userID, a.APIKey.ID, "a"); err != nil {
+		t.Fatalf("keep same name: %v", err)
+	}
 	if err := svc.SetDefaultKey(ctx, tenantID, userID, b.APIKey.ID); err != nil {
 		t.Fatalf("set default: %v", err)
 	}
