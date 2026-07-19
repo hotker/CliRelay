@@ -139,7 +139,7 @@ func QueryLogContentForKey(id int64, apiKey string) (LogContentResult, error) {
 	if db == nil {
 		return LogContentResult{}, fmt.Errorf("usage: database not initialised")
 	}
-	clause, args := buildSingleAPIKeySelectorClauseForTenant(tenantID, apiKey)
+	clause, args := buildPublicLookupAPIKeySelectorClause(tenantID, apiKey)
 	predicate := strings.TrimPrefix(clause, " WHERE ")
 	queryArgs := append([]interface{}{tenantID, id}, args...)
 
@@ -186,7 +186,7 @@ func QueryLogContentPartForKey(id int64, apiKey string, part string) (LogContent
 	} else if part == "details" {
 		column = "detail_content"
 	}
-	clause, args := buildSingleAPIKeySelectorClauseForTenant(tenantID, apiKey)
+	clause, args := buildPublicLookupAPIKeySelectorClause(tenantID, apiKey)
 	predicate := strings.TrimPrefix(clause, " WHERE ")
 	queryArgs := append([]interface{}{tenantID, id}, args...)
 

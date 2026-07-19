@@ -123,3 +123,58 @@ func TestCountUsageByEndUserAggregatesAllKeys(t *testing.T) {
 		t.Fatalf("display name = %q, want 陈龙", name)
 	}
 }
+
+func TestExpandPublicLookupAPIKeys_AggregatesOwnedKeys(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "expand-keys-*.db")
+	if err != nil {
+		t.Fatalf("create temp db: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	t.Cleanup(func() {
+		CloseDB()
+		_ = os.Remove(dbPath)
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
+	})
+	if err := InitDB(dbPath, config.RequestLogStorageConfig{}, time.UTC); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+
+	endUserID := uuid.NewString()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := UpsertAPIKey(APIKeyRow{TenantID: systemTenantID, ID: uuid.NewString(), Key: "sk-a", Name: "A", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("UpsertAPIKey A: %v", err)
+	}
+	if err := UpsertAPIKey(APIKeyRow{TenantID: systemTenantID, ID: uuid.NewString(), Key: "sk-b", Name: "B", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("UpsertAPIKey B: %v", err)
+	}
+	if err := UpsertAPIKey(APIKeyRow{TenantID: systemTenantID, ID: uuid.NewString(), Key: "sk-solo", Name: "Solo", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("UpsertAPIKey solo: %v", err)
+	}
+
+	got := ExpandPublicLookupAPIKeys("sk-a")
+	if len(got) != 2 {
+		t.Fatalf("owned expand len=%d keys=%v, want 2", len(got), got)
+	}
+	set := map[string]bool{}
+	for _, k := range got {
+		set[k] = true
+	}
+	if !set["sk-a"] || !set["sk-b"] {
+		t.Fatalf("owned expand = %v, want sk-a and sk-b", got)
+	}
+
+	solo := ExpandPublicLookupAPIKeys("sk-solo")
+	if len(solo) != 1 || solo[0] != "sk-solo" {
+		t.Fatalf("solo expand = %v, want [sk-solo]", solo)
+	}
+
+	unknown := ExpandPublicLookupAPIKeys("sk-unknown")
+	if len(unknown) != 1 || unknown[0] != "sk-unknown" {
+		t.Fatalf("unknown expand = %v, want [sk-unknown]", unknown)
+	}
+	if name := ResolveAPIKeyOwnName("sk-a"); name != "A" {
+		t.Fatalf("ResolveAPIKeyOwnName = %q, want A", name)
+	}
+}

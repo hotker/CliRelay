@@ -65,7 +65,12 @@ func QueryPublicChartData(apiKey string, days int) (PublicChartData, error) {
 	statsCutoff := CutoffStartUTC(days).Format(time.RFC3339)
 	heatmapCutoff := CutoffStartUTC(heatmapDays).Format(time.RFC3339)
 
-	params := LogQueryParams{TenantID: ResolveAPIKeyTenant(apiKey), APIKey: apiKey, Days: scanDays}
+	// Expand end-user-owned keys so portal multi-key accounts see full account usage.
+	params := LogQueryParams{
+		TenantID: ResolveAPIKeyTenant(apiKey),
+		APIKeys:  ExpandPublicLookupAPIKeys(apiKey),
+		Days:     scanDays,
+	}
 	where, args := buildWhereClause(params)
 	queryArgs := make([]interface{}, 0, len(args)+2)
 	queryArgs = append(queryArgs, statsCutoff, heatmapCutoff)

@@ -161,6 +161,48 @@ func ListAPIKeySecretsForEndUser(endUserID string) []string {
 	return out
 }
 
+// ExpandPublicLookupAPIKeys expands a presented API key into the full account key pool
+// when the key is owned by an end user (shared quota / portal multi-key).
+// Standalone keys and unknown secrets stay single-key.
+func ExpandPublicLookupAPIKeys(apiKey string) []string {
+	trimmed := strings.TrimSpace(apiKey)
+	if trimmed == "" {
+		return nil
+	}
+	row := GetAPIKey(trimmed)
+	if row == nil {
+		return []string{trimmed}
+	}
+	endUserID := strings.TrimSpace(row.EndUserID)
+	if endUserID == "" {
+		if k := strings.TrimSpace(row.Key); k != "" {
+			return []string{k}
+		}
+		return []string{trimmed}
+	}
+	secrets := ListAPIKeySecretsForEndUser(endUserID)
+	if len(secrets) == 0 {
+		if k := strings.TrimSpace(row.Key); k != "" {
+			return []string{k}
+		}
+		return []string{trimmed}
+	}
+	return secrets
+}
+
+// ResolveAPIKeyOwnName returns the key's own name (not end-user account display name).
+func ResolveAPIKeyOwnName(apiKey string) string {
+	trimmed := strings.TrimSpace(apiKey)
+	if trimmed == "" {
+		return ""
+	}
+	row := GetAPIKey(trimmed)
+	if row == nil {
+		return ""
+	}
+	return strings.TrimSpace(row.Name)
+}
+
 // DisplayNameForEndUser returns display_name for request-log labeling.
 func DisplayNameForEndUser(endUserID string) string {
 	q := GetEndUserQuota(endUserID)

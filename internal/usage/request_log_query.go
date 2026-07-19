@@ -1120,6 +1120,26 @@ func buildSingleAPIKeySelectorClauseForTenant(tenantID, selector string) (string
 	return " WHERE api_key = ?", []interface{}{trimmed}
 }
 
+// buildPublicLookupAPIKeySelectorClause matches any key in the end-user account pool
+// (or a single standalone key). Used by public log content access checks.
+func buildPublicLookupAPIKeySelectorClause(tenantID, selector string) (string, []interface{}) {
+	keys := ExpandPublicLookupAPIKeys(selector)
+	if len(keys) == 0 {
+		return " WHERE 1 = 0", nil
+	}
+	if len(keys) == 1 {
+		return buildSingleAPIKeySelectorClauseForTenant(tenantID, keys[0])
+	}
+	conds := make([]string, 0, len(keys))
+	args := make([]interface{}, 0, len(keys)*2)
+	for _, k := range keys {
+		clause, clauseArgs := buildSingleAPIKeySelectorClauseForTenant(tenantID, k)
+		conds = append(conds, strings.TrimPrefix(clause, " WHERE "))
+		args = append(args, clauseArgs...)
+	}
+	return " WHERE (" + strings.Join(conds, " OR ") + ")", args
+}
+
 // QueryModelsForKey returns the distinct models used by a specific API key within the time range.
 func QueryModelsForKey(apiKey string, days int) ([]string, error) {
 	db := getReadDB()

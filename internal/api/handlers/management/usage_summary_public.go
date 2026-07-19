@@ -71,10 +71,11 @@ func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 	// Public summary is unauthenticated and only receives the raw API key.
 	// Resolve the key's tenant first so multi-tenant deployments do not query
 	// the system catalog (which would always return found=false / zero stats).
+	// End-user-owned keys share one account pool — aggregate all keys of the owner.
 	tenantID := usage.ResolveAPIKeyTenant(apiKey)
 	stats, err := usage.QueryStats(usage.LogQueryParams{
 		TenantID: tenantID,
-		APIKey:   apiKey,
+		APIKeys:  usage.ExpandPublicLookupAPIKeys(apiKey),
 		Days:     1,
 	})
 	if err != nil {

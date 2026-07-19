@@ -153,12 +153,14 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		maps.authIndexesBySubject,
 		maps.authMetaBySubject,
 	)
+	// Portal multi-key accounts share one quota pool; public lookup aggregates all owned keys.
+	lookupKeys := usage.ExpandPublicLookupAPIKeys(input.APIKey)
 	params := usage.LogQueryParams{
 		TenantID:              usage.ResolveAPIKeyTenant(input.APIKey),
 		Page:                  input.Page,
 		Size:                  input.Size,
 		Days:                  input.Days,
-		APIKey:                input.APIKey,
+		APIKeys:               lookupKeys,
 		Models:                input.Models,
 		Statuses:              input.Statuses,
 		MatchNoModels:         input.MatchNoModels,
@@ -185,8 +187,13 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 
 	apiKeyName := s.publicAPIKeyName(input.APIKey)
 	for i := range result.Items {
+		// Prefer the key's own name so multi-key accounts can tell rows apart.
+		keyOwnName := usage.ResolveAPIKeyOwnName(result.Items[i].APIKey)
+		if keyOwnName == "" {
+			keyOwnName = strings.TrimSpace(result.Items[i].APIKeyName)
+		}
 		if apiKeyName == "" {
-			apiKeyName = strings.TrimSpace(result.Items[i].APIKeyName)
+			apiKeyName = keyOwnName
 		}
 		channelName := displayChannelNameForLog(result.Items[i], maps.channelNameMap, maps.authIndexChannelMap, maps.ambiguousAuthIndexChannelMap)
 		result.Items[i].Source = ""
@@ -194,7 +201,7 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		result.Items[i].AuthSubjectID = ""
 		result.Items[i].ChannelName = channelName
 		result.Items[i].APIKey = ""
-		result.Items[i].APIKeyName = ""
+		result.Items[i].APIKeyName = keyOwnName
 		// Keep provider/auth_type for public UI badges, but strip identity keys above.
 		enrichLogRowChannelMeta(&result.Items[i], maps.authMetaByIndex, maps.authMetaBySubject)
 		result.Items[i].AuthIndex = ""

@@ -1578,7 +1578,9 @@ func TestGetPublicUsageLogs_ReturnsChannelNameWithoutSensitiveFields(t *testing.
 	if item.ChannelName != "Codex 主渠道" {
 		t.Fatalf("channel_name = %q, want Codex 主渠道", item.ChannelName)
 	}
-	if item.APIKey != "" || item.APIKeyName != "" || item.Source != "" || item.AuthIndex != "" {
+	// api_key_name is non-secret and needed so multi-key portal users can tell keys apart.
+	// Raw api_key / source / auth_index must still be scrubbed.
+	if item.APIKey != "" || item.Source != "" || item.AuthIndex != "" {
 		t.Fatalf("sensitive fields not scrubbed: %+v", item)
 	}
 }

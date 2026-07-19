@@ -915,7 +915,7 @@ func (s *Service) CreateKey(ctx context.Context, tenantID, endUserID, name strin
 	now := time.Now().UTC().Format(time.RFC3339)
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "key"
+		return result, fmt.Errorf("%w: key name is required", ErrValidation)
 	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO api_keys (key, id, name, disabled, end_user_id, is_default, tenant_id, created_at, updated_at,
