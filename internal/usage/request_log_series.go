@@ -574,15 +574,15 @@ func QueryAPIKeyDistributionForTenant(tenantID string, days int) ([]APIKeyDistri
 			if trimmed := strings.TrimSpace(row.Key); trimmed != "" {
 				p.APIKey = trimmed
 			}
-			if trimmed := strings.TrimSpace(row.Name); trimmed != "" {
-				p.Name = trimmed
+			if label := ResolveAPIKeyDisplayName(&row, p.Name); label != "" {
+				p.Name = label
 			}
 		} else if row, ok := currentByKey[p.APIKey]; ok {
 			if trimmed := strings.TrimSpace(row.Key); trimmed != "" {
 				p.APIKey = trimmed
 			}
-			if trimmed := strings.TrimSpace(row.Name); trimmed != "" {
-				p.Name = trimmed
+			if label := ResolveAPIKeyDisplayName(&row, p.Name); label != "" {
+				p.Name = label
 			}
 		}
 		if p.APIKey == "" {

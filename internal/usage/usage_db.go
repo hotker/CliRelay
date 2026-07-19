@@ -851,7 +851,10 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		if apiKeyID == "" {
 			apiKeyID = identity.ID
 		}
-		if apiKeyName == "" {
+		// Always prefer live identity label (end-user display name when owned).
+		if name := strings.TrimSpace(identity.Name); name != "" {
+			apiKeyName = name
+		} else if apiKeyName == "" {
 			apiKeyName = identity.Name
 		}
 	}

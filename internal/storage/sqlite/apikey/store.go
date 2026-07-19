@@ -289,6 +289,26 @@ func (s Store) GetByID(id string) *APIKeyRow {
 	return entry
 }
 
+// stripOwnedKeyQuota clears per-key limits for end-user-owned keys.
+// Account-level limits live on end_users; keeping key rows non-zero would re-open the multi-key budget hole.
+func stripOwnedKeyQuota(entry *APIKeyRow) {
+	if entry == nil || strings.TrimSpace(entry.EndUserID) == "" {
+		return
+	}
+	entry.PermissionProfileID = ""
+	entry.DailyLimit = 0
+	entry.TotalQuota = 0
+	entry.SpendingLimit = 0
+	entry.DailySpendingLimit = 0
+	entry.ConcurrencyLimit = 0
+	entry.RPMLimit = 0
+	entry.TPMLimit = 0
+	entry.AllowedModels = nil
+	entry.AllowedChannels = nil
+	entry.AllowedChannelGroups = nil
+	entry.SystemPrompt = ""
+}
+
 func (s Store) Upsert(entry APIKeyRow) error {
 	if s.db == nil {
 		return fmt.Errorf("database not initialised")
@@ -305,6 +325,15 @@ func (s Store) Upsert(entry APIKeyRow) error {
 			entry.ID = uuid.NewString()
 		}
 	}
+	// Preserve ownership if caller omitted end_user_id, then force account-level quota semantics.
+	if strings.TrimSpace(entry.EndUserID) == "" {
+		if existing := s.GetByID(entry.ID); existing != nil && existing.EndUserID != "" {
+			entry.EndUserID = existing.EndUserID
+		} else if existing := s.Get(entry.Key); existing != nil && existing.EndUserID != "" {
+			entry.EndUserID = existing.EndUserID
+		}
+	}
+	stripOwnedKeyQuota(&entry)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if entry.CreatedAt == "" {
@@ -371,13 +400,18 @@ func (s Store) UpdateByID(entry APIKeyRow) error {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	if entry.CreatedAt == "" {
-		if existing := s.GetByID(entry.ID); existing != nil && existing.CreatedAt != "" {
+	if existing := s.GetByID(entry.ID); existing != nil {
+		if entry.CreatedAt == "" && existing.CreatedAt != "" {
 			entry.CreatedAt = existing.CreatedAt
-		} else {
-			entry.CreatedAt = now
+		}
+		if strings.TrimSpace(entry.EndUserID) == "" {
+			entry.EndUserID = existing.EndUserID
 		}
 	}
+	if entry.CreatedAt == "" {
+		entry.CreatedAt = now
+	}
+	stripOwnedKeyQuota(&entry)
 
 	disabledInt := 0
 	if entry.Disabled {

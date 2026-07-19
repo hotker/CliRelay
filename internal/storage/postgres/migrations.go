@@ -25,8 +25,83 @@ func RuntimeMigrations() []Migration {
 		{Version: "202607170002_api_key_daily_spending_reset_events", SQL: apiKeyDailySpendingResetEventsSQL},
 		// End-user portal accounts (isolated from admin users) + multi-key ownership + refresh tokens.
 		{Version: "202607170003_end_users_and_tokens", SQL: endUsersAndTokensSQL},
+		// Account-level quota/permissions: shared across all API keys of an end user.
+		{Version: "202607190001_end_user_account_quota", SQL: endUserAccountQuotaSQL},
 	}
 }
+
+// Quota + permission template live on end_users so multiple keys share one pool.
+// Backfill from each user's default key (or earliest key) then zero owned key limits
+// so creating extra keys cannot mint independent budgets.
+const endUserAccountQuotaSQL = `
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS permission_profile_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS daily_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS total_quota INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS daily_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS tpm_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS allowed_channels TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS allowed_channel_groups TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS system_prompt TEXT NOT NULL DEFAULT '';
+
+UPDATE end_users AS eu
+SET
+  permission_profile_id = COALESCE(NULLIF(src.permission_profile_id, ''), eu.permission_profile_id),
+  daily_limit = CASE WHEN src.daily_limit > 0 THEN src.daily_limit ELSE eu.daily_limit END,
+  total_quota = CASE WHEN src.total_quota > 0 THEN src.total_quota ELSE eu.total_quota END,
+  spending_limit = CASE WHEN src.spending_limit > 0 THEN src.spending_limit ELSE eu.spending_limit END,
+  daily_spending_limit = CASE WHEN src.daily_spending_limit > 0 THEN src.daily_spending_limit ELSE eu.daily_spending_limit END,
+  concurrency_limit = CASE WHEN src.concurrency_limit > 0 THEN src.concurrency_limit ELSE eu.concurrency_limit END,
+  rpm_limit = CASE WHEN src.rpm_limit > 0 THEN src.rpm_limit ELSE eu.rpm_limit END,
+  tpm_limit = CASE WHEN src.tpm_limit > 0 THEN src.tpm_limit ELSE eu.tpm_limit END,
+  allowed_models = CASE WHEN src.allowed_models IS NOT NULL AND src.allowed_models <> '' AND src.allowed_models <> '[]'
+    THEN src.allowed_models ELSE eu.allowed_models END,
+  allowed_channels = CASE WHEN src.allowed_channels IS NOT NULL AND src.allowed_channels <> '' AND src.allowed_channels <> '[]'
+    THEN src.allowed_channels ELSE eu.allowed_channels END,
+  allowed_channel_groups = CASE WHEN src.allowed_channel_groups IS NOT NULL AND src.allowed_channel_groups <> '' AND src.allowed_channel_groups <> '[]'
+    THEN src.allowed_channel_groups ELSE eu.allowed_channel_groups END,
+  system_prompt = CASE WHEN src.system_prompt IS NOT NULL AND src.system_prompt <> ''
+    THEN src.system_prompt ELSE eu.system_prompt END
+FROM (
+  SELECT DISTINCT ON (end_user_id)
+    end_user_id,
+    permission_profile_id,
+    daily_limit,
+    total_quota,
+    spending_limit,
+    daily_spending_limit,
+    concurrency_limit,
+    rpm_limit,
+    tpm_limit,
+    allowed_models,
+    allowed_channels,
+    allowed_channel_groups,
+    system_prompt
+  FROM api_keys
+  WHERE end_user_id IS NOT NULL
+  ORDER BY end_user_id, is_default DESC, created_at ASC NULLS LAST, id ASC
+) AS src
+WHERE eu.id = src.end_user_id;
+
+UPDATE api_keys
+SET
+  permission_profile_id = '',
+  daily_limit = 0,
+  total_quota = 0,
+  spending_limit = 0,
+  daily_spending_limit = 0,
+  concurrency_limit = 0,
+  rpm_limit = 0,
+  tpm_limit = 0,
+  allowed_models = '[]',
+  allowed_channels = '[]',
+  allowed_channel_groups = '[]',
+  system_prompt = ''
+WHERE end_user_id IS NOT NULL;
+`
 
 const endUsersAndTokensSQL = `
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS access_token_ttl_seconds INTEGER NOT NULL DEFAULT 43200;

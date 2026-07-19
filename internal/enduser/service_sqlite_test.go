@@ -36,7 +36,19 @@ func openEndUserTestDB(t *testing.T) *sql.DB {
 			locked_until TEXT,
 			created_at TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL DEFAULT '',
-			version INTEGER NOT NULL DEFAULT 1
+			version INTEGER NOT NULL DEFAULT 1,
+			permission_profile_id TEXT NOT NULL DEFAULT '',
+			daily_limit INTEGER NOT NULL DEFAULT 0,
+			total_quota INTEGER NOT NULL DEFAULT 0,
+			spending_limit REAL NOT NULL DEFAULT 0,
+			daily_spending_limit REAL NOT NULL DEFAULT 0,
+			concurrency_limit INTEGER NOT NULL DEFAULT 0,
+			rpm_limit INTEGER NOT NULL DEFAULT 0,
+			tpm_limit INTEGER NOT NULL DEFAULT 0,
+			allowed_models TEXT NOT NULL DEFAULT '[]',
+			allowed_channels TEXT NOT NULL DEFAULT '[]',
+			allowed_channel_groups TEXT NOT NULL DEFAULT '[]',
+			system_prompt TEXT NOT NULL DEFAULT ''
 		)
 	`); err != nil {
 		t.Fatalf("create end_users: %v", err)

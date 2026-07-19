@@ -7,10 +7,21 @@ import (
 
 func TestRuntimeMigrationsCoverCoreTables(t *testing.T) {
 	migrations := RuntimeMigrations()
-	if len(migrations) != 16 {
-		t.Fatalf("RuntimeMigrations len = %d, want 16", len(migrations))
+	if len(migrations) != 17 {
+		t.Fatalf("RuntimeMigrations len = %d, want 17", len(migrations))
 	}
-	// Latest: end users + refresh tokens.
+	// Latest: account-level quota on end_users.
+	accountQuotaSQL := migrations[16].SQL
+	for _, fragment := range []string{
+		"end_users ADD COLUMN IF NOT EXISTS permission_profile_id",
+		"end_users ADD COLUMN IF NOT EXISTS daily_limit",
+		"WHERE end_user_id IS NOT NULL",
+	} {
+		if !strings.Contains(accountQuotaSQL, fragment) {
+			t.Fatalf("end user account quota migration missing %q", fragment)
+		}
+	}
+	// Prior: end users + refresh tokens.
 	endUsersSQL := migrations[15].SQL
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS end_users",

@@ -112,21 +112,56 @@ func (h *Handler) PatchEndUser(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Username    *string `json:"username"`
-		DisplayName *string `json:"display_name"`
-		Password    *string `json:"password"`
-		Status      *string `json:"status"`
+		Username             *string   `json:"username"`
+		DisplayName          *string   `json:"display_name"`
+		Password             *string   `json:"password"`
+		Status               *string   `json:"status"`
+		PermissionProfileID  *string   `json:"permission-profile-id"`
+		DailyLimit           *int      `json:"daily-limit"`
+		TotalQuota           *int      `json:"total-quota"`
+		SpendingLimit        *float64  `json:"spending-limit"`
+		DailySpendingLimit   *float64  `json:"daily-spending-limit"`
+		ConcurrencyLimit     *int      `json:"concurrency-limit"`
+		RPMLimit             *int      `json:"rpm-limit"`
+		TPMLimit             *int      `json:"tpm-limit"`
+		AllowedModels        *[]string `json:"allowed-models"`
+		AllowedChannels      *[]string `json:"allowed-channels"`
+		AllowedChannelGroups *[]string `json:"allowed-channel-groups"`
+		SystemPrompt         *string   `json:"system-prompt"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	user, err := svc.UpdateUser(c.Request.Context(), principal, effectiveTenantID(c), c.Param("id"), body.Username, body.DisplayName, body.Password, body.Status)
+	quota := &enduser.QuotaPatch{
+		PermissionProfileID:  body.PermissionProfileID,
+		DailyLimit:           body.DailyLimit,
+		TotalQuota:           body.TotalQuota,
+		SpendingLimit:        body.SpendingLimit,
+		DailySpendingLimit:   body.DailySpendingLimit,
+		ConcurrencyLimit:     body.ConcurrencyLimit,
+		RPMLimit:             body.RPMLimit,
+		TPMLimit:             body.TPMLimit,
+		AllowedModels:        body.AllowedModels,
+		AllowedChannels:      body.AllowedChannels,
+		AllowedChannelGroups: body.AllowedChannelGroups,
+		SystemPrompt:         body.SystemPrompt,
+	}
+	// Only pass quota when at least one field is set (avoid no-op patch noise).
+	hasQuota := body.PermissionProfileID != nil || body.DailyLimit != nil || body.TotalQuota != nil ||
+		body.SpendingLimit != nil || body.DailySpendingLimit != nil || body.ConcurrencyLimit != nil ||
+		body.RPMLimit != nil || body.TPMLimit != nil || body.AllowedModels != nil ||
+		body.AllowedChannels != nil || body.AllowedChannelGroups != nil || body.SystemPrompt != nil
+	if !hasQuota {
+		quota = nil
+	}
+	user, err := svc.UpdateUser(c.Request.Context(), principal, effectiveTenantID(c), c.Param("id"), body.Username, body.DisplayName, body.Password, body.Status, quota)
 	if err != nil {
 		endUserError(c, err)
 		return
 	}
-	if body.Status != nil {
+	// Status or account quota changes affect auth metadata for owned keys.
+	if body.Status != nil || hasQuota {
 		if err := h.refreshAPIKeyCache(); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
 				"code":    "cache_refresh_failed",

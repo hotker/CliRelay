@@ -18,6 +18,37 @@ type User struct {
 	Version            int64      `json:"version"`
 	// APIKeyCount is filled on list; 0 means unknown/none.
 	APIKeyCount int `json:"api_key_count,omitempty"`
+
+	// Account-level quota/permissions: shared by every API key under this user.
+	PermissionProfileID  string   `json:"permission-profile-id,omitempty"`
+	DailyLimit           int      `json:"daily-limit,omitempty"`
+	TotalQuota           int      `json:"total-quota,omitempty"`
+	SpendingLimit        float64  `json:"spending-limit,omitempty"`
+	DailySpendingLimit   float64  `json:"daily-spending-limit,omitempty"`
+	ConcurrencyLimit     int      `json:"concurrency-limit,omitempty"`
+	RPMLimit             int      `json:"rpm-limit,omitempty"`
+	TPMLimit             int      `json:"tpm-limit,omitempty"`
+	AllowedModels        []string `json:"allowed-models,omitempty"`
+	AllowedChannels      []string `json:"allowed-channels,omitempty"`
+	AllowedChannelGroups []string `json:"allowed-channel-groups,omitempty"`
+	SystemPrompt         string   `json:"system-prompt,omitempty"`
+}
+
+// QuotaPatch updates account-level limits. Nil field = leave unchanged.
+// Pointer to empty profile id or zero limit clears that field.
+type QuotaPatch struct {
+	PermissionProfileID  *string   `json:"permission-profile-id,omitempty"`
+	DailyLimit           *int      `json:"daily-limit,omitempty"`
+	TotalQuota           *int      `json:"total-quota,omitempty"`
+	SpendingLimit        *float64  `json:"spending-limit,omitempty"`
+	DailySpendingLimit   *float64  `json:"daily-spending-limit,omitempty"`
+	ConcurrencyLimit     *int      `json:"concurrency-limit,omitempty"`
+	RPMLimit             *int      `json:"rpm-limit,omitempty"`
+	TPMLimit             *int      `json:"tpm-limit,omitempty"`
+	AllowedModels        *[]string `json:"allowed-models,omitempty"`
+	AllowedChannels      *[]string `json:"allowed-channels,omitempty"`
+	AllowedChannelGroups *[]string `json:"allowed-channel-groups,omitempty"`
+	SystemPrompt         *string   `json:"system-prompt,omitempty"`
 }
 
 type APIKey struct {

@@ -365,9 +365,12 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	// during in-flight requests do not orphan log records.
 	apiKeyID := strings.TrimSpace(record.APIKeyID)
 	apiKeyName := strings.TrimSpace(record.APIKeyName)
-	if apiKeyName == "" && statsKey != "" {
-		if row := GetAPIKey(statsKey); row != nil && row.Name != "" {
-			apiKeyName = row.Name
+	if statsKey != "" {
+		if row := GetAPIKey(statsKey); row != nil {
+			// Prefer account display name for owned keys so logs show end-user, not key label.
+			if name := ResolveAPIKeyDisplayName(row, apiKeyName); name != "" {
+				apiKeyName = name
+			}
 		}
 	}
 	inputContent := resolveDeferredUsageContent(record.InputContent, record.InputContentPath)

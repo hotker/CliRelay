@@ -149,7 +149,14 @@ func initializeRuntimeDataStack(cfg *config.Config, configPath string, loc *time
 	settingsstore.MigrateRuntimeSettingsFromConfig(cfg, configPath)
 	settingsstore.ApplyStoredRuntimeSettings(cfg)
 	middleware.InitQuotaUsageFuncs(usage.CountTodayByKey, usage.CountTotalByKey, usage.QueryTotalCostByKey, usage.QueryTodayCostByKey)
-	usage.SetTokenUsageCallback(middleware.RecordTokenUsage)
+	middleware.InitQuotaEndUserUsageFuncs(usage.CountTodayByEndUser, usage.CountTotalByEndUser, usage.QueryTotalCostByEndUser, usage.QueryTodayCostByEndUser)
+	usage.SetTokenUsageCallback(func(apiKey string, totalTokens int64) {
+		endUserID := ""
+		if row := usage.GetAPIKey(apiKey); row != nil {
+			endUserID = row.EndUserID
+		}
+		middleware.RecordTokenUsageForRequest(apiKey, endUserID, totalTokens)
+	})
 	return nil
 }
 

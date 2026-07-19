@@ -78,10 +78,12 @@ func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 }
 
 // keyConfig holds the per-key configuration extracted from APIKeyEntry.
+// When endUserID is set, quota/permissions come from the end-user account pool.
 type keyConfig struct {
 	tenantID             string
 	apiKeyID             string
 	apiKeyName           string
+	endUserID            string
 	allowedModels        []string
 	allowedChannels      []string
 	allowedChannelGroups []string
@@ -100,10 +102,11 @@ func keyConfigFromRow(row usage.APIKeyRow) keyConfig {
 	if tenantID == "" {
 		tenantID = identity.SystemTenantID
 	}
-	return keyConfig{
+	kc := keyConfig{
 		tenantID:             tenantID,
 		apiKeyID:             strings.TrimSpace(row.ID),
 		apiKeyName:           strings.TrimSpace(row.Name),
+		endUserID:            strings.TrimSpace(row.EndUserID),
 		allowedModels:        row.AllowedModels,
 		allowedChannels:      row.AllowedChannels,
 		allowedChannelGroups: row.AllowedChannelGroups,
@@ -116,6 +119,27 @@ func keyConfigFromRow(row usage.APIKeyRow) keyConfig {
 		tpmLimit:             row.TPMLimit,
 		systemPrompt:         row.SystemPrompt,
 	}
+	// Owned keys share the end-user account quota/permission pool.
+	if kc.endUserID != "" {
+		if q := usage.GetEndUserQuota(kc.endUserID); q != nil {
+			eq := usage.EffectiveEndUserQuota(*q)
+			if name := strings.TrimSpace(eq.DisplayName); name != "" {
+				kc.apiKeyName = name
+			}
+			kc.allowedModels = eq.AllowedModels
+			kc.allowedChannels = eq.AllowedChannels
+			kc.allowedChannelGroups = eq.AllowedChannelGroups
+			kc.dailyLimit = eq.DailyLimit
+			kc.totalQuota = eq.TotalQuota
+			kc.spendingLimit = eq.SpendingLimit
+			kc.dailySpendingLimit = eq.DailySpendingLimit
+			kc.concurrencyLimit = eq.ConcurrencyLimit
+			kc.rpmLimit = eq.RPMLimit
+			kc.tpmLimit = eq.TPMLimit
+			kc.systemPrompt = eq.SystemPrompt
+		}
+	}
+	return kc
 }
 
 type provider struct {
@@ -178,6 +202,9 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 		if kc, ok := p.keys[candidate.value]; ok {
 			metadata := map[string]string{
 				"source": candidate.source,
+			}
+			if kc.endUserID != "" {
+				metadata["end-user-id"] = kc.endUserID
 			}
 			if len(kc.allowedModels) > 0 {
 				metadata["allowed-models"] = strings.Join(kc.allowedModels, ",")

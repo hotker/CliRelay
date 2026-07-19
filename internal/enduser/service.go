@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -270,10 +271,14 @@ func requireUUID(id string) error {
 func scanUser(scanner interface{ Scan(dest ...any) error }) (User, error) {
 	var u User
 	var lastLogin, lockedUntil sql.NullTime
+	var modelsJSON, channelsJSON, groupsJSON string
 	err := scanner.Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.DisplayName, &u.Status,
 		&u.MustChangePassword, &lastLogin, &u.FailedLoginCount, &u.LockStage, &lockedUntil,
 		&u.CreatedAt, &u.UpdatedAt, &u.Version,
+		&u.PermissionProfileID, &u.DailyLimit, &u.TotalQuota, &u.SpendingLimit, &u.DailySpendingLimit,
+		&u.ConcurrencyLimit, &u.RPMLimit, &u.TPMLimit,
+		&modelsJSON, &channelsJSON, &groupsJSON, &u.SystemPrompt,
 	)
 	if err != nil {
 		return u, err
@@ -286,11 +291,57 @@ func scanUser(scanner interface{ Scan(dest ...any) error }) (User, error) {
 		t := lockedUntil.Time
 		u.LockedUntil = &t
 	}
+	u.AllowedModels = decodeJSONStringList(modelsJSON)
+	u.AllowedChannels = decodeJSONStringList(channelsJSON)
+	u.AllowedChannelGroups = decodeJSONStringList(groupsJSON)
 	return u, nil
 }
 
+func decodeJSONStringList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func encodeJSONStringList(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func clampNonNegInt(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func clampNonNegFloat(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 const userSelect = `SELECT id, tenant_id, username, display_name, status, must_change_password,
-	last_login_at, failed_login_count, lock_stage, locked_until, created_at, updated_at, version FROM end_users`
+	last_login_at, failed_login_count, lock_stage, locked_until, created_at, updated_at, version,
+	COALESCE(permission_profile_id, ''), COALESCE(daily_limit, 0), COALESCE(total_quota, 0),
+	COALESCE(spending_limit, 0), COALESCE(daily_spending_limit, 0),
+	COALESCE(concurrency_limit, 0), COALESCE(rpm_limit, 0), COALESCE(tpm_limit, 0),
+	COALESCE(allowed_models, '[]'), COALESCE(allowed_channels, '[]'), COALESCE(allowed_channel_groups, '[]'),
+	COALESCE(system_prompt, '')
+	FROM end_users`
 
 func (s *Service) GetUser(ctx context.Context, tenantID, userID string) (User, error) {
 	if err := requireUUID(tenantID); err != nil {
@@ -500,7 +551,7 @@ func (s *Service) CreateUser(ctx context.Context, actor identity.Principal, tena
 	return result, nil
 }
 
-func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tenantID, userID string, username, displayName, password, status *string) (User, error) {
+func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tenantID, userID string, username, displayName, password, status *string, quota *QuotaPatch) (User, error) {
 	if !actor.Has("end_users.write") && !actor.PlatformAdmin {
 		return User{}, ErrPermissionDenied
 	}
@@ -513,8 +564,8 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 	if err := requireUUID(userID); err != nil {
 		return User{}, err
 	}
-	sets := make([]string, 0, 8)
-	args := make([]any, 0, 10)
+	sets := make([]string, 0, 20)
+	args := make([]any, 0, 24)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return User{}, err
@@ -559,6 +610,56 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 		args = append(args, st)
 		if st == "active" {
 			sets = append(sets, "failed_login_count = 0", "lock_stage = 0", "locked_until = NULL")
+		}
+	}
+	if quota != nil {
+		if quota.PermissionProfileID != nil {
+			sets = append(sets, "permission_profile_id = ?")
+			args = append(args, strings.TrimSpace(*quota.PermissionProfileID))
+		}
+		if quota.DailyLimit != nil {
+			sets = append(sets, "daily_limit = ?")
+			args = append(args, clampNonNegInt(*quota.DailyLimit))
+		}
+		if quota.TotalQuota != nil {
+			sets = append(sets, "total_quota = ?")
+			args = append(args, clampNonNegInt(*quota.TotalQuota))
+		}
+		if quota.SpendingLimit != nil {
+			sets = append(sets, "spending_limit = ?")
+			args = append(args, clampNonNegFloat(*quota.SpendingLimit))
+		}
+		if quota.DailySpendingLimit != nil {
+			sets = append(sets, "daily_spending_limit = ?")
+			args = append(args, clampNonNegFloat(*quota.DailySpendingLimit))
+		}
+		if quota.ConcurrencyLimit != nil {
+			sets = append(sets, "concurrency_limit = ?")
+			args = append(args, clampNonNegInt(*quota.ConcurrencyLimit))
+		}
+		if quota.RPMLimit != nil {
+			sets = append(sets, "rpm_limit = ?")
+			args = append(args, clampNonNegInt(*quota.RPMLimit))
+		}
+		if quota.TPMLimit != nil {
+			sets = append(sets, "tpm_limit = ?")
+			args = append(args, clampNonNegInt(*quota.TPMLimit))
+		}
+		if quota.AllowedModels != nil {
+			sets = append(sets, "allowed_models = ?")
+			args = append(args, encodeJSONStringList(*quota.AllowedModels))
+		}
+		if quota.AllowedChannels != nil {
+			sets = append(sets, "allowed_channels = ?")
+			args = append(args, encodeJSONStringList(*quota.AllowedChannels))
+		}
+		if quota.AllowedChannelGroups != nil {
+			sets = append(sets, "allowed_channel_groups = ?")
+			args = append(args, encodeJSONStringList(*quota.AllowedChannelGroups))
+		}
+		if quota.SystemPrompt != nil {
+			sets = append(sets, "system_prompt = ?")
+			args = append(args, *quota.SystemPrompt)
 		}
 	}
 	if len(sets) == 0 {

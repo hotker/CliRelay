@@ -89,6 +89,7 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 		items = append(items, row)
 	}
 	hydrateStreamingFromContent(db, params.TenantID, items)
+	hydrateAPIKeyDisplayNames(params.TenantID, items)
 
 	return LogQueryResult{
 		Items: items,
@@ -96,6 +97,39 @@ func QueryLogs(params LogQueryParams) (LogQueryResult, error) {
 		Page:  params.Page,
 		Size:  params.Size,
 	}, nil
+}
+
+// hydrateAPIKeyDisplayNames prefers live end-user account names for owned keys.
+func hydrateAPIKeyDisplayNames(tenantID string, items []LogRow) {
+	if len(items) == 0 {
+		return
+	}
+	byID := currentAPIKeyRowsByIDForTenant(tenantID)
+	byKey := currentAPIKeyRowsByKeyForTenant(tenantID)
+	for i := range items {
+		var row *APIKeyRow
+		if r, ok := byKey[strings.TrimSpace(items[i].APIKey)]; ok {
+			copy := r
+			row = &copy
+		} else {
+			// Fall back: resolve via secret lookup when tenant maps miss.
+			if live := GetAPIKey(items[i].APIKey); live != nil {
+				row = live
+			}
+		}
+		// Prefer id map when we can match key to id via byKey first.
+		if row != nil {
+			if id := strings.TrimSpace(row.ID); id != "" {
+				if r, ok := byID[id]; ok {
+					copy := r
+					row = &copy
+				}
+			}
+			if label := ResolveAPIKeyDisplayName(row, items[i].APIKeyName); label != "" {
+				items[i].APIKeyName = label
+			}
+		}
+	}
 }
 
 func hydrateStreamingFromContent(db *sql.DB, tenantID string, items []LogRow) {
@@ -1041,8 +1075,9 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 			if trimmed := strings.TrimSpace(row.Key); trimmed != "" {
 				value = trimmed
 			}
-			if trimmed := strings.TrimSpace(row.Name); trimmed != "" {
-				name = trimmed
+			// Owned keys: show end-user account name in filters / labels.
+			if label := ResolveAPIKeyDisplayName(&row, name); label != "" {
+				name = label
 			}
 		}
 		if value == "" {
