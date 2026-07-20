@@ -78,13 +78,17 @@ func queryPublicChartData(params LogQueryParams, days int) (PublicChartData, err
 	if tenantID == "" {
 		tenantID = systemTenantID
 	}
-	filter := rollupFilter{
-		TenantID:   tenantID,
-		BucketKind: rollupBucketDay,
-		BucketFrom: dayBucketFromDays(heatmapDays),
-		APIKeyIDs:  resolveAPIKeyIDsForStats(params),
-		EndUserID:  params.EndUserID,
+	filter, ok := rollupIdentityFilter(params)
+	if !ok {
+		return PublicChartData{
+			DailySeries:       []DailySeriesPoint{},
+			HeatmapSeries:     []DailyHeatmapPoint{},
+			ModelDistribution: []ModelDistributionPoint{},
+			Stats:             LogStats{CacheRate: 0},
+		}, nil
 	}
+	filter.BucketKind = rollupBucketDay
+	filter.BucketFrom = dayBucketFromDays(heatmapDays)
 	points, err := queryRollupDailySeries(filter)
 	if err != nil {
 		return PublicChartData{}, err

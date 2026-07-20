@@ -298,6 +298,13 @@ func runRequestLogMaintenancePass(ctx context.Context, db *sql.DB, driver string
 		}
 	}
 
+	// cleanup-enabled gates both metadata and content retention/size cleanup.
+	// Body purge when store-content=false still runs above (privacy, not retention).
+	if !currentRequestLogStorageConfig().CleanupEnabled {
+		compactLogContentStorageInternal(ctx, db, true)
+		return
+	}
+
 	cleanupStarted := time.Now()
 	metaDeleted, metaErr := cleanupExpiredRequestLogMetadata(ctx, db)
 	if metaErr != nil {

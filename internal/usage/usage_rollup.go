@@ -84,8 +84,110 @@ func ensureUsageRollupTables(db *sql.DB) error {
 	return nil
 }
 
-func bootstrapUsageRollup(db *sql.DB) error {
-	return ensureUsageRollupTables(db)
+const usageRollupBackfillMarker = "usage_rollup_buckets_v1"
+
+func bootstrapUsageRollup(db *sql.DB, loc *time.Location) error {
+	if err := ensureUsageRollupTables(db); err != nil {
+		return err
+	}
+	// One-shot reentrant backfill of surviving request_logs into rollup before
+	// maintenance can prune them. Marker prevents replaying on every restart.
+	// Caller must pass loc — do not call getUsageLocation while holding usageDBMu.
+	return runUsageRollupBackfillAtInitDB(db, loc)
+}
+
+func runUsageRollupBackfillAtInitDB(db *sql.DB, loc *time.Location) error {
+	if db == nil {
+		return nil
+	}
+	ensureUsageProjectionMarkerTable(db)
+	if projectionMarkerValue(db, usageRollupBackfillMarker) == "done" {
+		return nil
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	// Materialize rows first: SQLite MaxOpenConns=1 cannot Query+Begin concurrently.
+	type backfillRow struct {
+		ev rollupEvent
+	}
+	events := make([]backfillRow, 0)
+	rows, err := db.Query(`
+		SELECT tenant_id, COALESCE(api_key_id,''), COALESCE(auth_subject_id,''),
+		       COALESCE(model,''), COALESCE(source,''), COALESCE(channel_name,''),
+		       failed, streaming, latency_ms, first_token_ms,
+		       input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
+		       cost, timestamp
+		FROM request_logs
+	`)
+	if err != nil {
+		// Empty / missing table during early tests.
+		return setProjectionMarker(db, usageRollupBackfillMarker, "done")
+	}
+	for rows.Next() {
+		var (
+			tenantID, apiKeyID, authSubjectID, model, source, channel, ts string
+			failed, streaming                                             int
+			latencyMs, firstTokenMs                                       int64
+			inTok, outTok, reasonTok, cachedTok, totalTok                 int64
+			cost                                                          float64
+		)
+		if err = rows.Scan(
+			&tenantID, &apiKeyID, &authSubjectID, &model, &source, &channel,
+			&failed, &streaming, &latencyMs, &firstTokenMs,
+			&inTok, &outTok, &reasonTok, &cachedTok, &totalTok,
+			&cost, &ts,
+		); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("usage: rollup backfill scan: %w", err)
+		}
+		at, ok := parseStoredTimeString(ts)
+		if !ok {
+			continue
+		}
+		events = append(events, backfillRow{ev: rollupEvent{
+			TenantID:      tenantID,
+			APIKeyID:      apiKeyID,
+			AuthSubjectID: authSubjectID,
+			Model:         model,
+			Source:        source,
+			ChannelName:   channel,
+			Failed:        failed != 0,
+			Streaming:     streaming != 0,
+			LatencyMs:     latencyMs,
+			FirstTokenMs:  firstTokenMs,
+			Tokens: TokenStats{
+				InputTokens: inTok, OutputTokens: outTok, ReasoningTokens: reasonTok,
+				CachedTokens: cachedTok, TotalTokens: totalTok,
+			},
+			Cost: cost,
+			At:   at,
+		}})
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+
+	if len(events) == 0 {
+		return setProjectionMarker(db, usageRollupBackfillMarker, "done")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("usage: rollup backfill begin: %w", err)
+	}
+	for _, item := range events {
+		if err = projectUsageRollupTx(tx, item.ev); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("usage: rollup backfill commit: %w", err)
+	}
+	return setProjectionMarker(db, usageRollupBackfillMarker, "done")
 }
 
 func rollupBucketStarts(at time.Time, loc *time.Location) map[string]string {
@@ -134,7 +236,12 @@ func projectUsageRollupTx(tx *sql.Tx, ev rollupEvent) error {
 		firstTokenCount = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	starts := rollupBucketStarts(ev.At, getUsageLocation())
+	// Read usageLoc without locking: InitDB holds usageDBMu while backfilling.
+	loc := usageLoc
+	if loc == nil {
+		loc = time.Local
+	}
+	starts := rollupBucketStarts(ev.At, loc)
 
 	const upsertSQL = `
 		INSERT INTO usage_rollup_buckets (

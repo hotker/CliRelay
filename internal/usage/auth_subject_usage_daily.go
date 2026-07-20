@@ -53,7 +53,12 @@ func projectAuthSubjectUsageDailyTx(tx *sql.Tx, tenantID, authSubjectID string, 
 	if at.IsZero() {
 		at = time.Now()
 	}
-	dayKey := localDayKeyAt(at)
+	// Avoid getUsageLocation() lock: may run under InitDB which already holds usageDBMu.
+	loc := usageLoc
+	if loc == nil {
+		loc = time.Local
+	}
+	dayKey := localDayKeyAtLocation(at, loc)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	successInc, failureInc := int64(1), int64(0)
 	if failed {

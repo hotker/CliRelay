@@ -733,7 +733,7 @@ func initOpenedDBLocked(db, readDB *sql.DB, dbPath, driver string, storageCfg co
 		ensureRequestLogDetailIndexes(db)
 	}
 	bootstrapAIAccountStatusReadModels(db, loc)
-	if err := bootstrapUsageRollup(db); err != nil {
+	if err := bootstrapUsageRollup(db, loc); err != nil {
 		_ = db.Close()
 		usageDB, usageReadDB = nil, nil
 		return fmt.Errorf("usage: bootstrap usage rollup: %w", err)

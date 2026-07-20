@@ -2386,18 +2386,22 @@ func TestQueryStatsAndHeatmapCountSessionsFromDetails(t *testing.T) {
 		ContentRetentionDays:   30,
 		CleanupIntervalMinutes: 1440,
 	})
+	// Stable api_key_id is required for rollup-backed QueryStats.
+	if err := UpsertAPIKey(APIKeyRow{ID: "key-heatmap", Key: "sk-heatmap", Name: "Heatmap"}); err != nil {
+		t.Fatalf("UpsertAPIKey: %v", err)
+	}
 
 	// Keep both samples inside the rolling query window instead of letting a
 	// hard-coded calendar date age out as the test suite advances.
 	today := CutoffStartUTC(1).Add(12 * time.Hour)
 	yesterday := today.AddDate(0, 0, -1)
-	InsertLogWithDetails("sk-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, today, 10, 5, TokenStats{
+	InsertLogWithDetailsIdentity("sk-heatmap", "key-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, today, 10, 5, TokenStats{
 		InputTokens: 10, OutputTokens: 20, TotalTokens: 30,
 	}, "{}", "{}", `{"session_id":"session-a","request_id":"req-a1"}`)
-	InsertLogWithDetails("sk-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, today.Add(time.Minute), 10, 5, TokenStats{
+	InsertLogWithDetailsIdentity("sk-heatmap", "key-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, today.Add(time.Minute), 10, 5, TokenStats{
 		InputTokens: 20, OutputTokens: 30, TotalTokens: 50,
 	}, "{}", "{}", `{"session_id":"session-a","request_id":"req-a2"}`)
-	InsertLogWithDetails("sk-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, yesterday, 10, 5, TokenStats{
+	InsertLogWithDetailsIdentity("sk-heatmap", "key-heatmap", "Heatmap", "gpt-5.4", "codex", "Codex", "auth-1", false, yesterday, 10, 5, TokenStats{
 		InputTokens: 1, OutputTokens: 2, TotalTokens: 3,
 	}, "{}", "{}", `{"conversation_id":"session-b"}`)
 

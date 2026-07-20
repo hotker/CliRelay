@@ -198,6 +198,10 @@ func TestGetPublicUsageSummary(t *testing.T) {
 		if got.Found {
 			t.Errorf("found = true, want false (unknown key)")
 		}
+		// Fail-closed: unknown keys must not return tenant-wide aggregates.
+		if got.Stats.TotalCalls != 0 || got.Stats.QuotaCost != 0 {
+			t.Errorf("unknown key stats = %+v, want zeros", got.Stats)
+		}
 	})
 
 	t.Run("returns 400 for empty api_key", func(t *testing.T) {

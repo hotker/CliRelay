@@ -173,13 +173,17 @@ func dayBucketFromDays(days int) string {
 	return localDayKeyAt(CutoffStartUTC(days))
 }
 
-func resolveAPIKeyIDsForStats(params LogQueryParams) []string {
-	ids := make([]string, 0, 4)
+func requestedAPIKeys(params LogQueryParams) []string {
 	keys := append([]string{}, params.APIKeys...)
 	if k := strings.TrimSpace(params.APIKey); k != "" {
 		keys = append(keys, k)
 	}
-	for _, key := range keys {
+	return dedupeExactStrings(keys)
+}
+
+func resolveAPIKeyIDsForStats(params LogQueryParams) []string {
+	ids := make([]string, 0, 4)
+	for _, key := range requestedAPIKeys(params) {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue
@@ -195,10 +199,9 @@ func resolveAPIKeyIDsForStats(params LogQueryParams) []string {
 	return dedupeExactStrings(ids)
 }
 
-func queryStatsFromRollup(params LogQueryParams) (LogStats, error) {
-	if params.Days < 1 {
-		params.Days = 7
-	}
+// rollupIdentityFilter builds a fail-closed identity filter for stats.
+// Unknown API keys must not widen to tenant-wide aggregates.
+func rollupIdentityFilter(params LogQueryParams) (rollupFilter, bool) {
 	tenantID := params.TenantID
 	if tenantID == "" {
 		tenantID = systemTenantID
@@ -207,16 +210,36 @@ func queryStatsFromRollup(params LogQueryParams) (LogStats, error) {
 	if len(params.AuthSubjectIDs) == 1 {
 		authSubjectID = strings.TrimSpace(params.AuthSubjectIDs[0])
 	}
-	filter := rollupFilter{
+	keyIDs := resolveAPIKeyIDsForStats(params)
+	keysRequested := len(requestedAPIKeys(params)) > 0
+	endUserID := strings.TrimSpace(params.EndUserID)
+	// Key secrets were provided but none resolve to a stable id → empty stats.
+	if keysRequested && len(keyIDs) == 0 && endUserID == "" {
+		return rollupFilter{}, false
+	}
+	// Multi auth subjects are not modeled as OR on rollup yet; fail closed.
+	if len(params.AuthSubjectIDs) > 1 {
+		return rollupFilter{}, false
+	}
+	return rollupFilter{
 		TenantID:      tenantID,
 		BucketKind:    rollupBucketDay,
-		BucketFrom:    dayBucketFromDays(params.Days),
-		APIKeyIDs:     resolveAPIKeyIDsForStats(params),
-		EndUserID:     params.EndUserID,
+		APIKeyIDs:     keyIDs,
+		EndUserID:     endUserID,
 		AuthSubjectID: authSubjectID,
 		Models:        params.Models,
+	}, true
+}
+
+func queryStatsFromRollup(params LogQueryParams) (LogStats, error) {
+	if params.Days < 1 {
+		params.Days = 7
 	}
-	// MatchNo* / multi-status filters stay on detail path only; stats use projection dimensions.
+	filter, ok := rollupIdentityFilter(params)
+	if !ok {
+		return LogStats{CacheRate: 0}, nil
+	}
+	filter.BucketFrom = dayBucketFromDays(params.Days)
 	agg, err := queryRollupAgg(filter)
 	if err != nil {
 		return LogStats{}, err

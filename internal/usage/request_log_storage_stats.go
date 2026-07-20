@@ -3,7 +3,6 @@ package usage
 import (
 	"database/sql"
 	"fmt"
-	"time"
 )
 
 // GetRequestLogStorageBytes returns the approximate bytes currently occupied by
@@ -46,22 +45,28 @@ type ChannelLatency struct {
 }
 
 // GetChannelAvgLatency returns average request latency grouped by source (channel)
-// for the last N days.
+// for the last N days from usage rollup.
 func GetChannelAvgLatency(days int) ([]ChannelLatency, error) {
 	db := getReadDB()
 	if db == nil {
 		return nil, fmt.Errorf("usage: database not initialised")
 	}
-
-	cutoff := CutoffStartUTC(days)
+	if days < 1 {
+		days = 7
+	}
+	fromDay := dayBucketFromDays(days)
 	rows, err := db.Query(`
-		SELECT source, COUNT(*) as cnt, AVG(latency_ms) as avg_lat
-		FROM request_logs
-		WHERE timestamp > ? AND source != ''
+		SELECT source,
+		       COALESCE(SUM(latency_count), 0) as cnt,
+		       CASE WHEN COALESCE(SUM(latency_count), 0) = 0 THEN 0
+		            ELSE CAST(SUM(latency_sum_ms) AS REAL) / SUM(latency_count)
+		       END as avg_lat
+		FROM usage_rollup_buckets
+		WHERE bucket_kind = ? AND bucket_start >= ? AND source != ''
 		GROUP BY source
 		ORDER BY avg_lat DESC
 		LIMIT 5
-	`, cutoff.Format(time.RFC3339))
+	`, rollupBucketDay, fromDay)
 	if err != nil {
 		return nil, fmt.Errorf("usage: query channel latency: %w", err)
 	}
