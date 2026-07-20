@@ -119,6 +119,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if opts.Alt == "responses/compact" {
 		return e.executeCompact(ctx, auth, req, opts)
 	}
+	req, opts = maybeStripCodexHistoryDataURLImagesOnRequest(req, opts)
 	execCtx := newExecutionContext(ctx, e.Identifier(), e.cfg, auth, req, opts, ExecutionOptions{
 		TargetFormat: sdktranslator.FromString("codex"),
 	})
@@ -325,6 +326,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
+	// Shrink multi-MB Desktop history data URLs before translation/sanitize so later
+	// body-level passes never see the full base64 history.
+	req, opts = maybeStripCodexHistoryDataURLImagesOnRequest(req, opts)
 	execCtx := newExecutionContext(ctx, e.Identifier(), e.cfg, auth, req, opts, ExecutionOptions{
 		TargetFormat:      sdktranslator.FromString("codex"),
 		TranslateAsStream: true,
@@ -553,6 +557,28 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
 	return auth, nil
+}
+
+// maybeStripCodexHistoryDataURLImagesOnRequest shrinks multi-MB Desktop history
+// data:image payloads before translation. Only openai-response payloads carry
+// that history shape; other source formats are left untouched.
+func maybeStripCodexHistoryDataURLImagesOnRequest(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
+	if opts.SourceFormat != sdktranslator.FormatOpenAIResponse {
+		return req, opts
+	}
+	if len(req.Payload) == 0 {
+		return req, opts
+	}
+	stripped := stripCodexHistoryDataURLImages(req.Payload)
+	if samePayloadStorage(stripped, req.Payload) {
+		return req, opts
+	}
+	// Keep Payload and OriginalRequest in lockstep when they shared storage.
+	if samePayloadStorage(opts.OriginalRequest, req.Payload) || len(opts.OriginalRequest) == 0 {
+		opts.OriginalRequest = stripped
+	}
+	req.Payload = stripped
+	return req, opts
 }
 
 func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
