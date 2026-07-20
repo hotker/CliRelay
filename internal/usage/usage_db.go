@@ -866,15 +866,6 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		return
 	}
 
-	failedInt := 0
-	if failed {
-		failedInt = 1
-	}
-	streamingInt := 0
-	if streaming {
-		streamingInt = 1
-	}
-
 	tenantID := normalizeTenantID(ResolveAPIKeyTenant(apiKey))
 
 	// Calculate cost from the authenticated API key's tenant-scoped pricing catalog.
@@ -900,6 +891,67 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		endUserID = strings.TrimSpace(row.EndUserID)
 	}
 
+	// Failed requests always keep a compact error payload in output_content so the
+	// management UI error modal can show the upstream failure even when full body
+	// storage is disabled. Successful request/response bodies still follow the
+	// store-content toggle.
+	shouldStoreContent := detailContent != "" ||
+		(RequestLogBodyStorageEnabled() && (inputContent != "" || outputContent != "")) ||
+		(failed && strings.TrimSpace(outputContent) != "")
+
+	// Retry on Postgres rollup UPSERT deadlocks under concurrent same-key traffic.
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*attempt) * time.Millisecond)
+		}
+		lastErr = insertLogIdentityOnce(
+			db, tenantID, apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstreamModel, visionFallbackModel,
+			source, channelName, authIndex, endUserID, failed, streaming, timestamp, latencyMs, firstTokenMs,
+			tokens, cost, inputContent, outputContent, detailContent, shouldStoreContent,
+		)
+		if lastErr == nil {
+			break
+		}
+		if !isRetryableUsageWriteErr(lastErr) {
+			log.Errorf("usage: insert log: %v", lastErr)
+			return
+		}
+	}
+	if lastErr != nil {
+		log.Errorf("usage: insert log after retries: %v", lastErr)
+		return
+	}
+
+	// Notify TPM tracker about token usage
+	if tokenUsageCallback != nil && tokens.TotalTokens > 0 {
+		tokenUsageCallback(apiKey, tokens.TotalTokens)
+	}
+}
+
+func isRetryableUsageWriteErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "deadlock") ||
+		strings.Contains(msg, "could not serialize") ||
+		strings.Contains(msg, "serialization failure") ||
+		strings.Contains(msg, "lock wait timeout") ||
+		strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "database is locked")
+}
+
+func insertLogIdentityOnce(
+	db *sql.DB,
+	tenantID, apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstreamModel, visionFallbackModel,
+	source, channelName, authIndex, endUserID string,
+	failed, streaming bool,
+	timestamp time.Time, latencyMs, firstTokenMs int64,
+	tokens TokenStats, cost float64,
+	inputContent, outputContent, detailContent string,
+	shouldStoreContent bool,
+) error {
 	// Shared projection lock before opening a DB tx so exclusive rebuilds never
 	// leave writers holding connections while waiting on the mutex (pool deadlock).
 	usageProjectionMu.RLock()
@@ -909,8 +961,15 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 	// 以避免请求取消把已经选定要持久化的审计记录中断在半途。
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
-		log.Errorf("usage: begin insert tx: %v", err)
-		return
+		return fmt.Errorf("begin insert tx: %w", err)
+	}
+
+	failedInt, streamingInt := 0, 0
+	if failed {
+		failedInt = 1
+	}
+	if streaming {
+		streamingInt = 1
 	}
 
 	insertSQL := `INSERT INTO request_logs
@@ -925,45 +984,32 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		tokens.CachedTokens, tokens.TotalTokens, cost,
 	}
 
-	// Failed requests always keep a compact error payload in output_content so the
-	// management UI error modal can show the upstream failure even when full body
-	// storage is disabled. Successful request/response bodies still follow the
-	// store-content toggle.
-	shouldStoreContent := detailContent != "" ||
-		(RequestLogBodyStorageEnabled() && (inputContent != "" || outputContent != "")) ||
-		(failed && strings.TrimSpace(outputContent) != "")
 	if shouldStoreContent {
 		var logID int64
 		if usageDriver == "postgres" {
 			if err := tx.QueryRow(insertSQL+" RETURNING id", insertArgs...).Scan(&logID); err != nil {
 				_ = tx.Rollback()
-				log.Errorf("usage: insert log: %v", err)
-				return
+				return fmt.Errorf("insert log: %w", err)
 			}
 		} else {
 			result, err := tx.Exec(insertSQL, insertArgs...)
 			if err != nil {
 				_ = tx.Rollback()
-				log.Errorf("usage: insert log: %v", err)
-				return
+				return fmt.Errorf("insert log: %w", err)
 			}
-			var errLastID error
-			logID, errLastID = result.LastInsertId()
-			if errLastID != nil {
+			logID, err = result.LastInsertId()
+			if err != nil {
 				_ = tx.Rollback()
-				log.Errorf("usage: resolve inserted log id: %v", errLastID)
-				return
+				return fmt.Errorf("resolve inserted log id: %w", err)
 			}
 		}
 		if errStore := insertLogContentTenantTx(tx, tenantID, logID, timestamp, inputContent, outputContent, detailContent, failed); errStore != nil {
 			_ = tx.Rollback()
-			log.Errorf("usage: insert log content: %v", errStore)
-			return
+			return fmt.Errorf("insert log content: %w", errStore)
 		}
 	} else if _, err := tx.Exec(insertSQL, insertArgs...); err != nil {
 		_ = tx.Rollback()
-		log.Errorf("usage: insert log: %v", err)
-		return
+		return fmt.Errorf("insert log: %w", err)
 	}
 
 	if errCommit := commitLogWithProjections(tx, rollupEvent{
@@ -982,14 +1028,9 @@ func insertLogIdentity(apiKey, apiKeyID, authSubjectID, apiKeyName, model, upstr
 		Cost:          cost,
 		At:            timestamp,
 	}); errCommit != nil {
-		log.Errorf("usage: commit log insert: %v", errCommit)
-		return
+		return fmt.Errorf("commit log insert: %w", errCommit)
 	}
-
-	// Notify TPM tracker about token usage
-	if tokenUsageCallback != nil && tokens.TotalTokens > 0 {
-		tokenUsageCallback(apiKey, tokens.TotalTokens)
-	}
+	return nil
 }
 
 func isStreamingRequestContent(content string) bool {
