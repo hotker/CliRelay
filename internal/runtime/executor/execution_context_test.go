@@ -1,10 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -56,6 +60,117 @@ func TestExecutionContextUsesOriginalRequestAndRequestedModel(t *testing.T) {
 	if got := gjson.GetBytes(originalTranslated, "messages.0.content").String(); got != "original" {
 		t.Fatalf("original translated content = %q, want %q", got, "original")
 	}
+}
+
+func TestExecutionContextTranslatesSharedRequestPayloadOnce(t *testing.T) {
+	var calls atomic.Int32
+	from := sdktranslator.FromString("execution-context-shared-source")
+	to := sdktranslator.FromString("execution-context-shared-target")
+	sdktranslator.Register(from, to, func(_ string, rawJSON []byte, _ bool) []byte {
+		calls.Add(1)
+		return bytes.Clone(rawJSON)
+	}, sdktranslator.ResponseTransform{})
+
+	req := cliproxyexecutor.Request{
+		Model:   "test-model",
+		Payload: []byte(`{"input":"shared"}`),
+	}
+	execCtx := newExecutionContext(
+		context.Background(),
+		"test-provider",
+		&config.Config{},
+		nil,
+		req,
+		cliproxyexecutor.Options{SourceFormat: from},
+		ExecutionOptions{TargetFormat: to},
+	)
+
+	translated, originalTranslated := execCtx.TranslateRequestPair(nil)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("translator calls = %d, want 1 for shared request payload", got)
+	}
+	if string(translated) != string(req.Payload) || string(originalTranslated) != string(req.Payload) {
+		t.Fatalf("translated payloads differ: translated=%q original=%q", translated, originalTranslated)
+	}
+	if len(translated) > 0 && &translated[0] != &originalTranslated[0] {
+		t.Fatal("shared request payload should reuse the single translated result")
+	}
+}
+
+func TestExecutionContextTranslatesDistinctOriginalRequestSeparately(t *testing.T) {
+	var calls atomic.Int32
+	from := sdktranslator.FromString("execution-context-distinct-source")
+	to := sdktranslator.FromString("execution-context-distinct-target")
+	sdktranslator.Register(from, to, func(_ string, rawJSON []byte, _ bool) []byte {
+		calls.Add(1)
+		return bytes.Clone(rawJSON)
+	}, sdktranslator.ResponseTransform{})
+
+	req := cliproxyexecutor.Request{
+		Model:   "test-model",
+		Payload: []byte(`{"input":"translated"}`),
+	}
+	execCtx := newExecutionContext(
+		context.Background(),
+		"test-provider",
+		&config.Config{},
+		nil,
+		req,
+		cliproxyexecutor.Options{
+			OriginalRequest: []byte(`{"input":"original"}`),
+			SourceFormat:    from,
+		},
+		ExecutionOptions{TargetFormat: to},
+	)
+
+	translated, originalTranslated := execCtx.TranslateRequestPair(nil)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("translator calls = %d, want 2 for distinct request payloads", got)
+	}
+	if string(translated) != string(req.Payload) {
+		t.Fatalf("translated payload = %q, want %q", translated, req.Payload)
+	}
+	if string(originalTranslated) != string(execCtx.OriginalPayload) {
+		t.Fatalf("original translated payload = %q, want %q", originalTranslated, execCtx.OriginalPayload)
+	}
+}
+
+func BenchmarkExecutionContextTranslateSharedRequestPayload(b *testing.B) {
+	from := sdktranslator.FromString("execution-context-benchmark-source")
+	to := sdktranslator.FromString("execution-context-benchmark-target")
+	sdktranslator.Register(from, to, func(_ string, rawJSON []byte, _ bool) []byte {
+		return bytes.Clone(rawJSON)
+	}, sdktranslator.ResponseTransform{})
+
+	for _, size := range []int{512 << 10, 2 << 20, 8 << 20, 16 << 20} {
+		b.Run(byteSizeLabel(size), func(b *testing.B) {
+			payload := bytes.Repeat([]byte("x"), size)
+			execCtx := newExecutionContext(
+				context.Background(),
+				"test-provider",
+				&config.Config{},
+				nil,
+				cliproxyexecutor.Request{Model: "test-model", Payload: payload},
+				cliproxyexecutor.Options{SourceFormat: from},
+				ExecutionOptions{TargetFormat: to},
+			)
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				translated, originalTranslated := execCtx.TranslateRequestPair(nil)
+				runtime.KeepAlive(translated)
+				runtime.KeepAlive(originalTranslated)
+			}
+		})
+	}
+}
+
+func byteSizeLabel(size int) string {
+	if size%(1<<20) == 0 {
+		return strconv.Itoa(size/(1<<20)) + "MiB"
+	}
+	return strconv.Itoa(size/(1<<10)) + "KiB"
 }
 
 func TestExecutionContextReporterKeepsVisionFallbackSeparateFromModelMapping(t *testing.T) {

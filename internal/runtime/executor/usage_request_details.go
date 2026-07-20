@@ -89,27 +89,35 @@ func buildRequestDetailContent(ctx context.Context, includeBodies ...bool) strin
 		apiResponse = logging.APIResponseSnapshot(ginCtx)
 	}
 	clientIP, clientIPSource := requestLogClientIP(ginCtx, req)
+	requestURL := *req.URL
+	requestURL.RawQuery = util.MaskSensitiveQuery(requestURL.RawQuery)
 
-	detail := map[string]any{
-		"client": map[string]any{
-			"ip":                  clientIP,
-			"ip_source":           clientIPSource,
-			"remote_addr":         req.RemoteAddr,
-			"method":              req.Method,
-			"url":                 req.URL.String(),
-			"path":                req.URL.Path,
-			"query":               req.URL.Query(),
-			"host":                req.Host,
-			"content_length":      req.ContentLength,
-			"headers":             cloneHeaderValues(req.Header),
-			"fingerprint_headers": extractFingerprintHeaders(req.Header),
-		},
-		"upstream": map[string]any{
-			"request_log": bytesToString(apiRequest),
-		},
-		"response": map[string]any{
-			"upstream_log": bytesToString(apiResponse),
-		},
+	client := map[string]any{
+		"ip":             clientIP,
+		"ip_source":      clientIPSource,
+		"remote_addr":    req.RemoteAddr,
+		"method":         req.Method,
+		"url":            requestURL.String(),
+		"path":           requestURL.Path,
+		"query":          requestURL.Query(),
+		"host":           req.Host,
+		"content_length": req.ContentLength,
+	}
+	if headers := cloneHeaderValues(req.Header); len(headers) > 0 {
+		client["headers"] = headers
+	}
+	if fingerprintHeaders := extractFingerprintHeaders(req.Header); len(fingerprintHeaders) > 0 {
+		client["fingerprint_headers"] = fingerprintHeaders
+	}
+
+	// Empty exchange sections add a compressed content row cost without carrying
+	// diagnostics, so only persist them when an upstream snapshot exists.
+	detail := map[string]any{"client": client}
+	if requestLog := bytesToString(apiRequest); requestLog != "" {
+		detail["upstream"] = map[string]any{"request_log": requestLog}
+	}
+	if responseLog := bytesToString(apiResponse); responseLog != "" {
+		detail["response"] = map[string]any{"upstream_log": responseLog}
 	}
 	if egress := requestLogEgressFromContext(ginCtx); len(egress) > 0 {
 		detail["egress"] = egress
@@ -170,17 +178,44 @@ func requestLogEgressFromContext(ginCtx *gin.Context) map[string]any {
 	return requestLogEgressRouteMap(route)
 }
 
+const redactedRequestDetailHeaderValue = "<redacted>"
+
 func cloneHeaderValues(headers http.Header) map[string][]string {
 	if len(headers) == 0 {
 		return map[string][]string{}
 	}
 	out := make(map[string][]string, len(headers))
 	for key, values := range headers {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		out[key] = copied
+		out[key] = cloneRequestDetailHeaderValues(key, values)
 	}
 	return out
+}
+
+// Persisted request details use full redaction because even partially masked
+// credentials should not remain reusable from the request log database.
+func cloneRequestDetailHeaderValues(key string, values []string) []string {
+	copied := make([]string, len(values))
+	if isSensitiveRequestDetailHeader(key) {
+		for index := range copied {
+			copied[index] = redactedRequestDetailHeaderValue
+		}
+		return copied
+	}
+	copy(copied, values)
+	return copied
+}
+
+func isSensitiveRequestDetailHeader(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie":
+		return true
+	}
+	return strings.Contains(normalized, "api-key") ||
+		strings.Contains(normalized, "apikey") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "credential")
 }
 
 func extractFingerprintHeaders(headers http.Header) map[string][]string {
@@ -198,9 +233,7 @@ func extractFingerprintHeaders(headers http.Header) map[string][]string {
 			strings.Contains(normalized, "claude") ||
 			strings.Contains(normalized, "gemini") ||
 			strings.HasPrefix(normalized, "x-") {
-			copied := make([]string, len(values))
-			copy(copied, values)
-			out[key] = copied
+			out[key] = cloneRequestDetailHeaderValues(key, values)
 		}
 	}
 	return out

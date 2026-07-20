@@ -103,6 +103,10 @@ type ExecutionContext struct {
 	OriginalPayload []byte
 	SourceFormat    sdktranslator.Format
 
+	// originalPayloadIsRequest records the exact no-override case so the request
+	// translator is not run twice over the same potentially multi-megabyte body.
+	originalPayloadIsRequest bool
+
 	clientFactory HTTPClientFactory
 	recorder      UpstreamRecorder
 }
@@ -151,23 +155,25 @@ func newExecutionContext(
 		ctx = context.Background()
 	}
 	originalPayload := req.Payload
-	if len(opts.OriginalRequest) > 0 {
+	originalPayloadIsRequest := len(opts.OriginalRequest) == 0
+	if !originalPayloadIsRequest {
 		originalPayload = opts.OriginalRequest
 	}
 	return &ExecutionContext{
-		Context:         ctx,
-		Provider:        provider,
-		Config:          cfg,
-		Auth:            auth,
-		Request:         req,
-		Options:         opts,
-		Execution:       execOpts,
-		BaseModel:       thinking.ParseSuffix(req.Model).ModelName,
-		RequestedModel:  payloadRequestedModel(opts, req.Model),
-		OriginalPayload: originalPayload,
-		SourceFormat:    opts.SourceFormat,
-		clientFactory:   newHTTPClientFactory(cfg),
-		recorder:        newUpstreamRecorder(ctx, cfg, provider, auth),
+		Context:                  ctx,
+		Provider:                 provider,
+		Config:                   cfg,
+		Auth:                     auth,
+		Request:                  req,
+		Options:                  opts,
+		Execution:                execOpts,
+		BaseModel:                thinking.ParseSuffix(req.Model).ModelName,
+		RequestedModel:           payloadRequestedModel(opts, req.Model),
+		OriginalPayload:          originalPayload,
+		SourceFormat:             opts.SourceFormat,
+		originalPayloadIsRequest: originalPayloadIsRequest,
+		clientFactory:            newHTTPClientFactory(cfg),
+		recorder:                 newUpstreamRecorder(ctx, cfg, provider, auth),
 	}
 }
 
@@ -216,6 +222,9 @@ func (ec *ExecutionContext) TranslateRequestPair(payload []byte) ([]byte, []byte
 		payload,
 		ec.Execution.TranslateAsStream,
 	)
+	if ec.originalPayloadIsRequest && samePayloadStorage(payload, ec.Request.Payload) {
+		return translated, translated
+	}
 	originalTranslated := sdktranslator.TranslateRequest(
 		ec.SourceFormat,
 		ec.Execution.TargetFormat,
@@ -224,6 +233,16 @@ func (ec *ExecutionContext) TranslateRequestPair(payload []byte) ([]byte, []byte
 		ec.Execution.TranslateAsStream,
 	)
 	return translated, originalTranslated
+}
+
+func samePayloadStorage(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	if len(left) == 0 {
+		return true
+	}
+	return &left[0] == &right[0]
 }
 
 func (ec *ExecutionContext) ApplyPayloadConfig(payload, originalTranslated []byte) []byte {
