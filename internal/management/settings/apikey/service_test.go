@@ -388,15 +388,19 @@ func TestListEntriesAttachesDailySpendingRuntime(t *testing.T) {
 	if err := usage.UpsertAPIKey(usage.APIKeyRow{ID: "key-1", Key: "sk-list", DailySpendingLimit: 100}); err != nil {
 		t.Fatalf("UpsertAPIKey: %v", err)
 	}
+	// Daily spending reads usage rollup, not raw request_logs.
+	usage.InsertLogWithDetailsIdentity(
+		"sk-list", "key-1", "list", "model", "test", "", "", false,
+		usage.CutoffStartUTC(1).Add(time.Hour), 1, 0,
+		usage.TokenStats{}, "", "", "",
+	)
+	// Force cost on the inserted row + day/lifetime rollup for deterministic assertions.
 	db := usage.RuntimeDB()
-	ts := usage.CutoffStartUTC(1).Add(time.Hour).Format(time.RFC3339)
-	if _, err := db.Exec(
-		`INSERT INTO request_logs
-		 (tenant_id, timestamp, api_key, api_key_id, model, source, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, 1, 0, 0, 0, 0, 0, ?)`,
-		"00000000-0000-0000-0000-000000000001", ts, "sk-list", "key-1", "model", "test", 20.0,
-	); err != nil {
-		t.Fatalf("insert log: %v", err)
+	if _, err := db.Exec(`UPDATE request_logs SET cost = 20 WHERE api_key_id = 'key-1'`); err != nil {
+		t.Fatalf("update log cost: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE usage_rollup_buckets SET cost_total = 20 WHERE api_key_id = 'key-1'`); err != nil {
+		t.Fatalf("update rollup cost: %v", err)
 	}
 
 	entries, err := svc.ListEntriesWithDailySpending()
@@ -433,15 +437,17 @@ func TestResetDailySpendingAndRejectsUnlimited(t *testing.T) {
 	if err := usage.UpsertAPIKey(usage.APIKeyRow{ID: "key-1", Key: "sk-r", DailySpendingLimit: 100}); err != nil {
 		t.Fatalf("UpsertAPIKey: %v", err)
 	}
+	usage.InsertLogWithDetailsIdentity(
+		"sk-r", "key-1", "r", "model", "test", "", "", false,
+		usage.CutoffStartUTC(1).Add(time.Hour), 1, 0,
+		usage.TokenStats{}, "", "", "",
+	)
 	db := usage.RuntimeDB()
-	ts := usage.CutoffStartUTC(1).Add(time.Hour).Format(time.RFC3339)
-	if _, err := db.Exec(
-		`INSERT INTO request_logs
-		 (tenant_id, timestamp, api_key, api_key_id, model, source, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, 1, 0, 0, 0, 0, 0, ?)`,
-		"00000000-0000-0000-0000-000000000001", ts, "sk-r", "key-1", "model", "test", 20.0,
-	); err != nil {
-		t.Fatalf("insert log: %v", err)
+	if _, err := db.Exec(`UPDATE request_logs SET cost = 20 WHERE api_key_id = 'key-1'`); err != nil {
+		t.Fatalf("update log cost: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE usage_rollup_buckets SET cost_total = 20 WHERE api_key_id = 'key-1'`); err != nil {
+		t.Fatalf("update rollup cost: %v", err)
 	}
 
 	id := "key-1"
