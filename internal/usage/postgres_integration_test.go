@@ -52,6 +52,9 @@ func TestPostgresRuntimeDataStackIntegration(t *testing.T) {
 		TRUNCATE
 			request_log_content,
 			request_logs,
+			usage_rollup_buckets,
+			request_log_storage_state,
+			usage_projection_markers,
 			api_keys,
 			api_key_permission_profiles,
 			model_pricing,
@@ -259,6 +262,9 @@ func truncatePostgresRuntimeTables(t *testing.T, db *sql.DB) {
 		TRUNCATE
 			request_log_content,
 			request_logs,
+			usage_rollup_buckets,
+			request_log_storage_state,
+			usage_projection_markers,
 			api_keys,
 			api_key_permission_profiles,
 			model_pricing,

@@ -3,7 +3,6 @@ package usage
 import (
 	"database/sql"
 	"fmt"
-	"time"
 )
 
 // GetRequestLogStorageBytes returns the approximate bytes currently occupied by
@@ -46,22 +45,28 @@ type ChannelLatency struct {
 }
 
 // GetChannelAvgLatency returns average request latency grouped by source (channel)
-// for the last N days.
+// for the last N days from usage rollup.
 func GetChannelAvgLatency(days int) ([]ChannelLatency, error) {
 	db := getReadDB()
 	if db == nil {
 		return nil, fmt.Errorf("usage: database not initialised")
 	}
-
-	cutoff := CutoffStartUTC(days)
+	if days < 1 {
+		days = 7
+	}
+	fromDay := dayBucketFromDays(days)
 	rows, err := db.Query(`
-		SELECT source, COUNT(*) as cnt, AVG(latency_ms) as avg_lat
-		FROM request_logs
-		WHERE timestamp > ? AND source != ''
+		SELECT source,
+		       COALESCE(SUM(latency_count), 0) as cnt,
+		       CASE WHEN COALESCE(SUM(latency_count), 0) = 0 THEN 0
+		            ELSE CAST(SUM(latency_sum_ms) AS REAL) / SUM(latency_count)
+		       END as avg_lat
+		FROM usage_rollup_buckets
+		WHERE bucket_kind = ? AND bucket_start >= ? AND source != ''
 		GROUP BY source
 		ORDER BY avg_lat DESC
 		LIMIT 5
-	`, cutoff.Format(time.RFC3339))
+	`, rollupBucketDay, fromDay)
 	if err != nil {
 		return nil, fmt.Errorf("usage: query channel latency: %w", err)
 	}
@@ -80,34 +85,32 @@ func GetChannelAvgLatency(days int) ([]ChannelLatency, error) {
 
 // CountTodayByKey returns the number of requests made by the given API key today (project timezone).
 func CountTodayByKey(apiKey string) (int64, error) {
-	db := getReadDB()
-	if db == nil {
+	tenantID := ResolveAPIKeyTenant(apiKey)
+	if tenantID == "" {
+		tenantID = systemTenantID
+	}
+	apiKeyID := ""
+	if identity := ResolveAPIKeyIdentity(apiKey); identity != nil {
+		apiKeyID = identity.ID
+	}
+	if apiKeyID == "" {
 		return 0, nil
 	}
-	clause, args := buildSingleAPIKeySelectorClause(apiKey)
-	var count int64
-	queryArgs := append(args, CutoffStartUTC(1).Format(time.RFC3339))
-	err := db.QueryRow(
-		"SELECT COUNT(*) FROM request_logs"+clause+" AND timestamp >= ?",
-		queryArgs...,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("usage: count today: %w", err)
-	}
-	return count, nil
+	return queryTodayCountByAPIKeyIDFromRollup(tenantID, apiKeyID)
 }
 
 // CountTotalByKey returns the total number of requests made by the given API key.
 func CountTotalByKey(apiKey string) (int64, error) {
-	db := getReadDB()
-	if db == nil {
+	tenantID := ResolveAPIKeyTenant(apiKey)
+	if tenantID == "" {
+		tenantID = systemTenantID
+	}
+	apiKeyID := ""
+	if identity := ResolveAPIKeyIdentity(apiKey); identity != nil {
+		apiKeyID = identity.ID
+	}
+	if apiKeyID == "" {
 		return 0, nil
 	}
-	clause, args := buildSingleAPIKeySelectorClause(apiKey)
-	var count int64
-	err := db.QueryRow("SELECT COUNT(*) FROM request_logs"+clause, args...).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("usage: count total: %w", err)
-	}
-	return count, nil
+	return queryLifetimeCountByAPIKeyIDFromRollup(tenantID, apiKeyID)
 }

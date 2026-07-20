@@ -446,21 +446,37 @@ func CalculateCostV2ForTenant(tenantID, modelID string, tokens TokenStats) float
 }
 
 // QueryTotalCostByKey returns the total accumulated cost for a given API key.
+// Reads lifetime usage rollup so detail retention cleanup cannot shrink lifetime limits.
 func QueryTotalCostByKey(apiKey string) (float64, error) {
-	db := getDB()
-	if db == nil {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
 		return 0, nil
 	}
-	clause, args := buildSingleAPIKeySelectorClause(apiKey)
-	var total float64
-	err := db.QueryRow(
-		"SELECT COALESCE(SUM(cost), 0) FROM request_logs"+clause,
-		args...,
-	).Scan(&total)
+	tenantID := ResolveAPIKeyTenant(apiKey)
+	if tenantID == "" {
+		tenantID = systemTenantID
+	}
+	apiKeyID := ""
+	if identity := ResolveAPIKeyIdentity(apiKey); identity != nil {
+		apiKeyID = identity.ID
+	}
+	if apiKeyID == "" {
+		if row := GetAPIKey(apiKey); row != nil {
+			apiKeyID = strings.TrimSpace(row.ID)
+		}
+	}
+	if apiKeyID == "" {
+		return 0, nil
+	}
+	agg, err := queryRollupAgg(rollupFilter{
+		TenantID:   tenantID,
+		BucketKind: rollupBucketLifetime,
+		APIKeyIDs:  []string{apiKeyID},
+	})
 	if err != nil {
 		return 0, fmt.Errorf("usage: query total cost: %w", err)
 	}
-	return total, nil
+	return agg.CostTotal, nil
 }
 
 // QueryTodayCostByKey is defined in api_key_daily_spending_reset.go and returns

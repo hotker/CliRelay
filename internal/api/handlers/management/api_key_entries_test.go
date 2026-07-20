@@ -297,7 +297,8 @@ func TestGetAPIKeyEntriesIncludesDailySpendingFields(t *testing.T) {
 		t.Fatalf("UpsertAPIKey: %v", err)
 	}
 	db := usage.RuntimeDB()
-	ts := usage.CutoffStartUTC(1).Add(time.Hour).Format(time.RFC3339)
+	at := usage.CutoffStartUTC(1).Add(time.Hour)
+	ts := at.Format(time.RFC3339)
 	if _, err := db.Exec(
 		`INSERT INTO request_logs
 		 (tenant_id, timestamp, api_key, api_key_id, model, source, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost)
@@ -305,6 +306,18 @@ func TestGetAPIKeyEntriesIncludesDailySpendingFields(t *testing.T) {
 		"00000000-0000-0000-0000-000000000001", ts, "sk-list-handler", "list-id-1", "model", "test", 12.5,
 	); err != nil {
 		t.Fatalf("insert log: %v", err)
+	}
+	// Daily spending reads usage_rollup_buckets, not request_logs.
+	dayKey := at.UTC().Format("2006-01-02")
+	if _, err := db.Exec(`
+		INSERT INTO usage_rollup_buckets (
+			tenant_id, bucket_kind, bucket_start, api_key_id, end_user_id, auth_subject_id,
+			model, source, channel_name, request_count, success_count, failure_count, streaming_count,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens, effective_input_tokens,
+			total_tokens, cost_total, latency_sum_ms, latency_count, first_token_sum_ms, first_token_count, updated_at
+		) VALUES (?, 'day', ?, 'list-id-1', '', '', 'model', 'test', '', 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 12.5, 0, 0, 0, 0, ?)
+	`, "00000000-0000-0000-0000-000000000001", dayKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert rollup: %v", err)
 	}
 
 	rec := httptest.NewRecorder()

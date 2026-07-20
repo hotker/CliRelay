@@ -141,6 +141,14 @@ func initializeRuntimeDataStack(cfg *config.Config, configPath string, loc *time
 	} else if created > 0 {
 		log.Infof("enduser: backfilled %d end users from api keys", created)
 	}
+	// After keys + end-user ownership are stable, rebuild usage rollup once.
+	// Metadata cleanup is gated on this marker so detail retention cannot run first.
+	if err := usage.RunUsageRollupBackfillAtInit(); err != nil {
+		return fmt.Errorf("usage rollup backfill: %w", err)
+	}
+	// Old blue-green slot may keep writing request_logs without rollup until drain.
+	// Catch-up absolute rebuilds after drain so those rows are not permanently missing.
+	usage.ScheduleUsageRollupBlueGreenCatchup()
 	usage.MigrateAPIKeyPermissionProfilesFromYAML(configPath)
 	usage.MigrateRoutingConfigFromConfig(cfg, configPath)
 	usage.ApplyStoredRoutingConfig(cfg)
