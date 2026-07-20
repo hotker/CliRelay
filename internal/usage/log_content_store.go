@@ -298,6 +298,9 @@ func runRequestLogMaintenancePass(ctx context.Context, db *sql.DB, driver string
 		}
 	}
 
+	// Finish pending→done catch-up if startup goroutine has not yet (or failed).
+	maybeFinalizeUsageRollupCatchup(db)
+
 	// Rollup minute/hour/day retention is independent of detail cleanup-enabled.
 	// Projection must stay bounded even when operators pause request_logs cleanup.
 	if n, err := cleanupExpiredUsageRollupBuckets(db); err != nil {

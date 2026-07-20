@@ -117,27 +117,27 @@ func RunUsageRollupBackfillAtInit() error {
 // ScheduleUsageRollupBlueGreenCatchup waits for old-slot drain, then absolute-rebuilds
 // once more and marks done. Only runs while marker is not yet done — never wipes
 // lifetime rollup after detail retention has already pruned request_logs.
+// Retries until success so a single failed catch-up cannot leave cleanup gated forever.
 func ScheduleUsageRollupBlueGreenCatchup() {
 	go func() {
-		// Cover blue-green drain (~35s) plus cutover lag.
+		// First attempt after blue-green drain (~35s) plus cutover lag.
 		time.Sleep(90 * time.Second)
-		db := getDB()
-		if usageRollupBackfillCompleted(db) {
+		attempt := 0
+		for {
+			db := getDB()
+			if usageRollupBackfillCompleted(db) {
+				return
+			}
+			attempt++
+			if err := runUsageRollupBackfillAtInitDB(db, getUsageLocation(), rollupMarkerDone); err != nil {
+				log.Errorf("usage: blue-green rollup catch-up attempt %d failed: %v", attempt, err)
+				// Keep retrying; detail cleanup stays blocked while pending.
+				time.Sleep(60 * time.Second)
+				continue
+			}
+			log.Infof("usage: blue-green rollup catch-up marked done on attempt %d", attempt)
 			return
 		}
-		if err := runUsageRollupBackfillAtInitDB(db, getUsageLocation(), rollupMarkerDone); err != nil {
-			log.Errorf("usage: blue-green rollup catch-up failed: %v", err)
-			// Retry once after another drain window.
-			time.Sleep(90 * time.Second)
-			if usageRollupBackfillCompleted(getDB()) {
-				return
-			}
-			if err := runUsageRollupBackfillAtInitDB(getDB(), getUsageLocation(), rollupMarkerDone); err != nil {
-				log.Errorf("usage: blue-green rollup catch-up retry failed: %v", err)
-				return
-			}
-		}
-		log.Info("usage: blue-green rollup catch-up marked done")
 	}()
 }
 
@@ -146,6 +146,23 @@ func usageRollupBackfillCompleted(db *sql.DB) bool {
 		return false
 	}
 	return projectionMarkerValue(db, usageRollupBackfillMarker) == rollupMarkerDone
+}
+
+// maybeFinalizeUsageRollupCatchup is called from maintenance: if still pending after
+// startup, keep trying to finish catch-up without relying only on the one-shot goroutine.
+func maybeFinalizeUsageRollupCatchup(db *sql.DB) {
+	if db == nil || usageRollupBackfillCompleted(db) {
+		return
+	}
+	// Only finalize when marker is explicitly pending (not missing/failed).
+	if projectionMarkerValue(db, usageRollupBackfillMarker) != rollupMarkerPending {
+		return
+	}
+	if err := runUsageRollupBackfillAtInitDB(db, getUsageLocation(), rollupMarkerDone); err != nil {
+		log.Warnf("usage: maintenance rollup catch-up: %v", err)
+		return
+	}
+	log.Info("usage: maintenance rollup catch-up marked done")
 }
 
 // runUsageRollupBackfillAtInitDB absolute-rebuilds rollup from surviving request_logs.
