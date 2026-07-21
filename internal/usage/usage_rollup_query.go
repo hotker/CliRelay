@@ -183,6 +183,11 @@ func requestedAPIKeys(params LogQueryParams) []string {
 
 func resolveAPIKeyIDsForStats(params LogQueryParams) []string {
 	ids := make([]string, 0, 4)
+	for _, id := range params.APIKeyIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
 	for _, key := range requestedAPIKeys(params) {
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -211,9 +216,9 @@ func rollupIdentityFilter(params LogQueryParams) (rollupFilter, bool) {
 		authSubjectID = strings.TrimSpace(params.AuthSubjectIDs[0])
 	}
 	keyIDs := resolveAPIKeyIDsForStats(params)
-	keysRequested := len(requestedAPIKeys(params)) > 0
+	keysRequested := len(requestedAPIKeys(params)) > 0 || len(params.APIKeyIDs) > 0
 	endUserID := strings.TrimSpace(params.EndUserID)
-	// Key secrets were provided but none resolve to a stable id → empty stats.
+	// Key secrets/ids were provided but none resolve to a stable id → empty stats.
 	if keysRequested && len(keyIDs) == 0 && endUserID == "" {
 		return rollupFilter{}, false
 	}

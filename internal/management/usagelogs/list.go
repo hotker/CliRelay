@@ -178,6 +178,13 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		params.TenantID = usage.ResolveAPIKeyTenant(input.APIKey)
 		params.APIKeys = usage.ExpandPublicLookupAPIKeys(input.APIKey)
 	}
+	// Scope key-id filters to the authenticated subject only (prevents IDOR).
+	allowedKeyIDs := publicAllowedAPIKeyIDs(params.TenantID, params.EndUserID, params.APIKeys)
+	params.APIKeyIDs, params.MatchNoAPIKeyIDs = constrainPublicAPIKeyIDs(
+		input.APIKeyIDs,
+		input.MatchNoAPIKeyIDs,
+		allowedKeyIDs,
+	)
 
 	result, err := usage.QueryLogs(params)
 	if err != nil {
@@ -191,6 +198,12 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
+	// Restrict public key facet options to keys owned by the lookup subject.
+	filters.APIKeyIDs, filters.APIKeyIDNames = filterPublicAPIKeyIDOptions(
+		allowedKeyIDs,
+		filters.APIKeyIDs,
+		filters.APIKeyIDNames,
+	)
 
 	apiKeyName := s.publicAPIKeyName(input.APIKey)
 	if params.EndUserID != "" {
@@ -262,6 +275,12 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 	if filters.Statuses == nil {
 		filters.Statuses = make([]string, 0)
 	}
+	if filters.APIKeyIDs == nil {
+		filters.APIKeyIDs = make([]string, 0)
+	}
+	if filters.APIKeyIDNames == nil {
+		filters.APIKeyIDNames = make(map[string]string)
+	}
 
 	return map[string]any{
 		"items":        result.Items,
@@ -271,10 +290,12 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		"stats":        stats,
 		"api_key_name": apiKeyName,
 		"filters": map[string]any{
-			"models":          filters.Models,
-			"channels":        filters.Channels,
-			"channel_options": filters.ChannelOptions,
-			"statuses":        filters.Statuses,
+			"api_key_ids":      filters.APIKeyIDs,
+			"api_key_id_names": filters.APIKeyIDNames,
+			"models":           filters.Models,
+			"channels":         filters.Channels,
+			"channel_options":  filters.ChannelOptions,
+			"statuses":         filters.Statuses,
 		},
 	}, nil
 }

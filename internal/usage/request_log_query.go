@@ -233,6 +233,11 @@ func QueryFiltersForLogs(params LogQueryParams) (FilterOptions, error) {
 		log.Warnf("usage: query distinct api keys failed: %v", err)
 		return FilterOptions{}, err
 	}
+	keyIDs, keyIDNames, err := queryDistinctAPIKeyIDs(db, params.withoutFacet("api_key_id"))
+	if err != nil {
+		log.Warnf("usage: query distinct api key ids failed: %v", err)
+		return FilterOptions{}, err
+	}
 	models, err := queryDistinct(db, "model", params.withoutFacet("model"))
 	if err != nil {
 		log.Warnf("usage: query distinct models failed: %v", err)
@@ -270,6 +275,8 @@ func QueryFiltersForLogs(params LogQueryParams) (FilterOptions, error) {
 	return FilterOptions{
 		APIKeys:        keys,
 		APIKeyNames:    keyNames,
+		APIKeyIDs:      keyIDs,
+		APIKeyIDNames:  keyIDNames,
 		Models:         models,
 		Channels:       channelNames,
 		ChannelOptions: channelRows,
@@ -285,6 +292,9 @@ func (params LogQueryParams) withoutFacet(facet string) LogQueryParams {
 		params.APIKey = ""
 		params.APIKeys = nil
 		params.MatchNoAPIKeys = false
+	case "api_key_id":
+		params.APIKeyIDs = nil
+		params.MatchNoAPIKeyIDs = false
 	case "model":
 		params.Model = ""
 		params.Models = nil
@@ -310,7 +320,7 @@ func QueryStats(params LogQueryParams) (LogStats, error) {
 		return LogStats{CacheRate: 0}, nil
 	}
 	// Explicit empty multi-selects match no rows; rollup does not model "empty model".
-	if params.MatchNoAPIKeys || params.MatchNoModels || params.MatchNoStatuses || params.MatchNoChannels {
+	if params.MatchNoAPIKeys || params.MatchNoAPIKeyIDs || params.MatchNoModels || params.MatchNoStatuses || params.MatchNoChannels {
 		return LogStats{CacheRate: 0}, nil
 	}
 	stats, err := queryStatsFromRollup(params)
@@ -563,6 +573,7 @@ func normalizeLogQueryParams(params LogQueryParams) LogQueryParams {
 		params.Status = ""
 	}
 	params.APIKeys = normalizeStringList(params.APIKeys)
+	params.APIKeyIDs = normalizeStringList(params.APIKeyIDs)
 	params.Models = normalizeStringList(params.Models)
 	params.Statuses = normalizeStringList(params.Statuses)
 	return params
@@ -591,7 +602,7 @@ func normalizeStringList(values []string) []string {
 
 func buildWhereClause(params LogQueryParams) (string, []interface{}) {
 	params = normalizeLogQueryParams(params)
-	if params.MatchNoAPIKeys || params.MatchNoModels || params.MatchNoStatuses || params.MatchNoChannels {
+	if params.MatchNoAPIKeys || params.MatchNoAPIKeyIDs || params.MatchNoModels || params.MatchNoStatuses || params.MatchNoChannels {
 		return " WHERE 1 = 0", nil
 	}
 	conditions := make([]string, 0, 5)
@@ -607,6 +618,36 @@ func buildWhereClause(params LogQueryParams) (string, []interface{}) {
 		predicate, selectorArgs := buildEndUserAPIKeySelectorPredicate(params.TenantID, params.EndUserID)
 		conditions = append(conditions, predicate)
 		args = append(args, selectorArgs...)
+	}
+
+	// Stable key-id multi-value filter (public key facet; does not expand account pools).
+	if len(params.APIKeyIDs) > 0 {
+		idConds := make([]string, 0, len(params.APIKeyIDs))
+		for _, id := range params.APIKeyIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			row := GetAPIKeyByIDForTenant(params.TenantID, id)
+			if row == nil {
+				row = GetAPIKeyByID(id)
+			}
+			if row != nil {
+				secret := strings.TrimSpace(row.Key)
+				if secret != "" {
+					idConds = append(idConds, "(api_key_id = ? OR (trim(coalesce(api_key_id, '')) = '' AND api_key = ?))")
+					args = append(args, id, secret)
+					continue
+				}
+			}
+			idConds = append(idConds, "api_key_id = ?")
+			args = append(args, id)
+		}
+		if len(idConds) == 1 {
+			conditions = append(conditions, idConds[0])
+		} else if len(idConds) > 1 {
+			conditions = append(conditions, "("+strings.Join(idConds, " OR ")+")")
+		}
 	}
 
 	// API Key multi-value filter

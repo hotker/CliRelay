@@ -107,6 +107,95 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 	return values, names, rows.Err()
 }
 
+// queryDistinctAPIKeyIDs returns one public-safe filter option per concrete key
+// (stable api_key_id + own name). Unlike queryDistinctAPIKeys it does not collapse
+// multi-key end-user accounts onto a representative secret.
+func queryDistinctAPIKeyIDs(db *sql.DB, params LogQueryParams) ([]string, map[string]string, error) {
+	tenantID := normalizeTenantID(params.TenantID)
+	currentByID := currentAPIKeyRowsByIDForTenant(tenantID)
+	currentByKey := currentAPIKeyRowsByKeyForTenant(tenantID)
+	where, args := buildWhereClause(params)
+	if where == "" {
+		where = " WHERE api_key != ''"
+	} else {
+		where += " AND api_key != ''"
+	}
+	rows, err := db.Query(`
+		SELECT
+			CASE
+				WHEN trim(coalesce(api_key_id, '')) <> '' THEN api_key_id
+				ELSE 'raw:' || api_key
+			END AS logical_selector,
+			COALESCE(MAX(NULLIF(trim(coalesce(api_key_id, '')), '')), '') AS logical_id,
+			MAX(api_key) AS snapshot_key,
+			COALESCE(NULLIF(MAX(api_key_name), ''), '') AS snapshot_name
+		FROM request_logs
+		`+where+`
+		GROUP BY logical_selector
+		ORDER BY logical_selector
+	`, args...)
+	if err != nil {
+		log.Warnf("usage: distinct api_key_id logical groups query failed: %v", err)
+		return nil, nil, fmt.Errorf("usage: distinct api_key_id logical groups: %w", err)
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	names := make(map[string]string)
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var logicalSelector string
+		var logicalID sql.NullString
+		var snapshotKey string
+		var snapshotName string
+		if err := rows.Scan(&logicalSelector, &logicalID, &snapshotKey, &snapshotName); err != nil {
+			log.Warnf("usage: distinct api_key_id scan failed: %v", err)
+			return nil, nil, err
+		}
+
+		id := strings.TrimSpace(trimNullString(logicalID))
+		value := strings.TrimSpace(snapshotKey)
+		name := strings.TrimSpace(snapshotName)
+		var row *APIKeyRow
+		if id != "" {
+			if r, ok := currentByID[id]; ok {
+				copy := r
+				row = &copy
+			}
+		}
+		if row == nil {
+			if r, ok := currentByKey[value]; ok {
+				copy := r
+				row = &copy
+			}
+		}
+		if row != nil {
+			if trimmed := strings.TrimSpace(row.ID); trimmed != "" {
+				id = trimmed
+			}
+			if own := strings.TrimSpace(row.Name); own != "" {
+				name = own
+			}
+		}
+		// Public filter values must be stable ids, never secrets.
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			if name != "" && names[id] == "" {
+				names[id] = name
+			}
+			continue
+		}
+		seen[id] = struct{}{}
+		values = append(values, id)
+		if name != "" {
+			names[id] = name
+		}
+	}
+	return values, names, rows.Err()
+}
+
 // accountFilterRepresentatives picks one filter value per end-user (prefer default key).
 func accountFilterRepresentatives(tenantID string) (repByEndUser map[string]string, nameByEndUser map[string]string) {
 	rows := ListAPIKeysForTenant(tenantID)
