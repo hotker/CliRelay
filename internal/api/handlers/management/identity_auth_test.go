@@ -26,11 +26,18 @@ func TestPermissionForManagementRequest(t *testing.T) {
 		{http.MethodGet, "/v0/management/users", "tenant.users.read"},
 		{http.MethodPut, "/v0/management/users/u/roles", "tenant.users.assign_roles"},
 		{http.MethodPut, "/v0/management/roles/r/users", "tenant.users.assign_roles"},
+		{http.MethodPatch, "/v0/management/end-users/eu/api-keys/key", "api_keys.write"},
+		{http.MethodPost, "/v0/management/end-users/eu/api-keys/key/rotate", "api_keys.write"},
+		{http.MethodGet, "/v0/management/end-users/eu/daily-spending/reset-history", "end_users.read"},
 		{http.MethodGet, "/v0/management/menus", "platform.menus.read"},
 		{http.MethodPost, "/v0/management/menus", "platform.menus.update"},
 		{http.MethodPatch, "/v0/management/menus/system.config", "platform.menus.update"},
 		{http.MethodDelete, "/v0/management/menus/custom.menu", "platform.menus.update"},
 		{http.MethodDelete, "/v0/management/usage/logs", "request_logs.delete"},
+		{http.MethodGet, "/v0/management/audit-logs", "tenant.audit.read"},
+		{http.MethodDelete, "/v0/management/audit-logs", "tenant.audit.delete"},
+		{http.MethodGet, "/v0/management/audit-logs/12", "tenant.audit.read"},
+		{http.MethodDelete, "/v0/management/audit-logs/12", "tenant.audit.delete"},
 		{http.MethodGet, "/v0/management/usage/logs/1/content", "request_logs.content.read"},
 		{http.MethodGet, "/v0/management/get-auth-status", "auth_files.oauth"},
 		{http.MethodPost, "/v0/management/proxy-pool/check", "proxies.test"},
@@ -70,6 +77,23 @@ func TestPermissionForManagementRequest(t *testing.T) {
 		if got := permissionForManagementRequest(test.method, test.path); got != test.want {
 			t.Errorf("permissionForManagementRequest(%s,%s)=%q want %q", test.method, test.path, got, test.want)
 		}
+	}
+}
+
+func TestEndUserResetHistoryPermissionAllowsReadOrWrite(t *testing.T) {
+	path := "/v0/management/end-users/eu/daily-spending/reset-history"
+	permission := permissionForManagementRequest(http.MethodGet, path)
+	for _, permissions := range []map[string]bool{
+		{"end_users.read": true},
+		{"end_users.write": true},
+	} {
+		principal := identity.Principal{Permissions: permissions}
+		if !principalHasManagementRequestPermission(principal, http.MethodGet, path, permission) {
+			t.Fatalf("permissions %#v should allow reset history", permissions)
+		}
+	}
+	if principalHasManagementRequestPermission(identity.Principal{}, http.MethodGet, path, permission) {
+		t.Fatal("principal without end-user permissions should not allow reset history")
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 // queryDistinctAPIKeys returns one filter option per account (owned multi-key
 // end users collapse onto a representative secret + display name). Standalone
 // keys stay one option each so "测试 key" never sits next to "Kittors".
-func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[string]string, error) {
+func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[string]string, map[string]int64, error) {
 	tenantID := normalizeTenantID(params.TenantID)
 	currentByID := currentAPIKeyRowsByIDForTenant(tenantID)
 	currentByKey := currentAPIKeyRowsByKeyForTenant(tenantID)
@@ -30,7 +30,8 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 			END AS logical_selector,
 			COALESCE(MAX(NULLIF(trim(coalesce(api_key_id, '')), '')), '') AS logical_id,
 			MAX(api_key) AS snapshot_key,
-			COALESCE(NULLIF(MAX(api_key_name), ''), '') AS snapshot_name
+			COALESCE(NULLIF(MAX(api_key_name), ''), '') AS snapshot_name,
+			COUNT(*) AS request_count
 		FROM request_logs
 		`+where+`
 		GROUP BY logical_selector
@@ -38,21 +39,23 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 	`, args...)
 	if err != nil {
 		log.Warnf("usage: distinct api_key logical groups query failed: %v", err)
-		return nil, nil, fmt.Errorf("usage: distinct api_key logical groups: %w", err)
+		return nil, nil, nil, fmt.Errorf("usage: distinct api_key logical groups: %w", err)
 	}
 	defer rows.Close()
 
 	values := make([]string, 0)
 	names := make(map[string]string)
+	counts := make(map[string]int64)
 	seenAccount := make(map[string]struct{})
 	for rows.Next() {
 		var logicalSelector string
 		var logicalID sql.NullString
 		var snapshotKey string
 		var snapshotName string
-		if err := rows.Scan(&logicalSelector, &logicalID, &snapshotKey, &snapshotName); err != nil {
+		var requestCount int64
+		if err := rows.Scan(&logicalSelector, &logicalID, &snapshotKey, &snapshotName, &requestCount); err != nil {
 			log.Warnf("usage: distinct api_key scan failed: %v", err)
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		value := strings.TrimSpace(snapshotKey)
@@ -92,6 +95,9 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 		if accountID != "" {
 			dedupeKey = "eu:" + accountID
 		}
+		// Legacy raw-key and stable-id groups can resolve to the same account.
+		// Sum before deduping so the UI count matches every retained log for that account.
+		counts[value] += requestCount
 		if _, ok := seenAccount[dedupeKey]; ok {
 			if name != "" && names[value] == "" {
 				names[value] = name
@@ -104,7 +110,101 @@ func queryDistinctAPIKeys(db *sql.DB, params LogQueryParams) ([]string, map[stri
 			names[value] = name
 		}
 	}
-	return values, names, rows.Err()
+	return values, names, counts, rows.Err()
+}
+
+// queryDistinctAPIKeyIDs returns one public-safe filter option per concrete key
+// (stable api_key_id + own name). Unlike queryDistinctAPIKeys it does not collapse
+// multi-key end-user accounts onto a representative secret.
+func queryDistinctAPIKeyIDs(db *sql.DB, params LogQueryParams) ([]string, map[string]string, map[string]int64, error) {
+	tenantID := normalizeTenantID(params.TenantID)
+	currentByID := currentAPIKeyRowsByIDForTenant(tenantID)
+	currentByKey := currentAPIKeyRowsByKeyForTenant(tenantID)
+	where, args := buildWhereClause(params)
+	if where == "" {
+		where = " WHERE api_key != ''"
+	} else {
+		where += " AND api_key != ''"
+	}
+	rows, err := db.Query(`
+		SELECT
+			CASE
+				WHEN trim(coalesce(api_key_id, '')) <> '' THEN api_key_id
+				ELSE 'raw:' || api_key
+			END AS logical_selector,
+			COALESCE(MAX(NULLIF(trim(coalesce(api_key_id, '')), '')), '') AS logical_id,
+			MAX(api_key) AS snapshot_key,
+			COALESCE(NULLIF(MAX(api_key_name), ''), '') AS snapshot_name,
+			COUNT(*) AS request_count
+		FROM request_logs
+		`+where+`
+		GROUP BY logical_selector
+		ORDER BY logical_selector
+	`, args...)
+	if err != nil {
+		log.Warnf("usage: distinct api_key_id logical groups query failed: %v", err)
+		return nil, nil, nil, fmt.Errorf("usage: distinct api_key_id logical groups: %w", err)
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	names := make(map[string]string)
+	counts := make(map[string]int64)
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var logicalSelector string
+		var logicalID sql.NullString
+		var snapshotKey string
+		var snapshotName string
+		var requestCount int64
+		if err := rows.Scan(&logicalSelector, &logicalID, &snapshotKey, &snapshotName, &requestCount); err != nil {
+			log.Warnf("usage: distinct api_key_id scan failed: %v", err)
+			return nil, nil, nil, err
+		}
+
+		id := strings.TrimSpace(trimNullString(logicalID))
+		value := strings.TrimSpace(snapshotKey)
+		name := strings.TrimSpace(snapshotName)
+		var row *APIKeyRow
+		if id != "" {
+			if r, ok := currentByID[id]; ok {
+				copy := r
+				row = &copy
+			}
+		}
+		if row == nil {
+			if r, ok := currentByKey[value]; ok {
+				copy := r
+				row = &copy
+			}
+		}
+		if row != nil {
+			if trimmed := strings.TrimSpace(row.ID); trimmed != "" {
+				id = trimmed
+			}
+			if own := strings.TrimSpace(row.Name); own != "" {
+				name = own
+			}
+		}
+		// Public filter values must be stable ids, never secrets.
+		if id == "" {
+			continue
+		}
+		// Stable-id and legacy raw-key groups can map to the same current key.
+		counts[id] += requestCount
+		if _, ok := seen[id]; ok {
+			if name != "" && names[id] == "" {
+				names[id] = name
+			}
+			continue
+		}
+		seen[id] = struct{}{}
+		values = append(values, id)
+		if name != "" {
+			names[id] = name
+		}
+	}
+	return values, names, counts, rows.Err()
 }
 
 // accountFilterRepresentatives picks one filter value per end-user (prefer default key).

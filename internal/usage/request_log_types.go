@@ -36,24 +36,26 @@ type LogRow struct {
 
 // LogQueryParams holds filter/pagination parameters for QueryLogs.
 type LogQueryParams struct {
-	TenantID        string
-	EndUserID       string   // stable account owner; matches all current key ids plus legacy raw-secret rows
-	Page            int      // 1-based
-	Size            int      // rows per page
-	Days            int      // time range in days
-	APIKey          string   // exact match filter (deprecated, use APIKeys)
-	Model           string   // exact match filter (deprecated, use Models)
-	Status          string   // "success", "failed", or "" (all) (deprecated, use Statuses)
-	APIKeys         []string // multi-value API key filter
-	Models          []string // multi-value model filter
-	Statuses        []string // multi-value status filter
-	MatchNoAPIKeys  bool     // explicit empty API key filter
-	MatchNoModels   bool     // explicit empty model filter
-	MatchNoStatuses bool     // explicit empty status filter
-	MatchNoChannels bool     // explicit empty channel filter
-	AuthSubjectIDs  []string // optional auth_subject_id IN (...) filter (account-level)
-	AuthIndexes     []string // optional auth_index IN (...) filter (credential instance)
-	ChannelNames    []string // optional channel_name IN (...) filter
+	TenantID         string
+	EndUserID        string   // stable account owner; matches all current key ids plus legacy raw-secret rows
+	Page             int      // 1-based
+	Size             int      // rows per page
+	Days             int      // time range in days
+	APIKey           string   // exact match filter (deprecated, use APIKeys)
+	Model            string   // exact match filter (deprecated, use Models)
+	Status           string   // "success", "failed", or "" (all) (deprecated, use Statuses)
+	APIKeys          []string // multi-value API key filter
+	APIKeyIDs        []string // multi-value stable key id filter (public key facet)
+	Models           []string // multi-value model filter
+	Statuses         []string // multi-value status filter
+	MatchNoAPIKeys   bool     // explicit empty API key filter
+	MatchNoAPIKeyIDs bool     // explicit empty stable key id filter
+	MatchNoModels    bool     // explicit empty model filter
+	MatchNoStatuses  bool     // explicit empty status filter
+	MatchNoChannels  bool     // explicit empty channel filter
+	AuthSubjectIDs   []string // optional auth_subject_id IN (...) filter (account-level)
+	AuthIndexes      []string // optional auth_index IN (...) filter (credential instance)
+	ChannelNames     []string // optional channel_name IN (...) filter
 	// Optional precise legacy matches for renamed auth channels whose stored
 	// channel_name was a shared provider/source value.
 	AuthIndexChannelNames map[string][]string
@@ -69,9 +71,14 @@ type LogQueryResult struct {
 
 // FilterOptions holds the available filter values for the UI.
 type FilterOptions struct {
-	APIKeys     []string          `json:"api_keys"`
-	APIKeyNames map[string]string `json:"api_key_names"`
-	Models      []string          `json:"models"`
+	APIKeys      []string          `json:"api_keys"`
+	APIKeyNames  map[string]string `json:"api_key_names"`
+	APIKeyCounts map[string]int64  `json:"api_key_counts"`
+	// APIKeyIDs / APIKeyIDNames / APIKeyIDCounts are public-safe key facets keyed by stable id.
+	APIKeyIDs      []string          `json:"api_key_ids,omitempty"`
+	APIKeyIDNames  map[string]string `json:"api_key_id_names,omitempty"`
+	APIKeyIDCounts map[string]int64  `json:"api_key_id_counts,omitempty"`
+	Models         []string          `json:"models"`
 	// Channels is a legacy plain-name list kept for older clients.
 	// Prefer ChannelOptions when both are present.
 	Channels       []string              `json:"channels"`
