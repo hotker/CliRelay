@@ -12,22 +12,24 @@ import (
 const publicLookupBodyLimit int64 = 8 << 10
 
 type publicLookupRequest struct {
-	APIKey        string   `json:"api_key"`
-	Days          int      `json:"days"`
-	Page          int      `json:"page"`
-	Size          int      `json:"size"`
-	Model         string   `json:"model"`
-	Models        []string `json:"models"`
-	Channel       string   `json:"channel"`
-	ChannelName   string   `json:"channel_name"`
-	Channels      []string `json:"channels"`
-	Status        string   `json:"status"`
-	Statuses      []string `json:"statuses"`
-	ModelsEmpty   bool     `json:"models_empty"`
-	ChannelsEmpty bool     `json:"channels_empty"`
-	StatusesEmpty bool     `json:"statuses_empty"`
-	Part          string   `json:"part"`
-	Format        string   `json:"format"`
+	APIKey         string   `json:"api_key"`
+	Days           int      `json:"days"`
+	Page           int      `json:"page"`
+	Size           int      `json:"size"`
+	Model          string   `json:"model"`
+	Models         []string `json:"models"`
+	APIKeyIDs      []string `json:"api_key_ids"`
+	Channel        string   `json:"channel"`
+	ChannelName    string   `json:"channel_name"`
+	Channels       []string `json:"channels"`
+	Status         string   `json:"status"`
+	Statuses       []string `json:"statuses"`
+	APIKeyIDsEmpty bool     `json:"api_key_ids_empty"`
+	ModelsEmpty    bool     `json:"models_empty"`
+	ChannelsEmpty  bool     `json:"channels_empty"`
+	StatusesEmpty  bool     `json:"statuses_empty"`
+	Part           string   `json:"part"`
+	Format         string   `json:"format"`
 }
 
 func readPublicLookupRequest(c *gin.Context) (publicLookupRequest, int, string) {
@@ -66,6 +68,7 @@ func readPublicLookupRequest(c *gin.Context) (publicLookupRequest, int, string) 
 		req.Model = strings.TrimSpace(c.Query("model"))
 	}
 	req.Models = append(req.Models, queryStringListMulti(c, "model", "models")...)
+	req.APIKeyIDs = append(req.APIKeyIDs, queryStringListMulti(c, "api_key_id", "api_key_ids")...)
 	if strings.TrimSpace(req.Status) == "" {
 		req.Status = strings.TrimSpace(c.Query("status"))
 	}
@@ -92,6 +95,7 @@ func readPublicLookupRequest(c *gin.Context) (publicLookupRequest, int, string) 
 		req.Models = append(req.Models, req.Model)
 	}
 	req.Models = dedupePublicLookupStrings(req.Models)
+	req.APIKeyIDs = dedupePublicLookupStrings(req.APIKeyIDs)
 	req.Status = strings.TrimSpace(req.Status)
 	if req.Status != "" {
 		req.Statuses = append(req.Statuses, req.Status)
@@ -102,6 +106,7 @@ func readPublicLookupRequest(c *gin.Context) (publicLookupRequest, int, string) 
 		req.Channels = append(req.Channels, req.Channel)
 	}
 	req.Channels = dedupePublicLookupStrings(req.Channels)
+	req.APIKeyIDsEmpty = req.APIKeyIDsEmpty || queryBool(c, "api_key_ids_empty")
 	req.ModelsEmpty = req.ModelsEmpty || queryBool(c, "models_empty")
 	req.ChannelsEmpty = req.ChannelsEmpty || queryBool(c, "channels_empty")
 	req.StatusesEmpty = req.StatusesEmpty || queryBool(c, "statuses_empty")

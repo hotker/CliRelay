@@ -54,8 +54,11 @@ func registerManagementIdentityRoutes(group *gin.RouterGroup, h *managementhandl
 	group.DELETE("/end-users/:id", h.DeleteEndUser)
 	group.POST("/end-users/:id/reset-password", h.PostEndUserResetPassword)
 	group.POST("/end-users/:id/daily-spending/reset", h.PostEndUserDailySpendingReset)
+	group.GET("/end-users/:id/daily-spending/reset-history", h.GetEndUserDailySpendingResetHistory)
 	group.GET("/end-users/:id/api-keys", h.GetEndUserAPIKeys)
 	group.POST("/end-users/:id/api-keys", h.PostEndUserAPIKey)
+	group.PATCH("/end-users/:id/api-keys/:key_id", h.PatchEndUserAPIKey)
+	group.POST("/end-users/:id/api-keys/:key_id/rotate", h.PostEndUserAPIKeyRotate)
 	group.DELETE("/end-users/:id/api-keys/:key_id", h.DeleteEndUserAPIKey)
 	group.POST("/end-users/:id/api-keys/:key_id/default", h.PostEndUserAPIKeyDefault)
 
@@ -70,6 +73,7 @@ func registerManagementIdentityRoutes(group *gin.RouterGroup, h *managementhandl
 	group.PUT("/roles/:id/users", h.PutRoleUsers)
 	group.DELETE("/roles/:id", h.DeleteRole)
 	group.GET("/audit-logs", h.GetAuditLogs)
+	group.DELETE("/audit-logs", h.ClearAuditLogs)
 	group.GET("/audit-logs/:id", h.GetAuditLog)
 	group.DELETE("/audit-logs/:id", h.DeleteAuditLog)
 }

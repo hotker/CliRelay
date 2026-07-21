@@ -1,16 +1,32 @@
 package postgres
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestRuntimeMigrationsCoverCoreTables(t *testing.T) {
 	migrations := RuntimeMigrations()
-	if len(migrations) != 20 {
-		t.Fatalf("RuntimeMigrations len = %d, want 20", len(migrations))
+	if len(migrations) != 21 {
+		t.Fatalf("RuntimeMigrations len = %d, want 21", len(migrations))
 	}
-	// Latest: usage rollup buckets for stats/limits isolation from request_logs.
+	// Latest: append-only account-level daily spending reset history.
+	endUserResetEventsSQL := migrations[20].SQL
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS end_user_daily_spending_reset_events",
+		"effective_used_before",
+		"raw_today_cost",
+		"actor_username",
+	} {
+		if !strings.Contains(endUserResetEventsSQL, fragment) {
+			t.Fatalf("end-user daily spending reset events migration missing %q", fragment)
+		}
+	}
+	// Prior: usage rollup buckets for stats/limits isolation from request_logs.
 	rollupSQL := migrations[18].SQL
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS usage_rollup_buckets",
@@ -213,5 +229,49 @@ func TestMigrationChecksumChangesWithSQL(t *testing.T) {
 	second := migrationChecksum("SELECT 2")
 	if first == second {
 		t.Fatal("migrationChecksum returned identical values for different SQL")
+	}
+}
+
+func TestApplyMigrationDirtyErrorIncludesRemediation(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close sqlite db: %v", err)
+		}
+	})
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum TEXT NOT NULL,
+			dirty BOOLEAN NOT NULL
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	migration := Migration{Version: "202607210001_slow_ddl", SQL: "CREATE TABLE example (id INTEGER)"}
+	if _, err := db.Exec(
+		"INSERT INTO schema_migrations (version, checksum, dirty) VALUES (?, ?, true)",
+		migration.Version,
+		migrationChecksum(migration.SQL),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	err = applyMigration(context.Background(), db, migration)
+	if err == nil {
+		t.Fatal("applyMigration() error = nil, want dirty migration error")
+	}
+	for _, fragment := range []string{
+		"migration 202607210001_slow_ddl is dirty",
+		"confirm whether the SQL committed",
+		"do not only clear dirty",
+		"do not automatically replay SQL",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("applyMigration() error = %q, want %q", err, fragment)
+		}
 	}
 }

@@ -389,10 +389,11 @@ func TestGetUsageLogs_EmptyDB_DoesNotReturnNullSlices(t *testing.T) {
 	var payload struct {
 		Items   []any `json:"items"`
 		Filters struct {
-			APIKeys     []string          `json:"api_keys"`
-			APIKeyNames map[string]string `json:"api_key_names"`
-			Models      []string          `json:"models"`
-			Channels    []string          `json:"channels"`
+			APIKeys      []string          `json:"api_keys"`
+			APIKeyNames  map[string]string `json:"api_key_names"`
+			APIKeyCounts map[string]int64  `json:"api_key_counts"`
+			Models       []string          `json:"models"`
+			Channels     []string          `json:"channels"`
 		} `json:"filters"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
@@ -413,6 +414,9 @@ func TestGetUsageLogs_EmptyDB_DoesNotReturnNullSlices(t *testing.T) {
 	}
 	if payload.Filters.APIKeyNames == nil {
 		t.Fatalf("filters.api_key_names is null; expected {}")
+	}
+	if payload.Filters.APIKeyCounts == nil {
+		t.Fatalf("filters.api_key_counts is null; expected {}")
 	}
 }
 
@@ -2169,5 +2173,89 @@ func TestGetPublicUsageLogs_AggregatesOwnedBusinessTenantKeys(t *testing.T) {
 		if item.APIKeyOwnName != "Laptop" && item.APIKeyOwnName != "Automation" {
 			t.Fatalf("api_key_own_name = %q, want concrete key name", item.APIKeyOwnName)
 		}
+	}
+}
+
+func TestGetPublicUsageLogs_FiltersByAPIKeyIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "usage.db")
+	if err := usage.InitDB(dbPath, config.RequestLogStorageConfig{}, time.UTC); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() {
+		usage.CloseDB()
+		_ = os.Remove(dbPath)
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
+	})
+
+	tenantID := "00000000-0000-0000-0000-0000000000ac"
+	endUserID := "00000000-0000-0000-0000-0000000000bd"
+	keyAID := "00000000-0000-0000-0000-0000000000a2"
+	keyBID := "00000000-0000-0000-0000-0000000000b2"
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, row := range []usage.APIKeyRow{
+		{ID: keyAID, Key: "sk-owned-log-a", Name: "Laptop", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now},
+		{ID: keyBID, Key: "sk-owned-log-b", Name: "Automation", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := usage.UpsertAPIKeyForTenant(tenantID, row); err != nil {
+			t.Fatalf("UpsertAPIKeyForTenant(%s): %v", row.Key, err)
+		}
+		usage.InsertLog(row.Key, row.Name, "gpt-test", "test", "channel", "auth", false, time.Now().UTC(), 1, 0, usage.TokenStats{TotalTokens: 1}, "", "")
+	}
+
+	h := &Handler{cfg: &config.Config{}}
+	body, err := json.Marshal(map[string]any{
+		"api_key":     "sk-owned-log-b",
+		"days":        7,
+		"page":        1,
+		"size":        50,
+		"api_key_ids": []string{keyAID},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/public/usage/logs", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.UsageLogs().GetPublicUsageLogs(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var payload struct {
+		Total int64 `json:"total"`
+		Items []struct {
+			APIKeyOwnName string `json:"api_key_own_name"`
+		} `json:"items"`
+		Filters struct {
+			APIKeyIDs      []string          `json:"api_key_ids"`
+			APIKeyIDNames  map[string]string `json:"api_key_id_names"`
+			APIKeyIDCounts map[string]int64  `json:"api_key_id_counts"`
+		} `json:"filters"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 {
+		t.Fatalf("filtered total/items = %d/%d, want 1/1; body=%s", payload.Total, len(payload.Items), rec.Body.String())
+	}
+	if payload.Items[0].APIKeyOwnName != "Laptop" {
+		t.Fatalf("api_key_own_name = %q, want Laptop", payload.Items[0].APIKeyOwnName)
+	}
+	if len(payload.Filters.APIKeyIDs) != 2 {
+		t.Fatalf("filters.api_key_ids = %#v, want 2 options", payload.Filters.APIKeyIDs)
+	}
+	if payload.Filters.APIKeyIDNames[keyAID] != "Laptop" {
+		t.Fatalf("filters.api_key_id_names[%s] = %q, want Laptop", keyAID, payload.Filters.APIKeyIDNames[keyAID])
+	}
+	if payload.Filters.APIKeyIDNames[keyBID] != "Automation" {
+		t.Fatalf("filters.api_key_id_names[%s] = %q, want Automation", keyBID, payload.Filters.APIKeyIDNames[keyBID])
+	}
+	if payload.Filters.APIKeyIDCounts[keyAID] != 1 || payload.Filters.APIKeyIDCounts[keyBID] != 1 {
+		t.Fatalf("filters.api_key_id_counts = %#v, want one request per owned key", payload.Filters.APIKeyIDCounts)
 	}
 }
