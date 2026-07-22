@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
   total_quota       INTEGER NOT NULL DEFAULT 0,
   spending_limit    REAL NOT NULL DEFAULT 0,
   daily_spending_limit REAL NOT NULL DEFAULT 0,
+  five_hour_spending_limit REAL NOT NULL DEFAULT 0,
+  weekly_spending_limit REAL NOT NULL DEFAULT 0,
+  monthly_spending_limit REAL NOT NULL DEFAULT 0,
   concurrency_limit INTEGER NOT NULL DEFAULT 0,
   rpm_limit         INTEGER NOT NULL DEFAULT 0,
   tpm_limit         INTEGER NOT NULL DEFAULT 0,
@@ -42,27 +46,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key);
 `
 
 type APIKeyRow struct {
-	TenantID             string   `json:"tenant_id,omitempty"`
-	ID                   string   `json:"id,omitempty"`
-	Key                  string   `json:"key"`
-	Name                 string   `json:"name,omitempty"`
-	Disabled             bool     `json:"disabled,omitempty"`
-	EndUserID            string   `json:"end_user_id,omitempty"`
-	IsDefault            bool     `json:"is_default,omitempty"`
-	PermissionProfileID  string   `json:"permission-profile-id,omitempty"`
-	DailyLimit           int      `json:"daily-limit,omitempty"`
-	TotalQuota           int      `json:"total-quota,omitempty"`
-	SpendingLimit        float64  `json:"spending-limit,omitempty"`
-	DailySpendingLimit   float64  `json:"daily-spending-limit,omitempty"`
-	ConcurrencyLimit     int      `json:"concurrency-limit,omitempty"`
-	RPMLimit             int      `json:"rpm-limit,omitempty"`
-	TPMLimit             int      `json:"tpm-limit,omitempty"`
-	AllowedModels        []string `json:"allowed-models,omitempty"`
-	AllowedChannels      []string `json:"allowed-channels,omitempty"`
-	AllowedChannelGroups []string `json:"allowed-channel-groups,omitempty"`
-	SystemPrompt         string   `json:"system-prompt,omitempty"`
-	CreatedAt            string   `json:"created-at,omitempty"`
-	UpdatedAt            string   `json:"updated_at,omitempty"`
+	TenantID                string                     `json:"tenant_id,omitempty"`
+	ID                      string                     `json:"id,omitempty"`
+	Key                     string                     `json:"key"`
+	Name                    string                     `json:"name,omitempty"`
+	Disabled                bool                       `json:"disabled,omitempty"`
+	EndUserID               string                     `json:"end_user_id,omitempty"`
+	IsDefault               bool                       `json:"is_default,omitempty"`
+	PermissionProfileID     string                     `json:"permission-profile-id,omitempty"`
+	DailyLimit              int                        `json:"daily-limit,omitempty"`
+	TotalQuota              int                        `json:"total-quota,omitempty"`
+	SpendingLimit           float64                    `json:"spending-limit,omitempty"`
+	DailySpendingLimit      float64                    `json:"daily-spending-limit,omitempty"`
+	PeriodSpendingLimits    quota.PeriodSpendingLimits `json:"period-spending-limits"`
+	PeriodSpending          []quota.PeriodSpending     `json:"period-spending,omitempty"`
+	LifetimeSpendingUsed    float64                    `json:"lifetime-spending-used"`
+	DailySpendingUsed       float64                    `json:"daily-spending-used"`
+	DailySpendingResetCount int                        `json:"daily-spending-reset-count,omitempty"`
+	ConcurrencyLimit        int                        `json:"concurrency-limit,omitempty"`
+	RPMLimit                int                        `json:"rpm-limit,omitempty"`
+	TPMLimit                int                        `json:"tpm-limit,omitempty"`
+	AllowedModels           []string                   `json:"allowed-models,omitempty"`
+	AllowedChannels         []string                   `json:"allowed-channels,omitempty"`
+	AllowedChannelGroups    []string                   `json:"allowed-channel-groups,omitempty"`
+	SystemPrompt            string                     `json:"system-prompt,omitempty"`
+	CreatedAt               string                     `json:"created-at,omitempty"`
+	UpdatedAt               string                     `json:"updated_at,omitempty"`
 }
 
 type PermissionProfileSnapshot struct {
@@ -70,6 +79,7 @@ type PermissionProfileSnapshot struct {
 	DailyLimit           int
 	TotalQuota           int
 	DailySpendingLimit   float64
+	PeriodSpendingLimits quota.PeriodSpendingLimits
 	ConcurrencyLimit     int
 	RPMLimit             int
 	TPMLimit             int
@@ -138,6 +148,9 @@ func (r APIKeyRow) ToConfigEntry() config.APIKeyEntry {
 		TotalQuota:           r.TotalQuota,
 		SpendingLimit:        r.SpendingLimit,
 		DailySpendingLimit:   r.DailySpendingLimit,
+		PeriodSpendingLimits: r.PeriodSpendingLimits,
+		PeriodSpending:       r.PeriodSpending,
+		LifetimeSpendingUsed: r.LifetimeSpendingUsed,
 		ConcurrencyLimit:     r.ConcurrencyLimit,
 		RPMLimit:             r.RPMLimit,
 		TPMLimit:             r.TPMLimit,
@@ -162,6 +175,7 @@ func APIKeyRowFromConfig(entry config.APIKeyEntry) APIKeyRow {
 		TotalQuota:           entry.TotalQuota,
 		SpendingLimit:        entry.SpendingLimit,
 		DailySpendingLimit:   entry.DailySpendingLimit,
+		PeriodSpendingLimits: entry.PeriodSpendingLimits,
 		ConcurrencyLimit:     entry.ConcurrencyLimit,
 		RPMLimit:             entry.RPMLimit,
 		TPMLimit:             entry.TPMLimit,
@@ -205,7 +219,7 @@ func (s Store) ListAll() []APIKeyRow {
 	}
 
 	rows, err := s.db.Query(`SELECT tenant_id, key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys ORDER BY tenant_id ASC, created_at ASC`)
@@ -234,7 +248,7 @@ func (s Store) List() []APIKeyRow {
 	}
 
 	rows, err := s.db.Query(`SELECT key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys WHERE tenant_id = ? ORDER BY created_at ASC`, s.tenantID)
@@ -262,7 +276,7 @@ func (s Store) Get(key string) *APIKeyRow {
 	}
 
 	row := s.db.QueryRow(`SELECT key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys WHERE tenant_id = ? AND key = ?`, s.tenantID, trimmed)
@@ -288,7 +302,7 @@ func (s Store) GetAnyTenant(key string) *APIKeyRow {
 	}
 
 	row := s.db.QueryRow(`SELECT tenant_id, key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys WHERE key = ?`, trimmed)
@@ -310,7 +324,7 @@ func (s Store) GetByID(id string) *APIKeyRow {
 	}
 
 	row := s.db.QueryRow(`SELECT key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys WHERE tenant_id = ? AND id = ?`, s.tenantID, trimmed)
@@ -335,7 +349,7 @@ func (s Store) GetByIDAnyTenant(id string) *APIKeyRow {
 	}
 
 	row := s.db.QueryRow(`SELECT tenant_id, key, name, disabled, id, daily_limit, total_quota,
-		permission_profile_id, spending_limit, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		permission_profile_id, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		end_user_id, is_default
 		FROM api_keys WHERE id = ?`, trimmed)
@@ -346,9 +360,9 @@ func (s Store) GetByIDAnyTenant(id string) *APIKeyRow {
 	return entry
 }
 
-// stripOwnedKeyQuota clears per-key limits for end-user-owned keys.
-// Account-level limits live on end_users; keeping key rows non-zero would re-open the multi-key budget hole.
-func stripOwnedKeyQuota(entry *APIKeyRow) {
+// stripOwnedKeyAccountManagedFields clears fields owned keys inherit from their account.
+// The four period spending limits remain key-scoped sub-quotas.
+func stripOwnedKeyAccountManagedFields(entry *APIKeyRow) {
 	if entry == nil || strings.TrimSpace(entry.EndUserID) == "" {
 		return
 	}
@@ -356,7 +370,6 @@ func stripOwnedKeyQuota(entry *APIKeyRow) {
 	entry.DailyLimit = 0
 	entry.TotalQuota = 0
 	entry.SpendingLimit = 0
-	entry.DailySpendingLimit = 0
 	entry.ConcurrencyLimit = 0
 	entry.RPMLimit = 0
 	entry.TPMLimit = 0
@@ -390,7 +403,7 @@ func (s Store) Upsert(entry APIKeyRow) error {
 			entry.EndUserID = existing.EndUserID
 		}
 	}
-	stripOwnedKeyQuota(&entry)
+	stripOwnedKeyAccountManagedFields(&entry)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if entry.CreatedAt == "" {
@@ -409,16 +422,18 @@ func (s Store) Upsert(entry APIKeyRow) error {
 	}
 
 	result, err := s.db.Exec(`INSERT INTO api_keys
-		(tenant_id, key, id, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit,
+		(tenant_id, key, id, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit,
 		 concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		 end_user_id, is_default)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET
 			id=excluded.id,
 			name=excluded.name, disabled=excluded.disabled,
 			permission_profile_id=excluded.permission_profile_id,
 			daily_limit=excluded.daily_limit, total_quota=excluded.total_quota,
-			spending_limit=excluded.spending_limit, daily_spending_limit=excluded.daily_spending_limit, concurrency_limit=excluded.concurrency_limit,
+			spending_limit=excluded.spending_limit, daily_spending_limit=excluded.daily_spending_limit,
+			five_hour_spending_limit=excluded.five_hour_spending_limit, weekly_spending_limit=excluded.weekly_spending_limit, monthly_spending_limit=excluded.monthly_spending_limit,
+			concurrency_limit=excluded.concurrency_limit,
 			rpm_limit=excluded.rpm_limit, tpm_limit=excluded.tpm_limit,
 			allowed_models=excluded.allowed_models, allowed_channels=excluded.allowed_channels,
 			allowed_channel_groups=excluded.allowed_channel_groups,
@@ -429,7 +444,7 @@ func (s Store) Upsert(entry APIKeyRow) error {
 		WHERE api_keys.tenant_id = excluded.tenant_id`,
 		s.tenantID, entry.Key, entry.ID, entry.Name, disabledInt, entry.PermissionProfileID,
 		entry.DailyLimit, entry.TotalQuota, entry.SpendingLimit, entry.DailySpendingLimit,
-		entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
+		entry.PeriodSpendingLimits.FiveHour, entry.PeriodSpendingLimits.Week, entry.PeriodSpendingLimits.Month, entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
 		mustJSONStringList(entry.AllowedModels), mustJSONStringList(entry.AllowedChannels),
 		mustJSONStringList(entry.AllowedChannelGroups), entry.SystemPrompt,
 		entry.CreatedAt, now, endUserID, isDefault,
@@ -482,6 +497,11 @@ func (s Store) UpdateByID(entry APIKeyRow) error {
 		if err = lockOwnedEndUser(tx, ownerID); err != nil {
 			return err
 		}
+		if err = tx.QueryRow(`SELECT COALESCE(daily_spending_limit,0), COALESCE(five_hour_spending_limit,0), COALESCE(weekly_spending_limit,0), COALESCE(monthly_spending_limit,0) FROM api_keys WHERE tenant_id = ? AND id = ?`, s.tenantID, entry.ID).
+			Scan(&entry.PeriodSpendingLimits.Day, &entry.PeriodSpendingLimits.FiveHour, &entry.PeriodSpendingLimits.Week, &entry.PeriodSpendingLimits.Month); err != nil {
+			return err
+		}
+		entry.DailySpendingLimit = entry.PeriodSpendingLimits.Day
 		entry.EndUserID = ownerID
 		entry.IsDefault = wasDefault && !entry.Disabled
 	} else {
@@ -495,7 +515,7 @@ func (s Store) UpdateByID(entry APIKeyRow) error {
 	if entry.CreatedAt == "" {
 		entry.CreatedAt = now
 	}
-	stripOwnedKeyQuota(&entry)
+	stripOwnedKeyAccountManagedFields(&entry)
 
 	disabledInt := 0
 	if entry.Disabled {
@@ -503,12 +523,13 @@ func (s Store) UpdateByID(entry APIKeyRow) error {
 	}
 	result, err := tx.Exec(`UPDATE api_keys SET
 		key = ?, name = ?, disabled = ?, permission_profile_id = ?, daily_limit = ?, total_quota = ?,
-		spending_limit = ?, daily_spending_limit = ?, concurrency_limit = ?, rpm_limit = ?, tpm_limit = ?,
+		spending_limit = ?, daily_spending_limit = ?, five_hour_spending_limit = ?, weekly_spending_limit = ?, monthly_spending_limit = ?, concurrency_limit = ?, rpm_limit = ?, tpm_limit = ?,
 		allowed_models = ?, allowed_channels = ?, allowed_channel_groups = ?, system_prompt = ?,
 		created_at = ?, updated_at = ?, is_default = ?
 		WHERE tenant_id = ? AND id = ?`,
 		entry.Key, entry.Name, disabledInt, entry.PermissionProfileID, entry.DailyLimit, entry.TotalQuota,
-		entry.SpendingLimit, entry.DailySpendingLimit, entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
+		entry.SpendingLimit, entry.DailySpendingLimit, entry.PeriodSpendingLimits.FiveHour, entry.PeriodSpendingLimits.Week, entry.PeriodSpendingLimits.Month,
+		entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
 		mustJSONStringList(entry.AllowedModels), mustJSONStringList(entry.AllowedChannels),
 		mustJSONStringList(entry.AllowedChannelGroups), entry.SystemPrompt,
 		entry.CreatedAt, now, entry.IsDefault, s.tenantID, entry.ID,
@@ -764,10 +785,10 @@ func (s Store) ReplaceAll(entries []APIKeyRow) error {
 	}
 
 	stmt, err := tx.Prepare(`INSERT INTO api_keys
-		(tenant_id, key, id, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit,
+		(tenant_id, key, id, name, disabled, permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit,
 		 concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at,
 		 end_user_id, is_default)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -792,6 +813,7 @@ func (s Store) ReplaceAll(entries []APIKeyRow) error {
 		if _, err := stmt.Exec(
 			s.tenantID, entry.Key, entry.ID, entry.Name, disabledInt, entry.PermissionProfileID,
 			entry.DailyLimit, entry.TotalQuota, entry.SpendingLimit, entry.DailySpendingLimit,
+			entry.PeriodSpendingLimits.FiveHour, entry.PeriodSpendingLimits.Week, entry.PeriodSpendingLimits.Month,
 			entry.ConcurrencyLimit, entry.RPMLimit, entry.TPMLimit,
 			mustJSONStringList(entry.AllowedModels), mustJSONStringList(entry.AllowedChannels),
 			mustJSONStringList(entry.AllowedChannelGroups), entry.SystemPrompt,
@@ -812,50 +834,6 @@ func (s Store) ReplaceAll(entries []APIKeyRow) error {
 	return tx.Commit()
 }
 
-func EffectiveAPIKeyRowWithProfiles(row APIKeyRow, profiles []PermissionProfileSnapshot) APIKeyRow {
-	profileID := strings.TrimSpace(row.PermissionProfileID)
-	if profileID == "" {
-		return row
-	}
-
-	var matched *PermissionProfileSnapshot
-	for _, profile := range profiles {
-		if strings.TrimSpace(profile.ID) == profileID {
-			copy := profile
-			matched = &copy
-			break
-		}
-	}
-	if matched == nil {
-		return row
-	}
-
-	row.PermissionProfileID = profileID
-	row.DailyLimit = matched.DailyLimit
-	row.TotalQuota = matched.TotalQuota
-	row.SpendingLimit = 0
-	row.DailySpendingLimit = matched.DailySpendingLimit
-	row.ConcurrencyLimit = matched.ConcurrencyLimit
-	row.RPMLimit = matched.RPMLimit
-	row.TPMLimit = matched.TPMLimit
-	row.AllowedModels = append([]string(nil), matched.AllowedModels...)
-	row.AllowedChannels = append([]string(nil), matched.AllowedChannels...)
-	row.AllowedChannelGroups = append([]string(nil), matched.AllowedChannelGroups...)
-	row.SystemPrompt = matched.SystemPrompt
-	return row
-}
-
-func EffectiveAPIKeyRowsWithProfiles(rows []APIKeyRow, profiles []PermissionProfileSnapshot) []APIKeyRow {
-	if len(rows) == 0 {
-		return rows
-	}
-	out := make([]APIKeyRow, len(rows))
-	for idx, row := range rows {
-		out[idx] = EffectiveAPIKeyRowWithProfiles(row, profiles)
-	}
-	return out
-}
-
 func migrateColumns(db *sql.DB) {
 	for _, col := range []struct {
 		name       string
@@ -867,6 +845,9 @@ func migrateColumns(db *sql.DB) {
 		{name: "allowed_channels", definition: "TEXT NOT NULL DEFAULT '[]'"},
 		{name: "allowed_channel_groups", definition: "TEXT NOT NULL DEFAULT '[]'"},
 		{name: "daily_spending_limit", definition: "REAL NOT NULL DEFAULT 0"},
+		{name: "five_hour_spending_limit", definition: "REAL NOT NULL DEFAULT 0"},
+		{name: "weekly_spending_limit", definition: "REAL NOT NULL DEFAULT 0"},
+		{name: "monthly_spending_limit", definition: "REAL NOT NULL DEFAULT 0"},
 		{name: "end_user_id", definition: "TEXT"},
 		{name: "is_default", definition: "INTEGER NOT NULL DEFAULT 0"},
 	} {
@@ -1053,7 +1034,20 @@ func normalizeRow(row APIKeyRow) APIKeyRow {
 	row.EndUserID = strings.TrimSpace(row.EndUserID)
 	row.PermissionProfileID = strings.TrimSpace(row.PermissionProfileID)
 	row.SpendingLimit = normalizeWholeUSD(row.SpendingLimit)
-	row.DailySpendingLimit = normalizeWholeUSD(row.DailySpendingLimit)
+	limits, err := quota.NormalizeLimits(row.PeriodSpendingLimits)
+	if err != nil {
+		limits = quota.PeriodSpendingLimits{}
+	}
+	day, err := quota.NormalizeWholeUSD(row.DailySpendingLimit)
+	if err != nil {
+		day = 0
+	}
+	if limits.Day > 0 && day == 0 {
+		day = limits.Day
+	}
+	limits.Day = day
+	row.DailySpendingLimit = day
+	row.PeriodSpendingLimits = limits
 	return row
 }
 
@@ -1094,7 +1088,7 @@ func scanAPIKeyRowWithTenant(row scanner) (*APIKeyRow, bool) {
 		&entry.TenantID, &entry.Key, &entry.Name, &disabledInt,
 		&entry.ID,
 		&entry.DailyLimit, &entry.TotalQuota, &entry.PermissionProfileID, &entry.SpendingLimit,
-		&entry.DailySpendingLimit, &entry.ConcurrencyLimit, &entry.RPMLimit, &entry.TPMLimit,
+		&entry.DailySpendingLimit, &entry.PeriodSpendingLimits.FiveHour, &entry.PeriodSpendingLimits.Week, &entry.PeriodSpendingLimits.Month, &entry.ConcurrencyLimit, &entry.RPMLimit, &entry.TPMLimit,
 		&modelsJSON, &channelsJSON, &channelGroupsJSON, &entry.SystemPrompt,
 		&entry.CreatedAt, &entry.UpdatedAt, &endUserID, &isDefault,
 	); err != nil {
@@ -1107,6 +1101,7 @@ func scanAPIKeyRowWithTenant(row scanner) (*APIKeyRow, bool) {
 		entry.EndUserID = endUserID.String
 	}
 	entry.IsDefault = boolish(isDefault)
+	entry.PeriodSpendingLimits.Day = entry.DailySpendingLimit
 	decodeAPIKeyRow(&entry, disabledInt, modelsJSON, channelsJSON, channelGroupsJSON)
 	return &entry, true
 }
@@ -1123,7 +1118,7 @@ func scanAPIKeyRow(row scanner) (*APIKeyRow, bool) {
 		&entry.Key, &entry.Name, &disabledInt,
 		&entry.ID,
 		&entry.DailyLimit, &entry.TotalQuota, &entry.PermissionProfileID, &entry.SpendingLimit,
-		&entry.DailySpendingLimit, &entry.ConcurrencyLimit, &entry.RPMLimit, &entry.TPMLimit,
+		&entry.DailySpendingLimit, &entry.PeriodSpendingLimits.FiveHour, &entry.PeriodSpendingLimits.Week, &entry.PeriodSpendingLimits.Month, &entry.ConcurrencyLimit, &entry.RPMLimit, &entry.TPMLimit,
 		&modelsJSON, &channelsJSON, &channelGroupsJSON, &entry.SystemPrompt,
 		&entry.CreatedAt, &entry.UpdatedAt, &endUserID, &isDefault,
 	); err != nil {
@@ -1136,6 +1131,7 @@ func scanAPIKeyRow(row scanner) (*APIKeyRow, bool) {
 		entry.EndUserID = endUserID.String
 	}
 	entry.IsDefault = boolish(isDefault)
+	entry.PeriodSpendingLimits.Day = entry.DailySpendingLimit
 	decodeAPIKeyRow(&entry, disabledInt, modelsJSON, channelsJSON, channelGroupsJSON)
 	return &entry, true
 }

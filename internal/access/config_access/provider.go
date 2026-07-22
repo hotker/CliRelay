@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -37,25 +38,47 @@ func Register(cfg *sdkconfig.SDKConfig) {
 func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 	result := make(map[string]keyConfig)
 
-	// Primary: load every tenant-scoped API key. Keys remain globally unique so
-	// authentication can resolve the trusted tenant without client input.
-	for _, stored := range usage.ListAllAPIKeys() {
-		entry := usage.EffectiveAPIKeyRowForTenant(stored.TenantID, stored)
+	// Primary: preload tenant profiles and owned accounts once, then build every key.
+	storedRows := usage.ListAllAPIKeys()
+	profilesByTenant := make(map[string][]usage.APIKeyPermissionProfileRow)
+	endUserIDs := make([]string, 0)
+	for _, stored := range storedRows {
+		tenantID := strings.TrimSpace(stored.TenantID)
+		if _, ok := profilesByTenant[tenantID]; !ok {
+			profilesByTenant[tenantID] = usage.ListAPIKeyPermissionProfilesForTenant(tenantID)
+		}
+		if endUserID := strings.TrimSpace(stored.EndUserID); endUserID != "" {
+			endUserIDs = append(endUserIDs, endUserID)
+		}
+	}
+	accounts, _ := usage.ListEndUserQuotasByIDs(endUserIDs)
+	for _, stored := range storedRows {
+		profiles := profilesByTenant[strings.TrimSpace(stored.TenantID)]
+		entry := usage.EffectiveAPIKeyRowWithProfiles(stored, profiles)
 		trimmed := strings.TrimSpace(entry.Key)
 		if trimmed == "" || entry.Disabled {
 			continue
 		}
-		// Frozen/locked accounts stay out of the auth map even if individual keys are enabled.
+		var account *usage.EndUserQuota
 		if endUserID := strings.TrimSpace(entry.EndUserID); endUserID != "" {
-			q := usage.GetEndUserQuota(endUserID)
-			if q == nil || strings.TrimSpace(q.Status) != "active" {
+			loaded, ok := accounts[endUserID]
+			if !ok {
+				fallback := usage.GetEndUserQuota(endUserID)
+				if fallback == nil {
+					continue
+				}
+				loaded = *fallback
+			}
+			effective := usage.EffectiveEndUserQuotaWithProfiles(loaded, profiles)
+			if strings.TrimSpace(effective.Status) != "active" {
 				continue
 			}
+			account = &effective
 		}
 		if _, exists := result[trimmed]; exists {
 			continue
 		}
-		result[trimmed] = keyConfigFromRow(entry)
+		result[trimmed] = keyConfigFromRowWithAccount(entry, account)
 	}
 
 	// Fallback: YAML config (for backward compatibility during migration)
@@ -87,64 +110,69 @@ func buildKeyConfigMap(cfg *sdkconfig.SDKConfig) map[string]keyConfig {
 // keyConfig holds the per-key configuration extracted from APIKeyEntry.
 // When endUserID is set, quota/permissions come from the end-user account pool.
 type keyConfig struct {
-	tenantID             string
-	apiKeyID             string
-	apiKeyName           string
-	endUserID            string
-	allowedModels        []string
-	allowedChannels      []string
-	allowedChannelGroups []string
-	dailyLimit           int
-	totalQuota           int
-	spendingLimit        float64
-	dailySpendingLimit   float64
-	concurrencyLimit     int
-	rpmLimit             int
-	tpmLimit             int
-	systemPrompt         string
+	tenantID                    string
+	apiKeyID                    string
+	apiKeyName                  string
+	endUserID                   string
+	allowedModels               []string
+	allowedChannels             []string
+	allowedChannelGroups        []string
+	dailyLimit                  int
+	totalQuota                  int
+	spendingLimit               float64
+	dailySpendingLimit          float64
+	accountPeriodSpendingLimits quota.PeriodSpendingLimits
+	keyPeriodSpendingLimits     quota.PeriodSpendingLimits
+	concurrencyLimit            int
+	rpmLimit                    int
+	tpmLimit                    int
+	systemPrompt                string
 }
 
 func keyConfigFromRow(row usage.APIKeyRow) keyConfig {
+	var account *usage.EndUserQuota
+	if endUserID := strings.TrimSpace(row.EndUserID); endUserID != "" {
+		if loaded := usage.GetEndUserQuota(endUserID); loaded != nil {
+			effective := usage.EffectiveEndUserQuota(*loaded)
+			account = &effective
+		}
+	}
+	return keyConfigFromRowWithAccount(row, account)
+}
+
+func keyConfigFromRowWithAccount(row usage.APIKeyRow, account *usage.EndUserQuota) keyConfig {
 	tenantID := strings.TrimSpace(row.TenantID)
 	if tenantID == "" {
 		tenantID = identity.SystemTenantID
 	}
 	kc := keyConfig{
-		tenantID:             tenantID,
-		apiKeyID:             strings.TrimSpace(row.ID),
-		apiKeyName:           strings.TrimSpace(row.Name),
-		endUserID:            strings.TrimSpace(row.EndUserID),
-		allowedModels:        row.AllowedModels,
-		allowedChannels:      row.AllowedChannels,
-		allowedChannelGroups: row.AllowedChannelGroups,
-		dailyLimit:           row.DailyLimit,
-		totalQuota:           row.TotalQuota,
-		spendingLimit:        row.SpendingLimit,
-		dailySpendingLimit:   row.DailySpendingLimit,
-		concurrencyLimit:     row.ConcurrencyLimit,
-		rpmLimit:             row.RPMLimit,
-		tpmLimit:             row.TPMLimit,
-		systemPrompt:         row.SystemPrompt,
+		tenantID: tenantID, apiKeyID: strings.TrimSpace(row.ID), apiKeyName: strings.TrimSpace(row.Name),
+		endUserID: strings.TrimSpace(row.EndUserID), allowedModels: row.AllowedModels,
+		allowedChannels: row.AllowedChannels, allowedChannelGroups: row.AllowedChannelGroups,
+		dailyLimit: row.DailyLimit, totalQuota: row.TotalQuota, spendingLimit: row.SpendingLimit,
+		dailySpendingLimit: row.DailySpendingLimit, keyPeriodSpendingLimits: row.PeriodSpendingLimits,
+		concurrencyLimit: row.ConcurrencyLimit, rpmLimit: row.RPMLimit, tpmLimit: row.TPMLimit, systemPrompt: row.SystemPrompt,
 	}
-	// Owned keys share the end-user account quota/permission pool.
-	if kc.endUserID != "" {
-		if q := usage.GetEndUserQuota(kc.endUserID); q != nil {
-			eq := usage.EffectiveEndUserQuota(*q)
-			if name := strings.TrimSpace(eq.DisplayName); name != "" {
-				kc.apiKeyName = name
-			}
-			kc.allowedModels = eq.AllowedModels
-			kc.allowedChannels = eq.AllowedChannels
-			kc.allowedChannelGroups = eq.AllowedChannelGroups
-			kc.dailyLimit = eq.DailyLimit
-			kc.totalQuota = eq.TotalQuota
-			kc.spendingLimit = eq.SpendingLimit
-			kc.dailySpendingLimit = eq.DailySpendingLimit
-			kc.concurrencyLimit = eq.ConcurrencyLimit
-			kc.rpmLimit = eq.RPMLimit
-			kc.tpmLimit = eq.TPMLimit
-			kc.systemPrompt = eq.SystemPrompt
+	if kc.endUserID != "" && account != nil {
+		if name := strings.TrimSpace(account.DisplayName); name != "" {
+			kc.apiKeyName = name
 		}
+		kc.allowedModels = account.AllowedModels
+		kc.allowedChannels = account.AllowedChannels
+		kc.allowedChannelGroups = account.AllowedChannelGroups
+		kc.dailyLimit = account.DailyLimit
+		kc.totalQuota = account.TotalQuota
+		kc.spendingLimit = account.SpendingLimit
+		kc.dailySpendingLimit = account.DailySpendingLimit
+		kc.accountPeriodSpendingLimits = account.PeriodSpendingLimits
+		kc.concurrencyLimit = account.ConcurrencyLimit
+		kc.rpmLimit = account.RPMLimit
+		kc.tpmLimit = account.TPMLimit
+		kc.systemPrompt = account.SystemPrompt
+	}
+	kc.keyPeriodSpendingLimits.Day = row.DailySpendingLimit
+	if kc.endUserID == "" {
+		kc.dailySpendingLimit = kc.keyPeriodSpendingLimits.Day
 	}
 	return kc
 }
@@ -208,7 +236,9 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 		}
 		if kc, ok := p.keys[candidate.value]; ok {
 			metadata := map[string]string{
-				"source": candidate.source,
+				"source":     candidate.source,
+				"tenant-id":  kc.tenantID,
+				"api-key-id": kc.apiKeyID,
 			}
 			if kc.endUserID != "" {
 				metadata["end-user-id"] = kc.endUserID
@@ -243,6 +273,8 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 			if kc.dailySpendingLimit > 0 {
 				metadata["daily-spending-limit"] = fmt.Sprintf("%f", kc.dailySpendingLimit)
 			}
+			addPeriodLimitMetadata(metadata, "account-period-spending-limit-", kc.accountPeriodSpendingLimits)
+			addPeriodLimitMetadata(metadata, "key-period-spending-limit-", kc.keyPeriodSpendingLimits)
 			if kc.systemPrompt != "" {
 				metadata["system-prompt"] = kc.systemPrompt
 			}
@@ -258,6 +290,14 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 	}
 
 	return nil, sdkaccess.NewInvalidCredentialError()
+}
+
+func addPeriodLimitMetadata(metadata map[string]string, prefix string, limits quota.PeriodSpendingLimits) {
+	for _, period := range quota.OrderedPeriods {
+		if value := limits.Value(period); value > 0 {
+			metadata[prefix+string(period)] = fmt.Sprintf("%f", value)
+		}
+	}
 }
 
 func extractBearerToken(header string) string {

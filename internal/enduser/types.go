@@ -1,6 +1,10 @@
 package enduser
 
-import "time"
+import (
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+)
 
 type User struct {
 	ID                 string     `json:"id"`
@@ -19,53 +23,64 @@ type User struct {
 	// APIKeyCount is filled on list; 0 means unknown/none.
 	APIKeyCount int `json:"api_key_count,omitempty"`
 	// DailySpendingUsed is the account-level effective spend for the current project day.
-	DailySpendingUsed float64 `json:"daily-spending-used"`
+	DailySpendingUsed    float64                `json:"daily-spending-used"`
+	LifetimeSpendingUsed float64                `json:"lifetime-spending-used"`
+	PeriodSpending       []quota.PeriodSpending `json:"period-spending"`
+	CappedKeys           []quota.CappedKey      `json:"capped-keys,omitempty"`
 	// DailySpendingResetCount is the number of persisted manual reset events.
 	DailySpendingResetCount int `json:"daily-spending-reset-count"`
 
 	// Account-level quota/permissions: shared by every API key under this user.
-	PermissionProfileID  string   `json:"permission-profile-id,omitempty"`
-	DailyLimit           int      `json:"daily-limit,omitempty"`
-	TotalQuota           int      `json:"total-quota,omitempty"`
-	SpendingLimit        float64  `json:"spending-limit,omitempty"`
-	DailySpendingLimit   float64  `json:"daily-spending-limit,omitempty"`
-	ConcurrencyLimit     int      `json:"concurrency-limit,omitempty"`
-	RPMLimit             int      `json:"rpm-limit,omitempty"`
-	TPMLimit             int      `json:"tpm-limit,omitempty"`
-	AllowedModels        []string `json:"allowed-models,omitempty"`
-	AllowedChannels      []string `json:"allowed-channels,omitempty"`
-	AllowedChannelGroups []string `json:"allowed-channel-groups,omitempty"`
-	SystemPrompt         string   `json:"system-prompt,omitempty"`
+	PermissionProfileID  string                     `json:"permission-profile-id,omitempty"`
+	DailyLimit           int                        `json:"daily-limit,omitempty"`
+	TotalQuota           int                        `json:"total-quota,omitempty"`
+	SpendingLimit        float64                    `json:"spending-limit,omitempty"`
+	DailySpendingLimit   float64                    `json:"daily-spending-limit,omitempty"`
+	PeriodSpendingLimits quota.PeriodSpendingLimits `json:"period-spending-limits"`
+	ConcurrencyLimit     int                        `json:"concurrency-limit,omitempty"`
+	RPMLimit             int                        `json:"rpm-limit,omitempty"`
+	TPMLimit             int                        `json:"tpm-limit,omitempty"`
+	AllowedModels        []string                   `json:"allowed-models,omitempty"`
+	AllowedChannels      []string                   `json:"allowed-channels,omitempty"`
+	AllowedChannelGroups []string                   `json:"allowed-channel-groups,omitempty"`
+	SystemPrompt         string                     `json:"system-prompt,omitempty"`
 }
 
 // QuotaPatch updates account-level limits. Nil field = leave unchanged.
 // Pointer to empty profile id or zero limit clears that field.
 type QuotaPatch struct {
-	PermissionProfileID  *string   `json:"permission-profile-id,omitempty"`
-	DailyLimit           *int      `json:"daily-limit,omitempty"`
-	TotalQuota           *int      `json:"total-quota,omitempty"`
-	SpendingLimit        *float64  `json:"spending-limit,omitempty"`
-	DailySpendingLimit   *float64  `json:"daily-spending-limit,omitempty"`
-	ConcurrencyLimit     *int      `json:"concurrency-limit,omitempty"`
-	RPMLimit             *int      `json:"rpm-limit,omitempty"`
-	TPMLimit             *int      `json:"tpm-limit,omitempty"`
-	AllowedModels        *[]string `json:"allowed-models,omitempty"`
-	AllowedChannels      *[]string `json:"allowed-channels,omitempty"`
-	AllowedChannelGroups *[]string `json:"allowed-channel-groups,omitempty"`
-	SystemPrompt         *string   `json:"system-prompt,omitempty"`
+	PermissionProfileID  *string                          `json:"permission-profile-id,omitempty"`
+	DailyLimit           *int                             `json:"daily-limit,omitempty"`
+	TotalQuota           *int                             `json:"total-quota,omitempty"`
+	SpendingLimit        *float64                         `json:"spending-limit,omitempty"`
+	DailySpendingLimit   *float64                         `json:"daily-spending-limit,omitempty"`
+	PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits,omitempty"`
+	ConcurrencyLimit     *int                             `json:"concurrency-limit,omitempty"`
+	RPMLimit             *int                             `json:"rpm-limit,omitempty"`
+	TPMLimit             *int                             `json:"tpm-limit,omitempty"`
+	AllowedModels        *[]string                        `json:"allowed-models,omitempty"`
+	AllowedChannels      *[]string                        `json:"allowed-channels,omitempty"`
+	AllowedChannelGroups *[]string                        `json:"allowed-channel-groups,omitempty"`
+	SystemPrompt         *string                          `json:"system-prompt,omitempty"`
 }
 
 type APIKey struct {
-	ID        string `json:"id"`
-	TenantID  string `json:"tenant_id"`
-	EndUserID string `json:"end_user_id"`
-	Key       string `json:"key,omitempty"`
-	KeyMasked string `json:"key_masked,omitempty"`
-	Name      string `json:"name"`
-	Disabled  bool   `json:"disabled"`
-	IsDefault bool   `json:"is_default"`
-	CreatedAt string `json:"created_at,omitempty"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	ID                      string                     `json:"id"`
+	TenantID                string                     `json:"tenant_id"`
+	EndUserID               string                     `json:"end_user_id"`
+	Key                     string                     `json:"key,omitempty"`
+	KeyMasked               string                     `json:"key_masked,omitempty"`
+	Name                    string                     `json:"name"`
+	Disabled                bool                       `json:"disabled"`
+	IsDefault               bool                       `json:"is_default"`
+	CreatedAt               string                     `json:"created_at,omitempty"`
+	UpdatedAt               string                     `json:"updated_at,omitempty"`
+	DailySpendingLimit      float64                    `json:"daily-spending-limit"`
+	PeriodSpendingLimits    quota.PeriodSpendingLimits `json:"period-spending-limits"`
+	PeriodSpending          []quota.PeriodSpending     `json:"period-spending"`
+	DailySpendingUsed       float64                    `json:"daily-spending-used"`
+	LifetimeSpendingUsed    float64                    `json:"lifetime-spending-used"`
+	DailySpendingResetCount int                        `json:"daily-spending-reset-count"`
 }
 
 type LoginResult struct {

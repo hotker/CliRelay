@@ -22,11 +22,12 @@ var (
 )
 
 const (
-	rollupBucketMinute   = "minute"
-	rollupBucketHour     = "hour"
-	rollupBucketDay      = "day"
-	rollupBucketLifetime = "lifetime"
-	rollupLifetimeStart  = "1970-01-01"
+	rollupBucketMinute         = "minute"
+	rollupBucketQuotaMinuteUTC = "quota_minute_utc"
+	rollupBucketHour           = "hour"
+	rollupBucketDay            = "day"
+	rollupBucketLifetime       = "lifetime"
+	rollupLifetimeStart        = "1970-01-01"
 	// minute: 24h, hour: 30d, day: 400d (covers 365d heatmap + buffer)
 	rollupMinuteRetention = 24 * time.Hour
 	rollupHourRetention   = 30 * 24 * time.Hour
@@ -74,9 +75,10 @@ CREATE INDEX IF NOT EXISTS idx_usage_rollup_tenant_subject_day
   ON usage_rollup_buckets(tenant_id, bucket_kind, auth_subject_id, bucket_start);
 `
 	// Bump marker when rebuild semantics change so upgrades re-run once.
-	usageRollupBackfillMarker = "usage_rollup_buckets_v3"
-	rollupMarkerPending       = "pending"
-	rollupMarkerDone          = "done"
+	usageRollupBackfillMarker      = "usage_rollup_buckets_v4"
+	quotaMinuteCoverageStartMarker = "quota_minute_utc_coverage_start"
+	rollupMarkerPending            = "pending"
+	rollupMarkerDone               = "done"
 )
 
 type rollupEvent struct {
@@ -256,6 +258,7 @@ func runUsageRollupBackfillAtInitDB(db *sql.DB, loc *time.Location, finalMarker 
 		       input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
 		       cost, timestamp, COALESCE(api_key,'')
 		FROM request_logs
+		ORDER BY timestamp ASC, id ASC
 	`)
 	if err != nil {
 		// Do not mark done on read failure — next startup must retry.
@@ -336,7 +339,16 @@ func runUsageRollupBackfillAtInitDB(db *sql.DB, loc *time.Location, finalMarker 
 			return err
 		}
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339Nano)
+	if _, err = tx.Exec(`
+		INSERT INTO usage_projection_markers (marker_key, marker_value, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(marker_key) DO NOTHING
+	`, quotaMinuteCoverageStartMarker, nowTime.Truncate(time.Minute).Format(time.RFC3339), now); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("usage: quota minute coverage marker: %w", err)
+	}
 	if _, err = tx.Exec(`
 		INSERT INTO usage_projection_markers (marker_key, marker_value, updated_at)
 		VALUES (?, ?, ?)
@@ -359,10 +371,11 @@ func rollupBucketStarts(at time.Time, loc *time.Location) map[string]string {
 	}
 	local := at.In(loc)
 	return map[string]string{
-		rollupBucketMinute:   local.Format("2006-01-02T15:04"),
-		rollupBucketHour:     local.Format("2006-01-02T15"),
-		rollupBucketDay:      local.Format("2006-01-02"),
-		rollupBucketLifetime: rollupLifetimeStart,
+		rollupBucketMinute:         local.Format("2006-01-02T15:04"),
+		rollupBucketQuotaMinuteUTC: at.UTC().Format("2006-01-02T15:04"),
+		rollupBucketHour:           local.Format("2006-01-02T15"),
+		rollupBucketDay:            local.Format("2006-01-02"),
+		rollupBucketLifetime:       rollupLifetimeStart,
 	}
 }
 
@@ -449,8 +462,17 @@ func projectUsageRollupTx(tx *sql.Tx, ev rollupEvent) error {
 			updated_at = excluded.updated_at
 	`
 
+	coverageStart := ev.At.UTC().Truncate(time.Minute).Format(time.RFC3339)
+	if _, err := tx.Exec(`
+		INSERT INTO usage_projection_markers (marker_key, marker_value, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(marker_key) DO NOTHING
+	`, quotaMinuteCoverageStartMarker, coverageStart, now); err != nil {
+		return fmt.Errorf("usage: record quota minute coverage start: %w", err)
+	}
+
 	// Fixed order avoids Postgres deadlocks when concurrent writers UPSERT the same key.
-	for _, kind := range []string{rollupBucketMinute, rollupBucketHour, rollupBucketDay, rollupBucketLifetime} {
+	for _, kind := range []string{rollupBucketMinute, rollupBucketQuotaMinuteUTC, rollupBucketHour, rollupBucketDay, rollupBucketLifetime} {
 		start := starts[kind]
 		if _, err := tx.Exec(upsertSQL,
 			ev.TenantID, kind, start,
@@ -515,6 +537,7 @@ func cleanupExpiredUsageRollupBuckets(db *sql.DB) (int64, error) {
 		from string
 	}{
 		{rollupBucketMinute, now.Add(-rollupMinuteRetention).Format("2006-01-02T15:04")},
+		{rollupBucketQuotaMinuteUTC, time.Now().UTC().Add(-rollupMinuteRetention).Format("2006-01-02T15:04")},
 		{rollupBucketHour, now.Add(-rollupHourRetention).Format("2006-01-02T15")},
 		{rollupBucketDay, now.Add(-rollupDayRetention).Format("2006-01-02")},
 	}
@@ -531,4 +554,24 @@ func cleanupExpiredUsageRollupBuckets(db *sql.DB) (int64, error) {
 		deleted += n
 	}
 	return deleted, nil
+}
+
+func FiveHourQuotaProjectionReadyAt(now time.Time) bool {
+	db := getReadDB()
+	if db == nil {
+		return false
+	}
+	raw := strings.TrimSpace(projectionMarkerValue(db, quotaMinuteCoverageStartMarker))
+	if raw == "" {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return false
+	}
+	return !started.After(now.UTC().Truncate(time.Minute).Add(-5 * time.Hour))
+}
+
+func FiveHourQuotaProjectionReady() bool {
+	return FiveHourQuotaProjectionReadyAt(time.Now())
 }

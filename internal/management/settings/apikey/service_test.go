@@ -521,6 +521,7 @@ func TestEffectiveRowAppliesProfileDailySpendingLimit(t *testing.T) {
 		ID:                  "key-1",
 		Key:                 "sk-profile",
 		PermissionProfileID: "p1",
+		SpendingLimit:       77,
 		DailySpendingLimit:  1, // stale key copy; profile wins
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)

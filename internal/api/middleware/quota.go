@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/diagnostics"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -203,6 +205,10 @@ func QuotaMiddleware() gin.HandlerFunc {
 		tpmLimit := parseIntMetadata(metadata, "tpm-limit")
 		spendingLimit := parseFloatMetadata(metadata, "spending-limit")
 		dailySpendingLimit := parseFloatMetadata(metadata, "daily-spending-limit")
+		accountPeriodLimits := parsePeriodLimitsMetadata(metadata, "account-period-spending-limit-")
+		keyPeriodLimits := parsePeriodLimitsMetadata(metadata, "key-period-spending-limit-")
+		tenantID := strings.TrimSpace(metadata["tenant-id"])
+		apiKeyID := strings.TrimSpace(metadata["api-key-id"])
 		diagnostics.SetQuotaLimits(c, diagnostics.QuotaSnapshot{
 			DailyLimit:         dailyLimit,
 			TotalQuota:         totalQuota,
@@ -217,7 +223,7 @@ func QuotaMiddleware() gin.HandlerFunc {
 		UpdateKeyLimits(subject, rpmLimit, tpmLimit)
 
 		// No limits configured — skip all checks
-		if dailyLimit <= 0 && totalQuota <= 0 && concurrencyLimit <= 0 && rpmLimit <= 0 && tpmLimit <= 0 && spendingLimit <= 0 && dailySpendingLimit <= 0 {
+		if dailyLimit <= 0 && totalQuota <= 0 && concurrencyLimit <= 0 && rpmLimit <= 0 && tpmLimit <= 0 && spendingLimit <= 0 && dailySpendingLimit <= 0 && !hasPeriodLimits(accountPeriodLimits) && !hasPeriodLimits(keyPeriodLimits) {
 			c.Next()
 			return
 		}
@@ -258,7 +264,8 @@ func QuotaMiddleware() gin.HandlerFunc {
 		if dailyLimit > 0 {
 			todayCount, err := countTodayUsage(apiKey, endUserID)
 			if err != nil {
-				log.Warnf("quota: failed to query daily usage for key %s: %v", maskKey(apiKey), err)
+				rejectQuotaUsageUnavailable(c, quotaScope(endUserID), "day", tenantID, stableQuotaSubject(apiKeyID, endUserID), err)
+				return
 			} else if todayCount >= int64(dailyLimit) {
 				rejectQuotaLimit(c, "daily", float64(dailyLimit), float64(todayCount), "daily_limit_exceeded",
 					fmt.Sprintf("Daily request limit exceeded: %d/%d requests used today. Raise the daily request limit in the permission profile, or wait until the next project day.", todayCount, dailyLimit))
@@ -270,7 +277,8 @@ func QuotaMiddleware() gin.HandlerFunc {
 		if totalQuota > 0 {
 			totalCount, err := countTotalUsage(apiKey, endUserID)
 			if err != nil {
-				log.Warnf("quota: failed to query total usage for key %s: %v", maskKey(apiKey), err)
+				rejectQuotaUsageUnavailable(c, quotaScope(endUserID), "lifetime", tenantID, stableQuotaSubject(apiKeyID, endUserID), err)
+				return
 			} else if totalCount >= int64(totalQuota) {
 				rejectQuotaLimit(c, "total", float64(totalQuota), float64(totalCount), "total_quota_exceeded",
 					fmt.Sprintf("Total request quota exhausted: %d/%d lifetime requests used. Raise the total request quota in the permission profile to continue.", totalCount, totalQuota))
@@ -282,7 +290,8 @@ func QuotaMiddleware() gin.HandlerFunc {
 		if spendingLimit > 0 {
 			totalCost, err := queryTotalCostUsage(apiKey, endUserID)
 			if err != nil {
-				log.Warnf("quota: failed to query total cost for key %s: %v", maskKey(apiKey), err)
+				rejectQuotaUsageUnavailable(c, quotaScope(endUserID), "lifetime", tenantID, stableQuotaSubject(apiKeyID, endUserID), err)
+				return
 			} else if totalCost >= spendingLimit {
 				rejectQuotaLimit(c, "spending", spendingLimit, totalCost, "spending_limit_exceeded",
 					fmt.Sprintf("Lifetime spending limit exceeded: $%.2f of $%.2f used. Raise the spending limit to continue.", totalCost, spendingLimit))
@@ -291,10 +300,11 @@ func QuotaMiddleware() gin.HandlerFunc {
 		}
 
 		// --- Daily spending limit check (from usage DB) ---
-		if dailySpendingLimit > 0 {
+		if dailySpendingLimit > 0 && accountPeriodLimits.Day <= 0 && keyPeriodLimits.Day <= 0 {
 			todayCost, err := queryTodayCostUsage(apiKey, endUserID)
 			if err != nil {
-				log.Warnf("quota: failed to query today cost for key %s: %v", maskKey(apiKey), err)
+				rejectQuotaUsageUnavailable(c, quotaScope(endUserID), "day", tenantID, stableQuotaSubject(apiKeyID, endUserID), err)
+				return
 			} else if todayCost >= dailySpendingLimit {
 				rejectQuotaLimit(c, "daily_spending", dailySpendingLimit, todayCost, "daily_spending_limit_exceeded",
 					fmt.Sprintf("Daily spending limit exceeded: $%.2f of $%.2f used today. Raise the daily spending limit in the permission profile, reset today's spending, or wait until the next project day.", todayCost, dailySpendingLimit))
@@ -302,8 +312,99 @@ func QuotaMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		if hasPeriodLimits(accountPeriodLimits) {
+			used, err := queryPeriodByEndUserFunc(tenantID, endUserID)
+			if err != nil {
+				rejectQuotaUsageUnavailable(c, "account", "period", tenantID, endUserID, err)
+				return
+			}
+			if rejectConfiguredPeriod(c, "account", accountPeriodLimits, used) {
+				return
+			}
+		}
+		if hasPeriodLimits(keyPeriodLimits) {
+			used, err := queryPeriodByKeyFunc(tenantID, apiKeyID)
+			if err != nil {
+				rejectQuotaUsageUnavailable(c, "key", "period", tenantID, apiKeyID, err)
+				return
+			}
+			if rejectConfiguredPeriod(c, "key", keyPeriodLimits, used) {
+				return
+			}
+		}
+
 		c.Next()
 	}
+}
+
+func rejectConfiguredPeriod(c *gin.Context, scope string, limits quota.PeriodSpendingLimits, used quota.PeriodSpendingUsage) bool {
+	for _, period := range quota.OrderedPeriods {
+		limit := limits.Value(period)
+		current := used.Value(period)
+		if limit <= 0 || current < limit {
+			continue
+		}
+		code := "period_spending_limit_exceeded"
+		if period == quota.PeriodDay {
+			code = "daily_spending_limit_exceeded"
+		}
+		scopeLabel := "Key"
+		if scope == "account" {
+			scopeLabel = "Account"
+		}
+		message := fmt.Sprintf("%s %s spending limit exceeded: $%.2f of $%.2f used.", scopeLabel, period, current, limit)
+		rejectPeriodQuotaLimit(c, scope, period, limit, current, code, message)
+		return true
+	}
+	return false
+}
+
+func rejectPeriodQuotaLimit(c *gin.Context, scope string, period quota.Period, limit, current float64, code, message string) {
+	const errType = "rate_limit_exceeded"
+	diagnostics.SetQuotaRejection(c, "period_spending", limit, current, code, errType, message)
+	c.Header("X-CliRelay-Quota-Code", code)
+	c.Header("X-CliRelay-Quota-Rejected-By", "period_spending")
+	c.Header("X-CliRelay-Quota-Scope", scope)
+	c.Header("X-CliRelay-Quota-Period", string(period))
+	c.Header("X-CliRelay-Quota-Limit", formatQuotaNumber(limit))
+	c.Header("X-CliRelay-Quota-Current", formatQuotaNumber(current))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": gin.H{
+		"message": message, "type": errType, "code": code, "scope": scope, "period": period,
+	}})
+}
+
+func rejectQuotaUsageUnavailable(c *gin.Context, scope, period, tenantID, subjectID string, err error) {
+	log.WithError(err).WithFields(log.Fields{"tenant": tenantID, "scope": scope, "period": period, "subject_id": subjectID}).Error("quota usage query unavailable")
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+		"code": "quota_usage_unavailable", "message": "Quota usage is temporarily unavailable", "scope": scope, "period": period,
+	}})
+}
+
+func quotaScope(endUserID string) string {
+	if strings.TrimSpace(endUserID) != "" {
+		return "account"
+	}
+	return "key"
+}
+
+func stableQuotaSubject(apiKeyID, endUserID string) string {
+	if strings.TrimSpace(endUserID) != "" {
+		return strings.TrimSpace(endUserID)
+	}
+	return strings.TrimSpace(apiKeyID)
+}
+
+func parsePeriodLimitsMetadata(metadata map[string]string, prefix string) quota.PeriodSpendingLimits {
+	return quota.PeriodSpendingLimits{
+		FiveHour: parseFloatMetadata(metadata, prefix+"5h"),
+		Day:      parseFloatMetadata(metadata, prefix+"day"),
+		Week:     parseFloatMetadata(metadata, prefix+"week"),
+		Month:    parseFloatMetadata(metadata, prefix+"month"),
+	}
+}
+
+func hasPeriodLimits(limits quota.PeriodSpendingLimits) bool {
+	return limits.FiveHour > 0 || limits.Day > 0 || limits.Week > 0 || limits.Month > 0
 }
 
 // rejectQuotaLimit writes a 429 with a distinct code/message and diagnostic headers.
@@ -333,18 +434,26 @@ func formatQuotaNumber(v float64) string {
 
 // ─── Usage DB query functions (injected to avoid import cycle) ──────────────
 
+var errQuotaUsageUnavailable = errors.New("quota usage unavailable")
+
 // Key-scoped defaults; InitQuotaUsageFuncs wires real implementations.
 // When endUserID is set, InitQuotaUsageFuncs also wires account-scoped aggregators.
 var (
-	countTodayByKeyFunc     = func(string) (int64, error) { return 0, nil }
-	countTotalByKeyFunc     = func(string) (int64, error) { return 0, nil }
-	queryTotalCostByKeyFunc = func(string) (float64, error) { return 0, nil }
-	queryTodayCostByKeyFunc = func(string) (float64, error) { return 0, nil }
+	countTodayByKeyFunc     = func(string) (int64, error) { return 0, errQuotaUsageUnavailable }
+	countTotalByKeyFunc     = func(string) (int64, error) { return 0, errQuotaUsageUnavailable }
+	queryTotalCostByKeyFunc = func(string) (float64, error) { return 0, errQuotaUsageUnavailable }
+	queryTodayCostByKeyFunc = func(string) (float64, error) { return 0, errQuotaUsageUnavailable }
 
-	countTodayByEndUserFunc     = func(string) (int64, error) { return 0, nil }
-	countTotalByEndUserFunc     = func(string) (int64, error) { return 0, nil }
-	queryTotalCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
-	queryTodayCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
+	countTodayByEndUserFunc     = func(string) (int64, error) { return 0, errQuotaUsageUnavailable }
+	countTotalByEndUserFunc     = func(string) (int64, error) { return 0, errQuotaUsageUnavailable }
+	queryTotalCostByEndUserFunc = func(string) (float64, error) { return 0, errQuotaUsageUnavailable }
+	queryTodayCostByEndUserFunc = func(string) (float64, error) { return 0, errQuotaUsageUnavailable }
+	queryPeriodByKeyFunc        = func(string, string) (quota.PeriodSpendingUsage, error) {
+		return quota.PeriodSpendingUsage{}, errQuotaUsageUnavailable
+	}
+	queryPeriodByEndUserFunc = func(string, string) (quota.PeriodSpendingUsage, error) {
+		return quota.PeriodSpendingUsage{}, errQuotaUsageUnavailable
+	}
 )
 
 // InitQuotaUsageFuncs injects the usage DB query functions into the middleware.
@@ -373,6 +482,14 @@ func InitQuotaEndUserUsageFuncs(
 	countTotalByEndUserFunc = countTotal
 	queryTotalCostByEndUserFunc = totalCost
 	queryTodayCostByEndUserFunc = todayCost
+}
+
+func InitQuotaPeriodUsageFuncs(
+	keyUsage func(string, string) (quota.PeriodSpendingUsage, error),
+	endUserUsage func(string, string) (quota.PeriodSpendingUsage, error),
+) {
+	queryPeriodByKeyFunc = keyUsage
+	queryPeriodByEndUserFunc = endUserUsage
 }
 
 func countTodayUsage(apiKey, endUserID string) (int64, error) {

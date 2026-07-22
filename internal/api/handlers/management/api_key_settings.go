@@ -11,7 +11,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPI/v6/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/enduser"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
 	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -155,6 +158,14 @@ func (h *Handler) PutAPIKeyPermissionProfiles(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "failed to read body"})
 		return
 	}
+	if err := validatePeriodPayloadJSON(data); err != nil {
+		if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_period_spending_limit", "message": err.Error()}})
+		}
+		return
+	}
 
 	var profiles []usage.APIKeyPermissionProfileRow
 	syncAccounts := false
@@ -171,21 +182,32 @@ func (h *Handler) PutAPIKeyPermissionProfiles(c *gin.Context) {
 		syncAccounts = obj.SyncAccounts
 	}
 
-	appliedCount := int64(0)
-	if syncAccounts {
-		appliedCount, err = h.apiKeySettings(c).ReplacePermissionProfilesAndSyncAccounts(profiles)
-	} else {
-		err = h.apiKeySettings(c).ReplacePermissionProfiles(profiles)
-	}
+	result, err := h.apiKeySettings(c).ReplacePermissionProfilesWithCaps(profiles, syncAccounts)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if errors.Is(err, enduser.ErrFiveHourProjectionWarming) {
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "five_hour_quota_projection_warming", "message": "5-hour quota projection is still warming"}})
+		} else if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	if err := h.refreshAPIKeyCache(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"status": "ok", "applied_count": appliedCount})
+	if len(result.CappedKeys) > 0 {
+		principal, _ := principalFromContext(c)
+		if audit := identity.Default(); audit != nil {
+			audit.RecordAudit(c.Request.Context(), identity.AuditEvent{
+				TenantID: effectiveTenantID(c), ActorKind: principal.Kind, ActorUserID: principal.User.ID, ActorSessionID: principal.SessionID,
+				Action: "permission_profile.period_quota.cap_keys", ResourceType: "api_key_permission_profiles", Result: "success",
+				Changes: map[string]any{"capped-keys": result.CappedKeys},
+			})
+		}
+	}
+	c.JSON(200, gin.H{"status": "ok", "applied_count": result.AppliedCount, "capped-keys": result.CappedKeys})
 }
 
 // api-key-entries: backed by SQLite api_keys table
@@ -284,6 +306,14 @@ func (h *Handler) PutAPIKeyEntries(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "failed to read body"})
 		return
 	}
+	if err := validatePeriodPayloadJSON(data); err != nil {
+		if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_period_spending_limit", "message": err.Error()}})
+		}
+		return
+	}
 	var arr []config.APIKeyEntry
 	if err = json.Unmarshal(data, &arr); err != nil {
 		var obj struct {
@@ -322,7 +352,20 @@ func (h *Handler) PatchAPIKeyEntry(c *gin.Context) {
 		return
 	}
 	if err := h.apiKeySettings(c).PatchEntry(body.ID, body.Index, body.Match, *body.Value); err != nil {
+		var exceeds *quota.LimitExceedsAccountError
 		switch {
+		case errors.Is(err, quota.ErrPeriodDayLegacyConflict):
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
+			return
+		case errors.Is(err, enduser.ErrFiveHourProjectionWarming):
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "five_hour_quota_projection_warming", "message": "5-hour quota projection is still warming"}})
+			return
+		case errors.As(err, &exceeds):
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "key_period_limit_exceeds_account", "message": exceeds.Error(), "details": gin.H{"period": exceeds.Period, "key_limit": exceeds.KeyLimit, "account_limit": exceeds.AccountLimit}}})
+			return
+		case errors.Is(err, apikeysettings.ErrOwnedKeyAccountManagedField):
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "owned_key_account_managed_field", "message": err.Error()}})
+			return
 		case errors.Is(err, apikeysettings.ErrItemNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
 			return

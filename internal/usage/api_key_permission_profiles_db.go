@@ -15,6 +15,7 @@ import (
 const apiKeyPermissionProfilesMigrationBackupSuffix = ".pre-api-key-permission-profiles-sqlite-migration"
 
 type APIKeyPermissionProfileRow = sqlapikey.PermissionProfileRow
+type APIKeyPermissionProfileSyncResult = sqlapikey.PermissionProfileSyncResult
 
 func initAPIKeyPermissionProfilesTable(db *sql.DB) {
 	sqlapikey.InitPermissionProfilesTable(db)
@@ -46,6 +47,10 @@ func ReplaceAllAPIKeyPermissionProfilesForTenant(tenantID string, profiles []API
 
 func ReplaceAllAPIKeyPermissionProfilesForTenantAndSyncEndUsers(tenantID string, profiles []APIKeyPermissionProfileRow) (int64, error) {
 	return apiKeyPermissionProfileStoreForTenant(tenantID).ReplaceAllPermissionProfilesAndSyncEndUsers(profiles)
+}
+
+func ReplaceAllAPIKeyPermissionProfilesForTenantWithCaps(tenantID string, profiles []APIKeyPermissionProfileRow, syncEndUsers bool) (sqlapikey.PermissionProfileSyncResult, error) {
+	return apiKeyPermissionProfileStoreForTenant(tenantID).ReplaceAllPermissionProfilesWithCaps(profiles, syncEndUsers)
 }
 
 func MigrateAPIKeyPermissionProfilesFromYAML(configFilePath string) int {

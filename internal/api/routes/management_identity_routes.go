@@ -32,6 +32,8 @@ func registerIdentityAuthRoutes(engine *gin.Engine, h *managementhandlers.Handle
 	portal.GET("/api-keys/:id/secret", h.GetPortalAPIKeySecret)
 	portal.PATCH("/api-keys/:id", h.PatchPortalAPIKey)
 	portal.POST("/api-keys/:id/rotate", h.PostPortalAPIKeyRotate)
+	portal.POST("/api-keys/:id/daily-spending/reset", h.PostPortalAPIKeyDailySpendingReset)
+	portal.GET("/api-keys/:id/daily-spending/reset-history", h.GetPortalAPIKeyDailySpendingResetHistory)
 	portal.DELETE("/api-keys/:id", h.DeletePortalAPIKey)
 }
 
@@ -59,6 +61,8 @@ func registerManagementIdentityRoutes(group *gin.RouterGroup, h *managementhandl
 	group.POST("/end-users/:id/api-keys", h.PostEndUserAPIKey)
 	group.PATCH("/end-users/:id/api-keys/:key_id", h.PatchEndUserAPIKey)
 	group.POST("/end-users/:id/api-keys/:key_id/rotate", h.PostEndUserAPIKeyRotate)
+	group.POST("/end-users/:id/api-keys/:key_id/daily-spending/reset", h.PostEndUserAPIKeyDailySpendingReset)
+	group.GET("/end-users/:id/api-keys/:key_id/daily-spending/reset-history", h.GetEndUserAPIKeyDailySpendingResetHistory)
 	group.DELETE("/end-users/:id/api-keys/:key_id", h.DeleteEndUserAPIKey)
 	group.POST("/end-users/:id/api-keys/:key_id/default", h.PostEndUserAPIKeyDefault)
 

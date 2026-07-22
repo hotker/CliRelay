@@ -6,20 +6,29 @@ import (
 
 	"github.com/gin-gonic/gin"
 	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	log "github.com/sirupsen/logrus"
 )
 
 type usageSummaryResponse struct {
-	Found  bool             `json:"found"`
-	Range  string           `json:"range"`
-	Stats  usageStatsBody   `json:"stats"`
-	Limits *usageLimitsBody `json:"limits,omitempty"`
+	Found       bool             `json:"found"`
+	Range       string           `json:"range"`
+	Stats       usageStatsBody   `json:"stats"`
+	Limits      *usageLimitsBody `json:"limits,omitempty"`
+	QuotaScopes []quotaScopeBody `json:"quota-scopes,omitempty"`
 }
 
 type usageStatsBody struct {
 	TotalCalls int64   `json:"total_calls"`
 	QuotaCost  float64 `json:"quota_cost"`
+}
+
+type quotaScopeBody struct {
+	Scope                string                 `json:"scope"`
+	PeriodSpending       []quota.PeriodSpending `json:"period-spending"`
+	DailySpendingUsed    float64                `json:"daily-spending-used"`
+	LifetimeSpendingUsed float64                `json:"lifetime-spending-used"`
 }
 
 // usageLimitsBody exposes only limits that are configured (>0) plus live usage.
@@ -68,6 +77,12 @@ func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 	if subject.EndUserID != "" {
 		limits = buildEndUserUsageLimits(subject.EndUserID)
 	}
+	quotaScopes, err := buildPublicQuotaScopes(subject, row)
+	if err != nil {
+		log.Warnf("management usage summary quota scopes failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query quota usage"})
+		return
+	}
 
 	resp := usageSummaryResponse{
 		Found: found,
@@ -76,7 +91,8 @@ func (h *Handler) GetPublicUsageSummary(c *gin.Context) {
 			TotalCalls: stats.Total,
 			QuotaCost:  stats.TotalCost,
 		},
-		Limits: limits,
+		Limits:      limits,
+		QuotaScopes: quotaScopes,
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -174,4 +190,33 @@ func buildPublicUsageLimits(apiKey string, row *usage.APIKeyRow) *usageLimitsBod
 		return nil
 	}
 	return out
+}
+
+func buildPublicQuotaScopes(subject publicUsageSubject, row *usage.APIKeyRow) ([]quotaScopeBody, error) {
+	out := make([]quotaScopeBody, 0, 2)
+	if subject.EndUserID != "" {
+		accountQuota := usage.GetEndUserQuota(subject.EndUserID)
+		if accountQuota != nil {
+			effective := usage.EffectiveEndUserQuota(*accountQuota)
+			used, err := usage.QueryPeriodSpendingByEndUserForTenant(subject.TenantID, subject.EndUserID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, quotaScopeBody{Scope: "account", PeriodSpending: quota.BuildPeriodSpending(effective.PeriodSpendingLimits, used), DailySpendingUsed: used.Day, LifetimeSpendingUsed: used.Lifetime})
+		}
+		// Portal token requests represent the account only. Raw owned keys include both scopes.
+		if subject.APIKey == "" {
+			return out, nil
+		}
+	}
+	if row != nil && !row.Disabled {
+		keyLimits := row.PeriodSpendingLimits
+		keyLimits.Day = row.DailySpendingLimit
+		used, err := usage.QueryPeriodSpendingByAPIKeyIDForTenant(subject.TenantID, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, quotaScopeBody{Scope: "key", PeriodSpending: quota.BuildPeriodSpending(keyLimits, used), DailySpendingUsed: used.Day, LifetimeSpendingUsed: used.Lifetime})
+	}
+	return out, nil
 }
