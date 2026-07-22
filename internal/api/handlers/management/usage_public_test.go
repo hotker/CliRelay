@@ -184,16 +184,18 @@ func TestGetPublicUsageByAPIKeyAggregatesOwnedCurrentSecrets(t *testing.T) {
 	}
 	enduser.SetDefault(enduser.NewService(usage.RuntimeDB()))
 
+	// Raw secret is key-scoped (key A only), not the sibling pool.
 	owned := getPublicUsageSnapshot(t, h, keyA.Key)
 	if !owned.Found || len(owned.Usage.APIs) != 1 {
 		t.Fatalf("owned response = %#v", owned)
 	}
 	for _, snapshot := range owned.Usage.APIs {
-		if snapshot.TotalRequests != 3 || snapshot.TotalTokens != 30 {
-			t.Fatalf("owned aggregate = %+v, want requests=3 tokens=30", snapshot)
+		if snapshot.TotalRequests != 1 || snapshot.TotalTokens != 10 {
+			t.Fatalf("owned key-scoped = %+v, want requests=1 tokens=10", snapshot)
 		}
 	}
 
+	// Portal cpt_ session remains account-wide across owned keys.
 	portal := getPortalPublicUsageSnapshot(t, h, portalToken)
 	if !portal.Found || len(portal.Usage.APIs) != 1 {
 		t.Fatalf("portal response = %#v", portal)
@@ -216,10 +218,17 @@ func TestGetPublicUsageByAPIKeyAggregatesOwnedCurrentSecrets(t *testing.T) {
 	if err := usage.UpdateAPIKeyByIDForTenant(tenantID, rotated); err != nil {
 		t.Fatalf("UpdateAPIKeyByIDForTenant: %v", err)
 	}
+	// Rotated secret has no in-memory snapshot under the new value; sibling key B stays independent.
 	afterRotate := getPublicUsageSnapshot(t, h, rotated.Key)
 	for _, snapshot := range afterRotate.Usage.APIs {
+		if snapshot.TotalRequests != 0 || snapshot.TotalTokens != 0 {
+			t.Fatalf("post-rotate rotated secret = %+v, want empty key-scoped snapshot", snapshot)
+		}
+	}
+	sibling := getPublicUsageSnapshot(t, h, keyB.Key)
+	for _, snapshot := range sibling.Usage.APIs {
 		if snapshot.TotalRequests != 2 || snapshot.TotalTokens != 20 {
-			t.Fatalf("post-rotate current-secret aggregate = %+v, want surviving current key B only", snapshot)
+			t.Fatalf("sibling key B = %+v, want requests=2 tokens=20", snapshot)
 		}
 	}
 }
