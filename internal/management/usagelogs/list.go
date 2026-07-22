@@ -212,8 +212,18 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		filters.APIKeyIDCounts,
 	)
 
-	apiKeyName := s.publicAPIKeyName(input.APIKey)
-	if params.EndUserID != "" {
+	// Top-level api_key_name:
+	// - raw secret lookup (/apikey-usage): always the *presented key's own name*
+	// - portal session (no raw key, EndUserID only): account display name
+	// Never label a secret lookup with end-user display name (e.g. 张军宝).
+	presentedKey := strings.TrimSpace(input.APIKey)
+	apiKeyName := ""
+	if presentedKey != "" {
+		apiKeyName = usage.ResolveAPIKeyOwnName(presentedKey)
+		if apiKeyName == "" {
+			apiKeyName = s.publicAPIKeyName(presentedKey)
+		}
+	} else if params.EndUserID != "" {
 		apiKeyName = usage.DisplayNameForEndUser(params.EndUserID)
 	}
 	for i := range result.Items {
@@ -226,14 +236,12 @@ func (s *Service) PublicUsageLogs(input PublicLogQueryInput) (map[string]any, er
 		}
 		userName := strings.TrimSpace(result.Items[i].EndUserDisplayName)
 		if userName == "" && params.EndUserID != "" {
-			userName = apiKeyName
+			userName = usage.DisplayNameForEndUser(params.EndUserID)
 		}
 		if userName == "" {
 			userName = keyOwnName
 		}
-		if apiKeyName == "" {
-			apiKeyName = userName
-		}
+		// Do not overwrite top-level apiKeyName with per-row user/key labels.
 		channelName := displayChannelNameForLog(result.Items[i], maps.channelNameMap, maps.authIndexChannelMap, maps.ambiguousAuthIndexChannelMap)
 		result.Items[i].APIKeyMasked = maskPublicAPIKey(result.Items[i].APIKey)
 		result.Items[i].Source = ""
@@ -854,6 +862,11 @@ func normalizeAuthType(value string) string {
 }
 
 func (s *Service) publicAPIKeyName(apiKey string) string {
+	// Prefer any-tenant resolve first: public lookup already authenticated the secret,
+	// and tenant-scoped GetRow can miss when service tenant is empty/stale in tests.
+	if name := usage.ResolveAPIKeyOwnName(apiKey); name != "" {
+		return name
+	}
 	row := apikeysettings.NewService(nil, apikeysettings.WithTenantID(s.tenantID)).GetRow(apiKey)
 	if row == nil {
 		return ""

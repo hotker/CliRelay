@@ -13,7 +13,8 @@ func (s *Service) PublicChartData(apiKey string, days int) (map[string]any, erro
 		"heatmap_series":     chartData.HeatmapSeries,
 		"model_distribution": chartData.ModelDistribution,
 		"stats":              chartData.Stats,
-		"api_key_name":       s.publicAPIKeyName(apiKey),
+		// Key own name only — never end-user display name.
+		"api_key_name": s.publicAPIKeyName(apiKey),
 	}, nil
 }
 

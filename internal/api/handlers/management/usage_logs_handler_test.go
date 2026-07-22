@@ -2149,8 +2149,9 @@ func TestGetPublicUsageLogs_AggregatesOwnedBusinessTenantKeys(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	var payload struct {
-		Total int64 `json:"total"`
-		Items []struct {
+		Total      int64  `json:"total"`
+		APIKeyName string `json:"api_key_name"`
+		Items      []struct {
 			APIKey        string `json:"api_key"`
 			APIKeyID      string `json:"api_key_id"`
 			APIKeyMasked  string `json:"api_key_masked"`
@@ -2162,6 +2163,10 @@ func TestGetPublicUsageLogs_AggregatesOwnedBusinessTenantKeys(t *testing.T) {
 	}
 	if payload.Total != 2 || len(payload.Items) != 2 {
 		t.Fatalf("public logs total/items = %d/%d, want 2/2", payload.Total, len(payload.Items))
+	}
+	// Top-level label must be the presented key's own name, never the end-user display name.
+	if payload.APIKeyName != "Automation" {
+		t.Fatalf("api_key_name = %q, want Automation (key own name), not end-user display", payload.APIKeyName)
 	}
 	for _, item := range payload.Items {
 		if item.APIKey != "" || item.APIKeyID != "" {
