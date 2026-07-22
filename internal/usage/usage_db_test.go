@@ -1954,12 +1954,20 @@ func TestQueryFiltersCollapsesOwnedKeysToOneAccountOption(t *testing.T) {
 		}
 	}
 
+	// Selecting a concrete secret is key-scoped; account-wide needs EndUserID.
 	logs, err := QueryLogs(LogQueryParams{Page: 1, Size: 50, Days: 7, APIKeys: []string{"sk-kittors-default"}})
 	if err != nil {
-		t.Fatalf("QueryLogs(account filter) error = %v", err)
+		t.Fatalf("QueryLogs(key filter) error = %v", err)
 	}
-	if logs.Total != 2 {
-		t.Fatalf("QueryLogs total = %d, want 2 (both owned keys)", logs.Total)
+	if logs.Total != 1 {
+		t.Fatalf("QueryLogs total = %d, want 1 (presented key only)", logs.Total)
+	}
+	accountLogs, err := QueryLogs(LogQueryParams{Page: 1, Size: 50, Days: 7, EndUserID: endUserID})
+	if err != nil {
+		t.Fatalf("QueryLogs(end user) error = %v", err)
+	}
+	if accountLogs.Total != 2 {
+		t.Fatalf("QueryLogs(end user) total = %d, want 2 (both owned keys)", accountLogs.Total)
 	}
 
 	dist, err := QueryAPIKeyDistribution(7)
