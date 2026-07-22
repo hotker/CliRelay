@@ -184,16 +184,18 @@ func TestGetPublicUsageByAPIKeyAggregatesOwnedCurrentSecrets(t *testing.T) {
 	}
 	enduser.SetDefault(enduser.NewService(usage.RuntimeDB()))
 
+	// Raw secret is key-scoped (key A only), not the sibling pool.
 	owned := getPublicUsageSnapshot(t, h, keyA.Key)
 	if !owned.Found || len(owned.Usage.APIs) != 1 {
 		t.Fatalf("owned response = %#v", owned)
 	}
 	for _, snapshot := range owned.Usage.APIs {
-		if snapshot.TotalRequests != 3 || snapshot.TotalTokens != 30 {
-			t.Fatalf("owned aggregate = %+v, want requests=3 tokens=30", snapshot)
+		if snapshot.TotalRequests != 1 || snapshot.TotalTokens != 10 {
+			t.Fatalf("owned key-scoped = %+v, want requests=1 tokens=10", snapshot)
 		}
 	}
 
+	// Portal cpt_ session remains account-wide across owned keys.
 	portal := getPortalPublicUsageSnapshot(t, h, portalToken)
 	if !portal.Found || len(portal.Usage.APIs) != 1 {
 		t.Fatalf("portal response = %#v", portal)
@@ -216,10 +218,17 @@ func TestGetPublicUsageByAPIKeyAggregatesOwnedCurrentSecrets(t *testing.T) {
 	if err := usage.UpdateAPIKeyByIDForTenant(tenantID, rotated); err != nil {
 		t.Fatalf("UpdateAPIKeyByIDForTenant: %v", err)
 	}
+	// Rotated secret has no in-memory snapshot under the new value; sibling key B stays independent.
 	afterRotate := getPublicUsageSnapshot(t, h, rotated.Key)
 	for _, snapshot := range afterRotate.Usage.APIs {
+		if snapshot.TotalRequests != 0 || snapshot.TotalTokens != 0 {
+			t.Fatalf("post-rotate rotated secret = %+v, want empty key-scoped snapshot", snapshot)
+		}
+	}
+	sibling := getPublicUsageSnapshot(t, h, keyB.Key)
+	for _, snapshot := range sibling.Usage.APIs {
 		if snapshot.TotalRequests != 2 || snapshot.TotalTokens != 20 {
-			t.Fatalf("post-rotate current-secret aggregate = %+v, want surviving current key B only", snapshot)
+			t.Fatalf("sibling key B = %+v, want requests=2 tokens=20", snapshot)
 		}
 	}
 }
@@ -271,5 +280,148 @@ func TestGetPublicUsageByAPIKeyMasksCredentialEverywhere(t *testing.T) {
 	}
 	if _, exists := got.Usage.APIs[got.APIKey]; !exists {
 		t.Fatalf("usage.apis does not contain masked key %q: %#v", got.APIKey, got.Usage.APIs)
+	}
+}
+
+func TestGetPublicUsageChartDataReturnsPortalKeyDistributionWithoutSecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupOwnedPublicUsageDB(t)
+
+	tenantID := uuid.NewString()
+	endUserID := uuid.NewString()
+	otherUserID := uuid.NewString()
+	keyA := usage.APIKeyRow{ID: uuid.NewString(), Key: "sk-chart-secret-a", Name: "Laptop", EndUserID: endUserID}
+	keyB := usage.APIKeyRow{ID: uuid.NewString(), Key: "sk-chart-secret-b", Name: "Automation", EndUserID: endUserID}
+	otherKey := usage.APIKeyRow{ID: uuid.NewString(), Key: "sk-chart-secret-other", Name: "Other", EndUserID: otherUserID}
+	standalone := usage.APIKeyRow{ID: uuid.NewString(), Key: "sk-chart-secret-standalone", Name: "Standalone"}
+	for _, row := range []usage.APIKeyRow{keyA, keyB, otherKey, standalone} {
+		if err := usage.UpsertAPIKeyForTenant(tenantID, row); err != nil {
+			t.Fatalf("UpsertAPIKeyForTenant(%s): %v", row.Name, err)
+		}
+	}
+
+	db := usage.RuntimeDB()
+	if _, err := db.Exec(`INSERT INTO tenants (id, status, type) VALUES (?, 'active', 'standard')`, tenantID); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO end_users (id, tenant_id, username, username_normalized, display_name, password_hash, status)
+		VALUES (?, ?, 'chart-user', 'chart-user', 'Portal Chart User', 'unused', 'active')
+	`, endUserID, tenantID); err != nil {
+		t.Fatalf("insert portal user: %v", err)
+	}
+	portalToken := "cpt_portal-chart-test"
+	portalTokenSum := sha256.Sum256([]byte(portalToken))
+	if _, err := db.Exec(`
+		INSERT INTO end_user_sessions (
+			id, end_user_id, tenant_id, access_token_hash, refresh_token_hash, access_expires_at, refresh_expires_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), endUserID, tenantID, hex.EncodeToString(portalTokenSum[:]), "unused-chart-refresh-hash",
+		time.Now().UTC().Add(time.Hour), time.Now().UTC().Add(2*time.Hour)); err != nil {
+		t.Fatalf("insert portal session: %v", err)
+	}
+	enduser.SetDefault(enduser.NewService(db))
+
+	insert := func(row usage.APIKeyRow, tokens int64) {
+		usage.InsertLogWithDetailsIdentity(
+			row.Key, row.ID, row.Name, "gpt-test", "test", "channel", "auth", false,
+			time.Now().UTC(), 1, 0, usage.TokenStats{TotalTokens: tokens}, "", "", "",
+		)
+	}
+	insert(keyA, 3)
+	insert(keyB, 7)
+	insert(keyB, 11)
+	insert(otherKey, 100)
+	insert(standalone, 200)
+
+	h := NewHandler(&config.Config{}, "", nil)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/public/usage/chart-data", bytes.NewReader([]byte(`{"days":7}`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Authorization", "Bearer "+portalToken)
+	h.UsageLogs().GetPublicUsageChartData(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("portal chart status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	for _, secret := range []string{keyA.Key, keyB.Key, otherKey.Key, standalone.Key} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("portal chart response leaked secret %q: %s", secret, rec.Body.String())
+		}
+	}
+	if strings.Contains(rec.Body.String(), `"api_key":`) {
+		t.Fatalf("portal chart response contains raw api_key field: %s", rec.Body.String())
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal portal chart response: %v", err)
+	}
+	var distribution []map[string]json.RawMessage
+	if err := json.Unmarshal(payload["api_key_distribution"], &distribution); err != nil {
+		t.Fatalf("unmarshal api_key_distribution: %v; body=%s", err, rec.Body.String())
+	}
+	if len(distribution) != 2 {
+		t.Fatalf("api_key_distribution len = %d, want 2; body=%s", len(distribution), rec.Body.String())
+	}
+	allowedFields := map[string]bool{"api_key_id": true, "name": true, "requests": true, "tokens": true}
+	points := make(map[string]struct {
+		Name     string
+		Requests int64
+		Tokens   int64
+	}, len(distribution))
+	for _, item := range distribution {
+		if len(item) != len(allowedFields) {
+			t.Fatalf("public distribution point fields = %v, want exactly %v", item, allowedFields)
+		}
+		for field := range item {
+			if !allowedFields[field] {
+				t.Fatalf("public distribution point contains unexpected field %q", field)
+			}
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatalf("marshal distribution point: %v", err)
+		}
+		var point struct {
+			APIKeyID string `json:"api_key_id"`
+			Name     string `json:"name"`
+			Requests int64  `json:"requests"`
+			Tokens   int64  `json:"tokens"`
+		}
+		if err := json.Unmarshal(encoded, &point); err != nil {
+			t.Fatalf("unmarshal distribution point: %v", err)
+		}
+		points[point.APIKeyID] = struct {
+			Name     string
+			Requests int64
+			Tokens   int64
+		}{Name: point.Name, Requests: point.Requests, Tokens: point.Tokens}
+	}
+	if point := points[keyA.ID]; point.Name != keyA.Name || point.Requests != 1 || point.Tokens != 3 {
+		t.Fatalf("key A public point = %+v, want own name and requests/tokens 1/3", point)
+	}
+	if point := points[keyB.ID]; point.Name != keyB.Name || point.Requests != 2 || point.Tokens != 18 {
+		t.Fatalf("key B public point = %+v, want own name and requests/tokens 2/18", point)
+	}
+
+	standaloneRec := httptest.NewRecorder()
+	standaloneContext, _ := gin.CreateTestContext(standaloneRec)
+	standaloneContext.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v0/management/public/usage/chart-data",
+		bytes.NewReader([]byte(`{"api_key":"`+standalone.Key+`","days":7}`)),
+	)
+	standaloneContext.Request.Header.Set("Content-Type", "application/json")
+	h.UsageLogs().GetPublicUsageChartData(standaloneContext)
+	if standaloneRec.Code != http.StatusOK {
+		t.Fatalf("standalone chart status = %d, want %d; body=%s", standaloneRec.Code, http.StatusOK, standaloneRec.Body.String())
+	}
+	var standalonePayload map[string]json.RawMessage
+	if err := json.Unmarshal(standaloneRec.Body.Bytes(), &standalonePayload); err != nil {
+		t.Fatalf("unmarshal standalone chart response: %v", err)
+	}
+	if got := string(standalonePayload["api_key_distribution"]); got != "[]" {
+		t.Fatalf("standalone api_key_distribution = %s, want []", got)
 	}
 }

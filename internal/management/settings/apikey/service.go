@@ -1,25 +1,29 @@
 package apikey
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/enduser"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	internalrouting "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 var (
-	ErrInvalidProfileID          = errors.New("id is required")
-	ErrInvalidProfileName        = errors.New("name is required")
-	ErrMissingValue              = errors.New("missing value")
-	ErrInvalidEntry              = errors.New("invalid api key entry")
-	ErrItemNotFound              = errors.New("item not found")
-	ErrDuplicateKey              = errors.New("api key already exists")
-	ErrMissingKeyOrIndex         = errors.New("missing key or index")
-	ErrKeyRequired               = errors.New("key is required")
-	ErrDailySpendingLimitMissing = errors.New("daily spending limit is not set")
+	ErrInvalidProfileID            = errors.New("id is required")
+	ErrInvalidProfileName          = errors.New("name is required")
+	ErrMissingValue                = errors.New("missing value")
+	ErrInvalidEntry                = errors.New("invalid api key entry")
+	ErrItemNotFound                = errors.New("item not found")
+	ErrDuplicateKey                = errors.New("api key already exists")
+	ErrMissingKeyOrIndex           = errors.New("missing key or index")
+	ErrKeyRequired                 = errors.New("key is required")
+	ErrDailySpendingLimitMissing   = errors.New("daily spending limit is not set")
+	ErrOwnedKeyAccountManagedField = errors.New("owned key account-managed field cannot be changed")
 )
 
 type ChannelSanitizer func([]string) ([]string, error)
@@ -37,22 +41,23 @@ type Service struct {
 }
 
 type EntryPatch struct {
-	Key                  *string   `json:"key"`
-	Name                 *string   `json:"name"`
-	Disabled             *bool     `json:"disabled"`
-	PermissionProfileID  *string   `json:"permission-profile-id"`
-	DailyLimit           *int      `json:"daily-limit"`
-	TotalQuota           *int      `json:"total-quota"`
-	SpendingLimit        *float64  `json:"spending-limit"`
-	DailySpendingLimit   *float64  `json:"daily-spending-limit"`
-	ConcurrencyLimit     *int      `json:"concurrency-limit"`
-	RPMLimit             *int      `json:"rpm-limit"`
-	TPMLimit             *int      `json:"tpm-limit"`
-	AllowedModels        *[]string `json:"allowed-models"`
-	AllowedChannels      *[]string `json:"allowed-channels"`
-	AllowedChannelGroups *[]string `json:"allowed-channel-groups"`
-	SystemPrompt         *string   `json:"system-prompt"`
-	CreatedAt            *string   `json:"created-at"`
+	Key                  *string                          `json:"key"`
+	Name                 *string                          `json:"name"`
+	Disabled             *bool                            `json:"disabled"`
+	PermissionProfileID  *string                          `json:"permission-profile-id"`
+	DailyLimit           *int                             `json:"daily-limit"`
+	TotalQuota           *int                             `json:"total-quota"`
+	SpendingLimit        *float64                         `json:"spending-limit"`
+	DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+	PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
+	ConcurrencyLimit     *int                             `json:"concurrency-limit"`
+	RPMLimit             *int                             `json:"rpm-limit"`
+	TPMLimit             *int                             `json:"tpm-limit"`
+	AllowedModels        *[]string                        `json:"allowed-models"`
+	AllowedChannels      *[]string                        `json:"allowed-channels"`
+	AllowedChannelGroups *[]string                        `json:"allowed-channel-groups"`
+	SystemPrompt         *string                          `json:"system-prompt"`
+	CreatedAt            *string                          `json:"created-at"`
 	// end_user_id / is_default are intentionally not patchable here; ownership
 	// changes go through end-user owner-scoped APIs only.
 }
@@ -174,11 +179,16 @@ func (s *Service) ReplacePermissionProfiles(profiles []usage.APIKeyPermissionPro
 }
 
 func (s *Service) ReplacePermissionProfilesAndSyncAccounts(profiles []usage.APIKeyPermissionProfileRow) (int64, error) {
+	result, err := s.ReplacePermissionProfilesWithCaps(profiles, true)
+	return result.AppliedCount, err
+}
+
+func (s *Service) ReplacePermissionProfilesWithCaps(profiles []usage.APIKeyPermissionProfileRow, syncAccounts bool) (usage.APIKeyPermissionProfileSyncResult, error) {
 	normalized, err := s.normalizePermissionProfiles(profiles)
 	if err != nil {
-		return 0, err
+		return usage.APIKeyPermissionProfileSyncResult{}, err
 	}
-	return usage.ReplaceAllAPIKeyPermissionProfilesForTenantAndSyncEndUsers(s.tenantID, normalized)
+	return usage.ReplaceAllAPIKeyPermissionProfilesForTenantWithCaps(s.tenantID, normalized, syncAccounts)
 }
 
 func (s *Service) normalizePermissionProfiles(profiles []usage.APIKeyPermissionProfileRow) ([]usage.APIKeyPermissionProfileRow, error) {
@@ -193,6 +203,26 @@ func (s *Service) normalizePermissionProfiles(profiles []usage.APIKeyPermissionP
 		if normalized[idx].Name == "" {
 			return nil, ErrInvalidProfileName
 		}
+		limits, err := quota.NormalizeLimits(normalized[idx].PeriodSpendingLimits)
+		if err != nil {
+			return nil, err
+		}
+		day, err := quota.NormalizeWholeUSD(normalized[idx].DailySpendingLimit)
+		if err != nil {
+			return nil, err
+		}
+		if limits.Day > 0 && day > 0 && limits.Day != day {
+			return nil, quota.ErrPeriodDayLegacyConflict
+		}
+		if day == 0 {
+			day = limits.Day
+		}
+		limits.Day = day
+		if limits.FiveHour > 0 && !usage.FiveHourQuotaProjectionReady() {
+			return nil, enduser.ErrFiveHourProjectionWarming
+		}
+		normalized[idx].DailySpendingLimit = day
+		normalized[idx].PeriodSpendingLimits = limits
 		if s != nil && s.sanitizeChannels != nil {
 			cleaned, err := s.sanitizeChannels(normalized[idx].AllowedChannels)
 			if err != nil {
@@ -301,17 +331,13 @@ func (s *Service) attachDailySpendingRuntime(entries []config.APIKeyEntry, rows 
 	if len(entries) == 0 || len(rows) == 0 {
 		return nil
 	}
-	rawCosts, err := usage.QueryRawTodayCostsByKeysForTenant(s.tenantID, rows)
-	if err != nil {
-		return err
-	}
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if id := strings.TrimSpace(row.ID); id != "" {
 			ids = append(ids, id)
 		}
 	}
-	baselines, err := usage.ListDailySpendingResetBaselines(s.tenantID, ids)
+	usedByID, err := usage.QueryPeriodSpendingByAPIKeyIDsForTenant(s.tenantID, ids)
 	if err != nil {
 		return err
 	}
@@ -321,30 +347,13 @@ func (s *Service) attachDailySpendingRuntime(entries []config.APIKeyEntry, rows 
 	}
 	for i := range entries {
 		id := strings.TrimSpace(rows[i].ID)
-		key := strings.TrimSpace(rows[i].Key)
-		raw := 0.0
-		if id != "" {
-			if v, ok := rawCosts[id]; ok {
-				raw = v
-			} else if v, ok := rawCosts[key]; ok {
-				raw = v
-			}
-		} else if v, ok := rawCosts[key]; ok {
-			raw = v
-		}
-		baseline := 0.0
-		if id != "" {
-			baseline = baselines[id]
-		}
-		used := raw - baseline
-		if used < 0 {
-			used = 0
-		}
-		entries[i].DailySpendingUsed = used
-		entries[i].DailySpendingRemaining = usage.DailySpendingRemaining(entries[i].DailySpendingLimit, used)
-		if id != "" {
-			entries[i].DailySpendingResetCount = counts[id]
-		}
+		used := usedByID[id]
+		entries[i].PeriodSpendingLimits.Day = entries[i].DailySpendingLimit
+		entries[i].DailySpendingUsed = used.Day
+		entries[i].LifetimeSpendingUsed = used.Lifetime
+		entries[i].PeriodSpending = quota.BuildPeriodSpending(entries[i].PeriodSpendingLimits, used)
+		entries[i].DailySpendingRemaining = usage.DailySpendingRemaining(entries[i].DailySpendingLimit, used.Day)
+		entries[i].DailySpendingResetCount = counts[id]
 	}
 	return nil
 }
@@ -424,6 +433,24 @@ func (s *Service) ListDailySpendingResetHistory(id *string, match *string, limit
 func (s *Service) ReplaceEntries(entries []config.APIKeyEntry) error {
 	rows := make([]usage.APIKeyRow, 0, len(entries))
 	for _, entry := range entries {
+		existing := usage.GetAPIKeyByIDForTenant(s.tenantID, strings.TrimSpace(entry.ID))
+		if existing == nil {
+			existing = usage.GetAPIKeyForTenant(s.tenantID, strings.TrimSpace(entry.Key))
+		}
+		if existing != nil && strings.TrimSpace(existing.EndUserID) != "" {
+			if entry.PermissionProfileID != "" || entry.DailyLimit != 0 || entry.TotalQuota != 0 || entry.SpendingLimit != 0 ||
+				entry.ConcurrencyLimit != 0 || entry.RPMLimit != 0 || entry.TPMLimit != 0 || len(entry.AllowedModels) != 0 ||
+				len(entry.AllowedChannels) != 0 || len(entry.AllowedChannelGroups) != 0 || entry.SystemPrompt != "" {
+				return ErrOwnedKeyAccountManagedField
+			}
+			incoming := entry.PeriodSpendingLimits
+			incoming.Day = entry.DailySpendingLimit
+			if incoming != existing.PeriodSpendingLimits {
+				return fmt.Errorf("%w: update owned key period limits with PATCH", ErrInvalidEntry)
+			}
+			entry.EndUserID = existing.EndUserID
+			entry.IsDefault = existing.IsDefault
+		}
 		normalized, err := s.prepareEntryForSave(entry)
 		if err != nil {
 			return err
@@ -439,6 +466,16 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 		return ErrItemNotFound
 	}
 	entry := *existing
+	owned := strings.TrimSpace(existing.EndUserID) != ""
+	if owned && (patch.PermissionProfileID != nil || patch.DailyLimit != nil || patch.TotalQuota != nil ||
+		patch.SpendingLimit != nil || patch.ConcurrencyLimit != nil || patch.RPMLimit != nil || patch.TPMLimit != nil ||
+		patch.AllowedModels != nil || patch.AllowedChannels != nil || patch.AllowedChannelGroups != nil || patch.SystemPrompt != nil) {
+		return ErrOwnedKeyAccountManagedField
+	}
+	periodPatch, err := quota.ResolveLegacyDay(patch.DailySpendingLimit, patch.PeriodSpendingLimits)
+	if err != nil {
+		return err
+	}
 	originalKey := strings.TrimSpace(entry.Key)
 	originalID := strings.TrimSpace(entry.ID)
 
@@ -467,8 +504,9 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 	if patch.SpendingLimit != nil {
 		entry.SpendingLimit = *patch.SpendingLimit
 	}
-	if patch.DailySpendingLimit != nil {
-		entry.DailySpendingLimit = *patch.DailySpendingLimit
+	if periodPatch != nil {
+		entry.PeriodSpendingLimits = quota.ApplyPatch(entry.PeriodSpendingLimits, periodPatch)
+		entry.DailySpendingLimit = entry.PeriodSpendingLimits.Day
 	}
 	if patch.ConcurrencyLimit != nil {
 		entry.ConcurrencyLimit = *patch.ConcurrencyLimit
@@ -493,6 +531,23 @@ func (s *Service) PatchEntry(id *string, index *int, match *string, patch EntryP
 	}
 	if patch.CreatedAt != nil {
 		entry.CreatedAt = strings.TrimSpace(*patch.CreatedAt)
+	}
+
+	if owned && (patch.Name != nil || periodPatch != nil) {
+		if patch.Key != nil || patch.Disabled != nil || patch.CreatedAt != nil {
+			return fmt.Errorf("%w: update owned key name/period separately from key state", ErrInvalidEntry)
+		}
+		svc := enduser.Default()
+		if svc == nil && usage.RuntimeDB() != nil {
+			svc = enduser.NewService(usage.RuntimeDB())
+		}
+		if svc == nil {
+			return fmt.Errorf("%w: end user service unavailable", ErrInvalidEntry)
+		}
+		if err := svc.UpdateKey(context.Background(), s.tenantID, existing.EndUserID, existing.ID, patch.Name, periodPatch); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	normalized, err := s.prepareEntryForSave(entry.ToConfigEntry())
@@ -543,6 +598,26 @@ func (s *Service) prepareEntryForSave(entry config.APIKeyEntry) (config.APIKeyEn
 	entry.PermissionProfileID = strings.TrimSpace(entry.PermissionProfileID)
 	entry.SystemPrompt = strings.TrimSpace(entry.SystemPrompt)
 	entry.CreatedAt = strings.TrimSpace(entry.CreatedAt)
+	limits, err := quota.NormalizeLimits(entry.PeriodSpendingLimits)
+	if err != nil {
+		return config.APIKeyEntry{}, err
+	}
+	day, err := quota.NormalizeWholeUSD(entry.DailySpendingLimit)
+	if err != nil {
+		return config.APIKeyEntry{}, err
+	}
+	if limits.Day > 0 && day > 0 && limits.Day != day {
+		return config.APIKeyEntry{}, quota.ErrPeriodDayLegacyConflict
+	}
+	if day == 0 {
+		day = limits.Day
+	}
+	limits.Day = day
+	if limits.FiveHour > 0 && !usage.FiveHourQuotaProjectionReady() {
+		return config.APIKeyEntry{}, enduser.ErrFiveHourProjectionWarming
+	}
+	entry.DailySpendingLimit = day
+	entry.PeriodSpendingLimits = limits
 	entry.AllowedChannelGroups = normalizeChannelGroups(entry.AllowedChannelGroups)
 
 	if s != nil && s.sanitizeChannels != nil {

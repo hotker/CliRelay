@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 )
 
 func TestQuotaMiddlewareEnforcesConcurrencyLimitPerKey(t *testing.T) {
@@ -245,10 +247,95 @@ func resetQuotaMiddlewareState(t *testing.T) {
 	countTotalByKeyFunc = func(string) (int64, error) { return 0, nil }
 	queryTotalCostByKeyFunc = func(string) (float64, error) { return 0, nil }
 	queryTodayCostByKeyFunc = func(string) (float64, error) { return 0, nil }
+	countTodayByEndUserFunc = func(string) (int64, error) { return 0, nil }
+	countTotalByEndUserFunc = func(string) (int64, error) { return 0, nil }
+	queryTotalCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
+	queryTodayCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
+	queryPeriodByKeyFunc = func(string, string) (quota.PeriodSpendingUsage, error) { return quota.PeriodSpendingUsage{}, nil }
+	queryPeriodByEndUserFunc = func(string, string) (quota.PeriodSpendingUsage, error) { return quota.PeriodSpendingUsage{}, nil }
 	t.Cleanup(func() {
 		countTodayByKeyFunc = func(string) (int64, error) { return 0, nil }
 		countTotalByKeyFunc = func(string) (int64, error) { return 0, nil }
 		queryTotalCostByKeyFunc = func(string) (float64, error) { return 0, nil }
 		queryTodayCostByKeyFunc = func(string) (float64, error) { return 0, nil }
+		countTodayByEndUserFunc = func(string) (int64, error) { return 0, nil }
+		countTotalByEndUserFunc = func(string) (int64, error) { return 0, nil }
+		queryTotalCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
+		queryTodayCostByEndUserFunc = func(string) (float64, error) { return 0, nil }
+		queryPeriodByKeyFunc = func(string, string) (quota.PeriodSpendingUsage, error) { return quota.PeriodSpendingUsage{}, nil }
+		queryPeriodByEndUserFunc = func(string, string) (quota.PeriodSpendingUsage, error) { return quota.PeriodSpendingUsage{}, nil }
 	})
+}
+
+func TestQuotaMiddlewareRejectsAccountAndKeyPeriodScopesSeparately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name        string
+		accountUsed float64
+		keyUsed     float64
+		wantScope   string
+	}{
+		{name: "account ceiling", accountUsed: 100, keyUsed: 10, wantScope: "account"},
+		{name: "key sub quota", accountUsed: 10, keyUsed: 20, wantScope: "key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetQuotaMiddlewareState(t)
+			queryPeriodByEndUserFunc = func(tenantID, endUserID string) (quota.PeriodSpendingUsage, error) {
+				return quota.PeriodSpendingUsage{Day: tc.accountUsed}, nil
+			}
+			queryPeriodByKeyFunc = func(tenantID, apiKeyID string) (quota.PeriodSpendingUsage, error) {
+				return quota.PeriodSpendingUsage{Day: tc.keyUsed}, nil
+			}
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set("apiKey", "sk-period")
+				c.Set("accessMetadata", map[string]string{
+					"tenant-id": "tenant-a", "end-user-id": "user-a", "api-key-id": "key-a",
+					"account-period-spending-limit-day": "100", "key-period-spending-limit-day": "20",
+				})
+				c.Next()
+			})
+			router.Use(QuotaMiddleware())
+			router.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, newQuotaPostRequest("sk-period"))
+			if recorder.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429; body=%s", recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("X-CliRelay-Quota-Scope"); got != tc.wantScope {
+				t.Fatalf("scope = %q, want %q", got, tc.wantScope)
+			}
+			if got := recorder.Header().Get("X-CliRelay-Quota-Period"); got != "day" {
+				t.Fatalf("period = %q, want day", got)
+			}
+		})
+	}
+}
+
+func TestQuotaMiddlewareFailsClosedWhenUsageUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetQuotaMiddlewareState(t)
+	queryPeriodByEndUserFunc = func(string, string) (quota.PeriodSpendingUsage, error) {
+		return quota.PeriodSpendingUsage{}, errors.New("database unavailable")
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("apiKey", "sk-period")
+		c.Set("accessMetadata", map[string]string{
+			"tenant-id": "tenant-a", "end-user-id": "user-a", "api-key-id": "key-a",
+			"account-period-spending-limit-week": "100",
+		})
+		c.Next()
+	})
+	router.Use(QuotaMiddleware())
+	router.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, newQuotaPostRequest("sk-period"))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"quota_usage_unavailable"`) {
+		t.Fatalf("body = %s, want quota_usage_unavailable", recorder.Body.String())
+	}
 }

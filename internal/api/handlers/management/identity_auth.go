@@ -392,19 +392,27 @@ func (h *Handler) GetUsers(c *gin.Context) {
 func (h *Handler) PostUser(c *gin.Context) {
 	principal, _ := principalFromContext(c)
 	var body struct {
-		Username, DisplayName, Password string
-		RoleIDs                         []string `json:"role_ids"`
+		Username    string   `json:"username"`
+		DisplayName string   `json:"display_name"`
+		Password    string   `json:"password"`
+		RoleIDs     []string `json:"role_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	user, err := h.identity().CreateUser(c.Request.Context(), principal, principal.EffectiveTenant.ID, body.Username, body.DisplayName, body.Password, body.RoleIDs)
+	user, initialPassword, err := h.identity().CreateUser(c.Request.Context(), principal, principal.EffectiveTenant.ID, body.Username, body.DisplayName, body.Password, body.RoleIDs)
 	if err != nil {
 		identityError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, user)
+	c.JSON(http.StatusCreated, struct {
+		identity.User
+		InitialPassword string `json:"initial_password,omitempty"`
+	}{
+		User:            user,
+		InitialPassword: initialPassword,
+	})
 }
 
 func (h *Handler) PostUserResetPassword(c *gin.Context) {

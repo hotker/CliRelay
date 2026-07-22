@@ -2,6 +2,7 @@ package management
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/enduser"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -55,8 +58,19 @@ func endUserError(c *gin.Context, err error) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "last_key", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrDuplicateKeyName):
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "duplicate_key_name", "message": err.Error()}})
-	case errors.Is(err, enduser.ErrNotFound):
+	case errors.Is(err, enduser.ErrNotFound), errors.Is(err, apikeysettings.ErrItemNotFound):
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "not_found", "message": err.Error()}})
+	case errors.Is(err, enduser.ErrPeriodDayLegacyConflict):
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
+	case errors.Is(err, enduser.ErrFiveHourProjectionWarming):
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "five_hour_quota_projection_warming", "message": "5-hour quota projection is still warming"}})
+	case func() bool { var target *quota.LimitExceedsAccountError; return errors.As(err, &target) }():
+		var target *quota.LimitExceedsAccountError
+		_ = errors.As(err, &target)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"code": "key_period_limit_exceeds_account", "message": target.Error(),
+			"details": gin.H{"period": target.Period, "key_limit": target.KeyLimit, "account_limit": target.AccountLimit},
+		}})
 	case errors.Is(err, enduser.ErrValidation):
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "validation_failed", "message": err.Error()}})
 	default:
@@ -76,24 +90,24 @@ func (h *Handler) GetEndUsers(c *gin.Context) {
 		endUserError(c, err)
 		return
 	}
-	// Group by tenant then batch-load today costs (avoids per-row N+1).
+	// Group by tenant and batch-load period/lifetime usage and reset counts.
 	byTenant := map[string][]string{}
 	for i := range items {
-		tid := items[i].TenantID
-		byTenant[tid] = append(byTenant[tid], items[i].ID)
+		byTenant[items[i].TenantID] = append(byTenant[items[i].TenantID], items[i].ID)
 	}
-	costs := map[string]float64{}
+	usageByID := map[string]quota.PeriodSpendingUsage{}
 	resetCounts := map[string]int{}
-	for tid, ids := range byTenant {
-		part, usageErr := usage.QueryTodayEffectiveCostsByEndUsersForTenant(tid, ids)
+	profilesByTenant := map[string]map[string]usage.APIKeyPermissionProfileRow{}
+	for tenantID, ids := range byTenant {
+		part, usageErr := usage.QueryPeriodSpendingByEndUsersForTenant(tenantID, ids)
 		if usageErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": usageErr.Error()})
 			return
 		}
 		for id, used := range part {
-			costs[id] = used
+			usageByID[id] = used
 		}
-		countPart, usageErr := usage.ListEndUserDailySpendingResetEventCounts(tid, ids)
+		countPart, usageErr := usage.ListEndUserDailySpendingResetEventCounts(tenantID, ids)
 		if usageErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": usageErr.Error()})
 			return
@@ -101,9 +115,24 @@ func (h *Handler) GetEndUsers(c *gin.Context) {
 		for id, count := range countPart {
 			resetCounts[id] = count
 		}
+		profiles := make(map[string]usage.APIKeyPermissionProfileRow)
+		for _, profile := range usage.ListAPIKeyPermissionProfilesForTenant(tenantID) {
+			profiles[profile.ID] = profile
+		}
+		profilesByTenant[tenantID] = profiles
 	}
 	for i := range items {
-		items[i].DailySpendingUsed = costs[items[i].ID]
+		limits := items[i].PeriodSpendingLimits
+		if profile, ok := profilesByTenant[items[i].TenantID][strings.TrimSpace(items[i].PermissionProfileID)]; ok {
+			limits = profile.PeriodSpendingLimits
+			items[i].DailySpendingLimit = profile.DailySpendingLimit
+		}
+		limits.Day = items[i].DailySpendingLimit
+		items[i].PeriodSpendingLimits = limits
+		used := usageByID[items[i].ID]
+		items[i].DailySpendingUsed = used.Day
+		items[i].LifetimeSpendingUsed = used.Lifetime
+		items[i].PeriodSpending = quota.BuildPeriodSpending(limits, used)
 		items[i].DailySpendingResetCount = resetCounts[items[i].ID]
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
@@ -145,33 +174,44 @@ func (h *Handler) PatchEndUser(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Username             *string   `json:"username"`
-		DisplayName          *string   `json:"display_name"`
-		Password             *string   `json:"password"`
-		Status               *string   `json:"status"`
-		PermissionProfileID  *string   `json:"permission-profile-id"`
-		DailyLimit           *int      `json:"daily-limit"`
-		TotalQuota           *int      `json:"total-quota"`
-		SpendingLimit        *float64  `json:"spending-limit"`
-		DailySpendingLimit   *float64  `json:"daily-spending-limit"`
-		ConcurrencyLimit     *int      `json:"concurrency-limit"`
-		RPMLimit             *int      `json:"rpm-limit"`
-		TPMLimit             *int      `json:"tpm-limit"`
-		AllowedModels        *[]string `json:"allowed-models"`
-		AllowedChannels      *[]string `json:"allowed-channels"`
-		AllowedChannelGroups *[]string `json:"allowed-channel-groups"`
-		SystemPrompt         *string   `json:"system-prompt"`
+		Username             *string                          `json:"username"`
+		DisplayName          *string                          `json:"display_name"`
+		Password             *string                          `json:"password"`
+		Status               *string                          `json:"status"`
+		PermissionProfileID  *string                          `json:"permission-profile-id"`
+		DailyLimit           *int                             `json:"daily-limit"`
+		TotalQuota           *int                             `json:"total-quota"`
+		SpendingLimit        *float64                         `json:"spending-limit"`
+		DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+		PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
+		ConcurrencyLimit     *int                             `json:"concurrency-limit"`
+		RPMLimit             *int                             `json:"rpm-limit"`
+		TPMLimit             *int                             `json:"tpm-limit"`
+		AllowedModels        *[]string                        `json:"allowed-models"`
+		AllowedChannels      *[]string                        `json:"allowed-channels"`
+		AllowedChannelGroups *[]string                        `json:"allowed-channel-groups"`
+		SystemPrompt         *string                          `json:"system-prompt"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	quota := &enduser.QuotaPatch{
+	periodPatch, err := quota.ResolveLegacyDay(body.DailySpendingLimit, body.PeriodSpendingLimits)
+	if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+		endUserError(c, enduser.ErrPeriodDayLegacyConflict)
+		return
+	}
+	if err != nil {
+		endUserError(c, fmt.Errorf("%w: %v", enduser.ErrValidation, err))
+		return
+	}
+	quotaPatch := &enduser.QuotaPatch{
 		PermissionProfileID:  body.PermissionProfileID,
 		DailyLimit:           body.DailyLimit,
 		TotalQuota:           body.TotalQuota,
 		SpendingLimit:        body.SpendingLimit,
-		DailySpendingLimit:   body.DailySpendingLimit,
+		DailySpendingLimit:   nil,
+		PeriodSpendingLimits: periodPatch,
 		ConcurrencyLimit:     body.ConcurrencyLimit,
 		RPMLimit:             body.RPMLimit,
 		TPMLimit:             body.TPMLimit,
@@ -182,13 +222,13 @@ func (h *Handler) PatchEndUser(c *gin.Context) {
 	}
 	// Only pass quota when at least one field is set (avoid no-op patch noise).
 	hasQuota := body.PermissionProfileID != nil || body.DailyLimit != nil || body.TotalQuota != nil ||
-		body.SpendingLimit != nil || body.DailySpendingLimit != nil || body.ConcurrencyLimit != nil ||
+		body.SpendingLimit != nil || periodPatch != nil || body.ConcurrencyLimit != nil ||
 		body.RPMLimit != nil || body.TPMLimit != nil || body.AllowedModels != nil ||
 		body.AllowedChannels != nil || body.AllowedChannelGroups != nil || body.SystemPrompt != nil
 	if !hasQuota {
-		quota = nil
+		quotaPatch = nil
 	}
-	user, err := svc.UpdateUser(c.Request.Context(), principal, effectiveTenantID(c), c.Param("id"), body.Username, body.DisplayName, body.Password, body.Status, quota)
+	user, err := svc.UpdateUser(c.Request.Context(), principal, effectiveTenantID(c), c.Param("id"), body.Username, body.DisplayName, body.Password, body.Status, quotaPatch)
 	if err != nil {
 		endUserError(c, err)
 		return
@@ -258,6 +298,11 @@ func (h *Handler) PostEndUserDailySpendingReset(c *gin.Context) {
 	user, err := svc.GetUser(c.Request.Context(), tenantID, c.Param("id"))
 	if err != nil {
 		endUserError(c, err)
+		return
+	}
+	accountQuota := usage.GetEndUserQuota(user.ID)
+	if accountQuota == nil || usage.EffectiveEndUserQuota(*accountQuota).DailySpendingLimit <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "daily_spending_limit_missing", "message": "Account daily spending limit is unlimited"}})
 		return
 	}
 	usedBefore, rawToday, err := usage.ResetTodayCostByEndUser(tenantID, user.ID)
@@ -390,10 +435,24 @@ func (h *Handler) PostEndUserAPIKey(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name                 string                           `json:"name"`
+		DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+		PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
 	}
-	_ = c.ShouldBindJSON(&body)
-	result, err := svc.CreateKey(c.Request.Context(), effectiveTenantID(c), c.Param("id"), body.Name)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	periodPatch, err := quota.ResolveLegacyDay(body.DailySpendingLimit, body.PeriodSpendingLimits)
+	if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+		endUserError(c, enduser.ErrPeriodDayLegacyConflict)
+		return
+	}
+	if err != nil {
+		endUserError(c, fmt.Errorf("%w: %v", enduser.ErrValidation, err))
+		return
+	}
+	result, err := svc.CreateKeyWithPeriodLimits(c.Request.Context(), effectiveTenantID(c), c.Param("id"), body.Name, periodPatch)
 	if err != nil {
 		endUserError(c, err)
 		return
@@ -417,16 +476,31 @@ func (h *Handler) PatchEndUserAPIKey(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name *string `json:"name"`
+		Name                 *string                          `json:"name"`
+		DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+		PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.Name == nil {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	periodPatch, err := quota.ResolveLegacyDay(body.DailySpendingLimit, body.PeriodSpendingLimits)
+	if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+		endUserError(c, enduser.ErrPeriodDayLegacyConflict)
+		return
+	}
+	if err != nil {
+		endUserError(c, fmt.Errorf("%w: %v", enduser.ErrValidation, err))
+		return
+	}
+	if body.Name == nil && periodPatch == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
 	tenantID := effectiveTenantID(c)
 	userID := c.Param("id")
 	keyID := c.Param("key_id")
-	if err := svc.UpdateKeyName(c.Request.Context(), tenantID, userID, keyID, *body.Name); err != nil {
+	if err := svc.UpdateKey(c.Request.Context(), tenantID, userID, keyID, body.Name, periodPatch); err != nil {
 		endUserError(c, err)
 		return
 	}
@@ -665,10 +739,24 @@ func (h *Handler) PostPortalAPIKey(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name                 string                           `json:"name"`
+		DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+		PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
 	}
-	_ = c.ShouldBindJSON(&body)
-	result, err := h.endUserService().CreateKey(c.Request.Context(), user.TenantID, user.ID, body.Name)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	periodPatch, err := quota.ResolveLegacyDay(body.DailySpendingLimit, body.PeriodSpendingLimits)
+	if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+		endUserError(c, enduser.ErrPeriodDayLegacyConflict)
+		return
+	}
+	if err != nil {
+		endUserError(c, fmt.Errorf("%w: %v", enduser.ErrValidation, err))
+		return
+	}
+	result, err := h.endUserService().CreateKeyWithPeriodLimits(c.Request.Context(), user.TenantID, user.ID, body.Name, periodPatch)
 	if err != nil {
 		endUserError(c, err)
 		return
@@ -686,16 +774,27 @@ func (h *Handler) PatchPortalAPIKey(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name *string `json:"name"`
+		Name                 *string                          `json:"name"`
+		DailySpendingLimit   *float64                         `json:"daily-spending-limit"`
+		PeriodSpendingLimits *quota.PeriodSpendingLimitsPatch `json:"period-spending-limits"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
+	periodPatch, err := quota.ResolveLegacyDay(body.DailySpendingLimit, body.PeriodSpendingLimits)
+	if errors.Is(err, quota.ErrPeriodDayLegacyConflict) {
+		endUserError(c, enduser.ErrPeriodDayLegacyConflict)
+		return
+	}
+	if err != nil {
+		endUserError(c, fmt.Errorf("%w: %v", enduser.ErrValidation, err))
+		return
+	}
 	keyID := c.Param("id")
 	svc := h.endUserService()
-	if body.Name != nil {
-		if err := svc.UpdateKeyName(c.Request.Context(), user.TenantID, user.ID, keyID, *body.Name); err != nil {
+	if body.Name != nil || periodPatch != nil {
+		if err := svc.UpdateKey(c.Request.Context(), user.TenantID, user.ID, keyID, body.Name, periodPatch); err != nil {
 			endUserError(c, err)
 			return
 		}
@@ -749,4 +848,65 @@ func (h *Handler) DeletePortalAPIKey(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) resetOwnedAPIKeyDailySpending(c *gin.Context, tenantID, endUserID, keyID string, actor apikeysettings.DailySpendingResetActor) {
+	if _, err := h.endUserService().ResolveOwnedKeySecret(c.Request.Context(), tenantID, endUserID, keyID); err != nil {
+		endUserError(c, err)
+		return
+	}
+	result, err := h.apiKeySettingsForTenant(tenantID).ResetDailySpending(&keyID, nil, actor)
+	if err != nil {
+		if errors.Is(err, apikeysettings.ErrDailySpendingLimitMissing) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "daily_spending_limit_missing", "message": "Key daily spending limit is unlimited"}})
+			return
+		}
+		endUserError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *Handler) ownedAPIKeyDailySpendingHistory(c *gin.Context, tenantID, endUserID, keyID string) {
+	if _, err := h.endUserService().ResolveOwnedKeySecret(c.Request.Context(), tenantID, endUserID, keyID); err != nil {
+		endUserError(c, err)
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	events, err := h.apiKeySettingsForTenant(tenantID).ListDailySpendingResetHistory(&keyID, nil, limit)
+	if err != nil {
+		endUserError(c, err)
+		return
+	}
+	total, err := usage.CountDailySpendingResetEvents(tenantID, keyID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": events, "total": total})
+}
+
+func (h *Handler) PostEndUserAPIKeyDailySpendingReset(c *gin.Context) {
+	principal, _ := principalFromContext(c)
+	if !principal.Has("api_keys.write") && !principal.Has("end_users.write") && !principal.PlatformAdmin {
+		identityError(c, identity.ErrPermissionDenied)
+		return
+	}
+	h.resetOwnedAPIKeyDailySpending(c, effectiveTenantID(c), c.Param("id"), c.Param("key_id"), apikeysettings.DailySpendingResetActor{
+		UserID: principal.User.ID, Username: principal.User.Username, Kind: principal.Kind,
+	})
+}
+
+func (h *Handler) GetEndUserAPIKeyDailySpendingResetHistory(c *gin.Context) {
+	principal, _ := principalFromContext(c)
+	if !principal.Has("api_keys.read") && !principal.Has("end_users.read") && !principal.PlatformAdmin {
+		identityError(c, identity.ErrPermissionDenied)
+		return
+	}
+	h.ownedAPIKeyDailySpendingHistory(c, effectiveTenantID(c), c.Param("id"), c.Param("key_id"))
 }

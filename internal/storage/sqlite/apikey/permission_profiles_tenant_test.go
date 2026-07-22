@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -94,5 +96,44 @@ func TestPermissionProfilesMigrateToTenantScopedPrimaryKeyAndSyncIsolatedAccount
 		if limit != want.limit {
 			t.Fatalf("%s daily_limit = %d, want %d", want.id, limit, want.limit)
 		}
+	}
+}
+
+func TestPermissionProfileSaveCapsBoundOwnedKeysWithoutSyncAccounts(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	InitTable(db)
+	if _, err := db.Exec(`CREATE TABLE end_users (
+		id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, permission_profile_id TEXT NOT NULL DEFAULT '',
+		daily_limit INTEGER NOT NULL DEFAULT 0, total_quota INTEGER NOT NULL DEFAULT 0,
+		spending_limit REAL NOT NULL DEFAULT 0, daily_spending_limit REAL NOT NULL DEFAULT 0,
+		five_hour_spending_limit REAL NOT NULL DEFAULT 0, weekly_spending_limit REAL NOT NULL DEFAULT 0, monthly_spending_limit REAL NOT NULL DEFAULT 0,
+		concurrency_limit INTEGER NOT NULL DEFAULT 0, rpm_limit INTEGER NOT NULL DEFAULT 0, tpm_limit INTEGER NOT NULL DEFAULT 0,
+		allowed_models TEXT NOT NULL DEFAULT '[]', allowed_channels TEXT NOT NULL DEFAULT '[]', allowed_channel_groups TEXT NOT NULL DEFAULT '[]', system_prompt TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1
+	)`); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	InitPermissionProfilesTable(db)
+	tenantID := "00000000-0000-0000-0000-000000000001"
+	if _, err := db.Exec(`INSERT INTO end_users(id,tenant_id,permission_profile_id,daily_spending_limit) VALUES('user-a',?,'standard',200)`, tenantID); err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	store := NewTenantStore(db, tenantID)
+	if err := store.Upsert(APIKeyRow{ID: "key-a", Key: "sk-a", EndUserID: "user-a", DailySpendingLimit: 200, PeriodSpendingLimits: quota.PeriodSpendingLimits{Day: 200}}); err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	result, err := store.ReplaceAllPermissionProfilesWithCaps([]PermissionProfileRow{{ID: "standard", Name: "Standard", DailySpendingLimit: 100}}, false)
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if result.AppliedCount != 0 || len(result.CappedKeys) != 1 || result.CappedKeys[0].ID != "key-a" || result.CappedKeys[0].Period != quota.PeriodDay || result.CappedKeys[0].From != 200 || result.CappedKeys[0].To != 100 {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := store.GetByID("key-a"); got == nil || got.DailySpendingLimit != 100 {
+		t.Fatalf("stored key = %+v", got)
 	}
 }

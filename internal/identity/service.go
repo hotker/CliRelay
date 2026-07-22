@@ -62,14 +62,6 @@ func NormalizeUsername(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func HashPassword(password string) (string, error) {
-	if len(password) < 12 {
-		return "", fmt.Errorf("%w: password must contain at least 12 characters", ErrValidation)
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	return string(hash), err
-}
-
 func generatedIdentifier(prefix string) string {
 	return prefix + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
@@ -893,56 +885,65 @@ func (s *Service) ListUsers(ctx context.Context, tenantID string) ([]User, error
 	return users, rows.Err()
 }
 
-func (s *Service) CreateUser(ctx context.Context, actor Principal, tenantID, username, displayName, password string, roleIDs []string) (User, error) {
+func (s *Service) CreateUser(ctx context.Context, actor Principal, tenantID, username, displayName, password string, roleIDs []string) (User, string, error) {
 	if !actor.Has("tenant.users.create") && !actor.Has("platform.users.manage") {
-		return User{}, ErrPermissionDenied
+		return User{}, "", ErrPermissionDenied
 	}
 	if err := ensureActorTenantScope(actor, tenantID); err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	if len(roleIDs) > 0 && !actor.Has("tenant.users.assign_roles") && !actor.Has("platform.users.manage") {
-		return User{}, ErrPermissionDenied
+		return User{}, "", ErrPermissionDenied
 	}
 	normalizedUsername := NormalizeUsername(username)
 	displayName = strings.TrimSpace(displayName)
 	if !validIdentifier(normalizedUsername, 128, true) || displayName == "" || len(displayName) > 128 {
-		return User{}, fmt.Errorf("%w: invalid user input", ErrValidation)
+		return User{}, "", fmt.Errorf("%w: invalid user input", ErrValidation)
+	}
+	generatedPassword := ""
+	if strings.TrimSpace(password) == "" {
+		var err error
+		generatedPassword, err = randomPassword()
+		if err != nil {
+			return User{}, "", err
+		}
+		password = generatedPassword
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	userID := uuid.NewString()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO users (id, tenant_id, username, username_normalized, display_name, password_hash, must_change_password, created_by) VALUES (?, ?, ?, ?, ?, ?, true, ?)`, userID, tenantID, strings.TrimSpace(username), normalizedUsername, displayName, hash, actor.User.ID); err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	if err = ensureRolesDelegable(ctx, tx, actor, tenantID, roleIDs); err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	for _, roleID := range roleIDs {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO user_roles (user_id, role_id, created_by) VALUES (?, ?, ?)`, userID, roleID, actor.User.ID); err != nil {
-			return User{}, err
+			return User{}, "", err
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	s.RecordAudit(ctx, AuditEvent{TenantID: tenantID, ActorKind: actor.Kind, ActorUserID: actor.User.ID, ActorSessionID: actor.SessionID, Action: "user.create", ResourceType: "user", ResourceID: userID, Result: "success"})
 	users, err := s.ListUsers(ctx, tenantID)
 	if err != nil {
-		return User{}, err
+		return User{}, "", err
 	}
 	for _, user := range users {
 		if user.ID == userID {
-			return user, nil
+			return user, generatedPassword, nil
 		}
 	}
-	return User{}, sql.ErrNoRows
+	return User{}, "", sql.ErrNoRows
 }
 
 func (s *Service) ResetPassword(ctx context.Context, actor Principal, tenantID, userID, password string) error {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/enduser"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	apikeysettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/apikey"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -66,8 +68,8 @@ func setupEndUserDailySpendingHandlerTest(t *testing.T) (*Handler, identity.Prin
 	now := time.Now().UTC()
 	if _, err := db.Exec(`
 		INSERT INTO end_users (
-			id, tenant_id, username, username_normalized, display_name, password_hash, created_at, updated_at
-		) VALUES (?, ?, 'alice', 'alice', 'Alice', 'unused', ?, ?)
+			id, tenant_id, username, username_normalized, display_name, password_hash, daily_spending_limit, created_at, updated_at
+		) VALUES (?, ?, 'alice', 'alice', 'Alice', 'unused', 100, ?, ?)
 	`, endUserID, tenantID, now, now); err != nil {
 		t.Fatalf("insert end user: %v", err)
 	}
@@ -169,5 +171,33 @@ func TestEndUserDailySpendingResetWritesAndListsHistory(t *testing.T) {
 	}
 	if len(listBody.Items) != 1 || listBody.Items[0].DailySpendingResetCount != 1 || listBody.Items[0].DailySpendingUsed != 0 {
 		t.Fatalf("end-user list = %#v, want reset count=1 used=0", listBody.Items)
+	}
+}
+
+func TestEndUserDailySpendingResetRejectsUnlimitedAccount(t *testing.T) {
+	h, principal, _, endUserID := setupEndUserDailySpendingHandlerTest(t)
+	if _, err := usage.RuntimeDB().Exec(`UPDATE end_users SET daily_spending_limit = 0 WHERE id = ?`, endUserID); err != nil {
+		t.Fatalf("clear limit: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set(managementPrincipalKey, principal)
+	ctx.Params = gin.Params{{Key: "id", Value: endUserID}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/end-users/"+endUserID+"/daily-spending/reset", nil)
+	h.PostEndUserDailySpendingReset(ctx)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"daily_spending_limit_missing"`) {
+		t.Fatalf("status/body = %d %s, want 400 daily_spending_limit_missing", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestEndUserErrorMapsAPIKeySettingsItemNotFoundToNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	endUserError(ctx, apikeysettings.ErrItemNotFound)
+
+	if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), `"code":"not_found"`) {
+		t.Fatalf("status/body = %d %s, want 404 not_found", recorder.Code, recorder.Body.String())
 	}
 }

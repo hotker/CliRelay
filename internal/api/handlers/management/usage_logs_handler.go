@@ -199,7 +199,9 @@ func (h *UsageLogsHandler) GetPublicUsageChartData(c *gin.Context) {
 	service := h.serviceForTenant(subject.TenantID)
 	var payload map[string]any
 	var err error
-	if subject.EndUserID != "" {
+	// Portal session has EndUserID without a presented secret → account label.
+	// Secret lookup (even when the key is owned) must keep key-own-name labeling.
+	if subject.EndUserID != "" && strings.TrimSpace(subject.APIKey) == "" {
 		payload, err = service.PublicChartDataForEndUser(subject.EndUserID, req.Days)
 	} else {
 		payload, err = service.PublicChartData(subject.APIKey, req.Days)

@@ -35,8 +35,25 @@ func RuntimeMigrations() []Migration {
 		{Version: "202607200002_ai_account_shared_subjects", SQL: aiAccountSharedSubjectsSQL},
 		// Append-only history of manual account-level daily spending resets.
 		{Version: "202607210001_end_user_daily_spending_reset_events", SQL: endUserDailySpendingResetEventsSQL},
+		{Version: "202607220001_period_spending_limits", SQL: periodSpendingLimitsSQL},
 	}
 }
+
+const periodSpendingLimitsSQL = `
+ALTER TABLE api_key_permission_profiles ADD COLUMN IF NOT EXISTS five_hour_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE api_key_permission_profiles ADD COLUMN IF NOT EXISTS weekly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE api_key_permission_profiles ADD COLUMN IF NOT EXISTS monthly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS five_hour_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS weekly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE end_users ADD COLUMN IF NOT EXISTS monthly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS five_hour_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS weekly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS monthly_spending_limit DOUBLE PRECISION NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_usage_rollup_tenant_key_quota
+  ON usage_rollup_buckets(tenant_id, bucket_kind, api_key_id, bucket_start);
+CREATE INDEX IF NOT EXISTS idx_usage_rollup_tenant_user_quota
+  ON usage_rollup_buckets(tenant_id, bucket_kind, end_user_id, bucket_start);
+`
 
 const usageRollupBucketsSQL = `
 CREATE TABLE IF NOT EXISTS usage_rollup_buckets (

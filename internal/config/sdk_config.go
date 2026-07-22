@@ -4,6 +4,8 @@
 // debug settings, proxy configuration, and API keys.
 package config
 
+import "github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+
 // SDKConfig represents the application's configuration, loaded from a YAML file.
 type SDKConfig struct {
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
@@ -148,6 +150,13 @@ type APIKeyEntry struct {
 	// unlimited. It resets at the project timezone day boundary. When permission-profile-id
 	// is set, the effective value comes from the permission profile.
 	DailySpendingLimit float64 `yaml:"daily-spending-limit,omitempty" json:"daily-spending-limit,omitempty"`
+
+	// PeriodSpendingLimits contains fixed 5h/day/week/month USD limits. Day mirrors DailySpendingLimit.
+	PeriodSpendingLimits quota.PeriodSpendingLimits `yaml:"period-spending-limits,omitempty" json:"period-spending-limits"`
+
+	// PeriodSpending and LifetimeSpendingUsed are management-list runtime facts.
+	PeriodSpending       []quota.PeriodSpending `yaml:"-" json:"period-spending"`
+	LifetimeSpendingUsed float64                `yaml:"-" json:"lifetime-spending-used"`
 
 	// DailySpendingUsed is the effective project-day USD cost for this key (management list only).
 	// After a same-day manual reset, only costs after the reset baseline count.
