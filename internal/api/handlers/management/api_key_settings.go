@@ -39,11 +39,14 @@ func (h *Handler) refreshAPIKeyCache() error {
 }
 
 func (h *Handler) apiKeySettings(c *gin.Context) *apikeysettings.Service {
+	return h.apiKeySettingsForTenant(effectiveTenantID(c))
+}
+
+func (h *Handler) apiKeySettingsForTenant(tenantID string) *apikeysettings.Service {
 	if h == nil {
-		return apikeysettings.NewService(nil)
+		return apikeysettings.NewService(nil, apikeysettings.WithTenantID(tenantID))
 	}
 
-	tenantID := effectiveTenantID(c)
 	var auths []*coreauth.Auth
 	if h.authManager != nil {
 		auths = h.authManager.ListForTenant(tenantID)

@@ -58,7 +58,7 @@ func endUserError(c *gin.Context, err error) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "last_key", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrDuplicateKeyName):
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "duplicate_key_name", "message": err.Error()}})
-	case errors.Is(err, enduser.ErrNotFound):
+	case errors.Is(err, enduser.ErrNotFound), errors.Is(err, apikeysettings.ErrItemNotFound):
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "not_found", "message": err.Error()}})
 	case errors.Is(err, enduser.ErrPeriodDayLegacyConflict):
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "period_day_legacy_conflict", "message": "daily-spending-limit conflicts with period-spending-limits.day"}})
@@ -855,7 +855,7 @@ func (h *Handler) resetOwnedAPIKeyDailySpending(c *gin.Context, tenantID, endUse
 		endUserError(c, err)
 		return
 	}
-	result, err := h.apiKeySettings(c).ResetDailySpending(&keyID, nil, actor)
+	result, err := h.apiKeySettingsForTenant(tenantID).ResetDailySpending(&keyID, nil, actor)
 	if err != nil {
 		if errors.Is(err, apikeysettings.ErrDailySpendingLimitMissing) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "daily_spending_limit_missing", "message": "Key daily spending limit is unlimited"}})
@@ -878,7 +878,7 @@ func (h *Handler) ownedAPIKeyDailySpendingHistory(c *gin.Context, tenantID, endU
 			limit = parsed
 		}
 	}
-	events, err := h.apiKeySettings(c).ListDailySpendingResetHistory(&keyID, nil, limit)
+	events, err := h.apiKeySettingsForTenant(tenantID).ListDailySpendingResetHistory(&keyID, nil, limit)
 	if err != nil {
 		endUserError(c, err)
 		return
