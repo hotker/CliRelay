@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -19,6 +20,9 @@ CREATE TABLE IF NOT EXISTS api_key_permission_profiles (
   daily_limit            INTEGER NOT NULL DEFAULT 0,
   total_quota            INTEGER NOT NULL DEFAULT 0,
   daily_spending_limit   REAL NOT NULL DEFAULT 0,
+  five_hour_spending_limit REAL NOT NULL DEFAULT 0,
+  weekly_spending_limit  REAL NOT NULL DEFAULT 0,
+  monthly_spending_limit REAL NOT NULL DEFAULT 0,
   concurrency_limit      INTEGER NOT NULL DEFAULT 0,
   rpm_limit              INTEGER NOT NULL DEFAULT 0,
   tpm_limit              INTEGER NOT NULL DEFAULT 0,
@@ -33,21 +37,27 @@ CREATE TABLE IF NOT EXISTS api_key_permission_profiles (
 `
 
 type PermissionProfileRow struct {
-	TenantID             string   `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty"`
-	ID                   string   `json:"id" yaml:"id"`
-	Name                 string   `json:"name" yaml:"name"`
-	DailyLimit           int      `json:"daily-limit" yaml:"daily-limit"`
-	TotalQuota           int      `json:"total-quota" yaml:"total-quota"`
-	DailySpendingLimit   float64  `json:"daily-spending-limit" yaml:"daily-spending-limit"`
-	ConcurrencyLimit     int      `json:"concurrency-limit" yaml:"concurrency-limit"`
-	RPMLimit             int      `json:"rpm-limit" yaml:"rpm-limit"`
-	TPMLimit             int      `json:"tpm-limit" yaml:"tpm-limit"`
-	AllowedModels        []string `json:"allowed-models" yaml:"allowed-models"`
-	AllowedChannels      []string `json:"allowed-channels" yaml:"allowed-channels"`
-	AllowedChannelGroups []string `json:"allowed-channel-groups" yaml:"allowed-channel-groups"`
-	SystemPrompt         string   `json:"system-prompt" yaml:"system-prompt"`
-	CreatedAt            string   `json:"created-at,omitempty" yaml:"created-at,omitempty"`
-	UpdatedAt            string   `json:"updated-at,omitempty" yaml:"updated-at,omitempty"`
+	TenantID             string                     `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty"`
+	ID                   string                     `json:"id" yaml:"id"`
+	Name                 string                     `json:"name" yaml:"name"`
+	DailyLimit           int                        `json:"daily-limit" yaml:"daily-limit"`
+	TotalQuota           int                        `json:"total-quota" yaml:"total-quota"`
+	DailySpendingLimit   float64                    `json:"daily-spending-limit" yaml:"daily-spending-limit"`
+	PeriodSpendingLimits quota.PeriodSpendingLimits `json:"period-spending-limits" yaml:"period-spending-limits"`
+	ConcurrencyLimit     int                        `json:"concurrency-limit" yaml:"concurrency-limit"`
+	RPMLimit             int                        `json:"rpm-limit" yaml:"rpm-limit"`
+	TPMLimit             int                        `json:"tpm-limit" yaml:"tpm-limit"`
+	AllowedModels        []string                   `json:"allowed-models" yaml:"allowed-models"`
+	AllowedChannels      []string                   `json:"allowed-channels" yaml:"allowed-channels"`
+	AllowedChannelGroups []string                   `json:"allowed-channel-groups" yaml:"allowed-channel-groups"`
+	SystemPrompt         string                     `json:"system-prompt" yaml:"system-prompt"`
+	CreatedAt            string                     `json:"created-at,omitempty" yaml:"created-at,omitempty"`
+	UpdatedAt            string                     `json:"updated-at,omitempty" yaml:"updated-at,omitempty"`
+}
+
+type PermissionProfileSyncResult struct {
+	AppliedCount int64             `json:"applied_count"`
+	CappedKeys   []quota.CappedKey `json:"capped-keys,omitempty"`
 }
 
 func InitPermissionProfilesTable(db *sql.DB) {
@@ -60,11 +70,23 @@ func InitPermissionProfilesTable(db *sql.DB) {
 	if _, err := db.Exec("ALTER TABLE api_key_permission_profiles ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 		log.Warnf("sqlite/apikey: migrate api_key_permission_profiles tenant_id: %v", err)
 	}
-	if _, err := db.Exec("ALTER TABLE api_key_permission_profiles ADD COLUMN daily_spending_limit REAL NOT NULL DEFAULT 0"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-		log.Warnf("sqlite/apikey: migrate api_key_permission_profiles daily_spending_limit: %v", err)
+	for _, column := range []string{"daily_spending_limit", "five_hour_spending_limit", "weekly_spending_limit", "monthly_spending_limit"} {
+		if _, err := db.Exec("ALTER TABLE api_key_permission_profiles ADD COLUMN " + column + " REAL NOT NULL DEFAULT 0"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			log.Warnf("sqlite/apikey: migrate api_key_permission_profiles %s: %v", column, err)
+		}
 	}
 	if err := migratePermissionProfilesTenantPrimaryKey(db); err != nil {
 		log.Errorf("sqlite/apikey: migrate api_key_permission_profiles tenant primary key: %v", err)
+	}
+	for _, table := range []string{"end_users", "api_keys"} {
+		for _, column := range []string{"five_hour_spending_limit", "weekly_spending_limit", "monthly_spending_limit"} {
+			if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " REAL NOT NULL DEFAULT 0"); err != nil {
+				message := strings.ToLower(err.Error())
+				if !strings.Contains(message, "duplicate") && !strings.Contains(message, "no such table") {
+					log.Warnf("sqlite/apikey: migrate %s.%s: %v", table, column, err)
+				}
+			}
+		}
 	}
 }
 
@@ -111,6 +133,7 @@ func migratePermissionProfilesTenantPrimaryKey(db *sql.DB) error {
 			tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
 			id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', daily_limit INTEGER NOT NULL DEFAULT 0,
 			total_quota INTEGER NOT NULL DEFAULT 0, daily_spending_limit REAL NOT NULL DEFAULT 0,
+			five_hour_spending_limit REAL NOT NULL DEFAULT 0, weekly_spending_limit REAL NOT NULL DEFAULT 0, monthly_spending_limit REAL NOT NULL DEFAULT 0,
 			concurrency_limit INTEGER NOT NULL DEFAULT 0, rpm_limit INTEGER NOT NULL DEFAULT 0,
 			tpm_limit INTEGER NOT NULL DEFAULT 0, allowed_models TEXT NOT NULL DEFAULT '[]',
 			allowed_channels TEXT NOT NULL DEFAULT '[]', allowed_channel_groups TEXT NOT NULL DEFAULT '[]',
@@ -122,11 +145,11 @@ func migratePermissionProfilesTenantPrimaryKey(db *sql.DB) error {
 	}
 	if _, err = tx.Exec(`
 		INSERT INTO api_key_permission_profiles_tenant_pk (
-			tenant_id, id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit,
+			tenant_id, id, name, daily_limit, total_quota, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit,
 			rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at
 		)
 		SELECT CASE WHEN trim(coalesce(tenant_id, '')) = '' THEN ? ELSE tenant_id END,
-			id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit,
+			id, name, daily_limit, total_quota, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit,
 			rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at
 		FROM api_key_permission_profiles
 	`, systemTenantID); err != nil {
@@ -146,7 +169,7 @@ func (s Store) ListPermissionProfiles() []PermissionProfileRow {
 		return nil
 	}
 
-	rows, err := s.db.Query(`SELECT id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit,
+	rows, err := s.db.Query(`SELECT id, name, daily_limit, total_quota, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit,
 		rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups,
 		system_prompt, created_at, updated_at
 		FROM api_key_permission_profiles WHERE tenant_id = ? ORDER BY created_at ASC, id ASC`, s.tenantID)
@@ -176,31 +199,50 @@ func (s Store) ReplaceAllPermissionProfiles(profiles []PermissionProfileRow) err
 }
 
 func (s Store) ReplaceAllPermissionProfilesAndSyncEndUsers(profiles []PermissionProfileRow) (int64, error) {
-	return s.replaceAllPermissionProfiles(profiles, true)
+	result, err := s.replaceAllPermissionProfiles(profiles, true)
+	return result.AppliedCount, err
 }
 
-func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syncEndUsers bool) (int64, error) {
+func (s Store) ReplaceAllPermissionProfilesWithCaps(profiles []PermissionProfileRow, syncEndUsers bool) (PermissionProfileSyncResult, error) {
+	return s.replaceAllPermissionProfiles(profiles, syncEndUsers)
+}
+
+func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syncEndUsers bool) (PermissionProfileSyncResult, error) {
 	if s.db == nil {
-		return 0, fmt.Errorf("database not initialised")
+		return PermissionProfileSyncResult{}, fmt.Errorf("database not initialised")
+	}
+	for _, table := range []string{"end_users", "api_keys"} {
+		for _, column := range []string{"five_hour_spending_limit", "weekly_spending_limit", "monthly_spending_limit"} {
+			if _, err := s.db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " REAL NOT NULL DEFAULT 0"); err != nil {
+				message := strings.ToLower(err.Error())
+				if !strings.Contains(message, "duplicate") && !strings.Contains(message, "no such table") {
+					return PermissionProfileSyncResult{}, err
+				}
+			}
+		}
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return PermissionProfileSyncResult{}, err
+	}
+	if err := lockBoundEndUsersForProfileUpdate(tx, s.tenantID); err != nil {
+		_ = tx.Rollback()
+		return PermissionProfileSyncResult{}, err
 	}
 
 	if _, err := tx.Exec("DELETE FROM api_key_permission_profiles WHERE tenant_id = ?", s.tenantID); err != nil {
 		_ = tx.Rollback()
-		return 0, err
+		return PermissionProfileSyncResult{}, err
 	}
 
 	stmt, err := tx.Prepare(`INSERT INTO api_key_permission_profiles
-		(tenant_id, id, name, daily_limit, total_quota, daily_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
+		(tenant_id, id, name, daily_limit, total_quota, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit, concurrency_limit, rpm_limit, tpm_limit,
 		 allowed_models, allowed_channels, allowed_channel_groups, system_prompt, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
-		return 0, err
+		return PermissionProfileSyncResult{}, err
 	}
 	defer stmt.Close()
 
@@ -210,15 +252,15 @@ func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syn
 		profile = normalizePermissionProfile(profile)
 		if profile.ID == "" {
 			_ = tx.Rollback()
-			return 0, fmt.Errorf("id is required")
+			return PermissionProfileSyncResult{}, fmt.Errorf("id is required")
 		}
 		if profile.Name == "" {
 			_ = tx.Rollback()
-			return 0, fmt.Errorf("name is required")
+			return PermissionProfileSyncResult{}, fmt.Errorf("name is required")
 		}
 		if _, exists := seen[profile.ID]; exists {
 			_ = tx.Rollback()
-			return 0, fmt.Errorf("duplicate id %q", profile.ID)
+			return PermissionProfileSyncResult{}, fmt.Errorf("duplicate id %q", profile.ID)
 		}
 		seen[profile.ID] = struct{}{}
 		if profile.CreatedAt == "" {
@@ -228,13 +270,13 @@ func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syn
 
 		if _, err := stmt.Exec(
 			s.tenantID, profile.ID, profile.Name, profile.DailyLimit, profile.TotalQuota, profile.DailySpendingLimit,
-			profile.ConcurrencyLimit, profile.RPMLimit, profile.TPMLimit,
+			profile.PeriodSpendingLimits.FiveHour, profile.PeriodSpendingLimits.Week, profile.PeriodSpendingLimits.Month, profile.ConcurrencyLimit, profile.RPMLimit, profile.TPMLimit,
 			mustJSONStringList(profile.AllowedModels), mustJSONStringList(profile.AllowedChannels),
 			mustJSONStringList(profile.AllowedChannelGroups), profile.SystemPrompt,
 			profile.CreatedAt, profile.UpdatedAt,
 		); err != nil {
 			_ = tx.Rollback()
-			return 0, err
+			return PermissionProfileSyncResult{}, err
 		}
 	}
 
@@ -244,19 +286,19 @@ func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syn
 			profile = normalizePermissionProfile(profile)
 			result, syncErr := tx.Exec(`
 				UPDATE end_users SET
-					permission_profile_id = ?, daily_limit = ?, total_quota = ?, spending_limit = 0,
-					daily_spending_limit = ?, concurrency_limit = ?, rpm_limit = ?, tpm_limit = ?,
+					permission_profile_id = ?, daily_limit = ?, total_quota = ?,
+					daily_spending_limit = ?, five_hour_spending_limit = ?, weekly_spending_limit = ?, monthly_spending_limit = ?, concurrency_limit = ?, rpm_limit = ?, tpm_limit = ?,
 					allowed_models = ?, allowed_channels = ?, allowed_channel_groups = ?, system_prompt = ?,
 					updated_at = ?, version = version + 1
 				WHERE tenant_id = ? AND permission_profile_id = ?
 			`, profile.ID, profile.DailyLimit, profile.TotalQuota, profile.DailySpendingLimit,
-				profile.ConcurrencyLimit, profile.RPMLimit, profile.TPMLimit,
+				profile.PeriodSpendingLimits.FiveHour, profile.PeriodSpendingLimits.Week, profile.PeriodSpendingLimits.Month, profile.ConcurrencyLimit, profile.RPMLimit, profile.TPMLimit,
 				mustJSONStringList(profile.AllowedModels), mustJSONStringList(profile.AllowedChannels),
 				mustJSONStringList(profile.AllowedChannelGroups), profile.SystemPrompt,
 				now, s.tenantID, profile.ID)
 			if syncErr != nil {
 				_ = tx.Rollback()
-				return 0, syncErr
+				return PermissionProfileSyncResult{}, syncErr
 			}
 			if rows, rowsErr := result.RowsAffected(); rowsErr == nil {
 				appliedCount += rows
@@ -278,17 +320,117 @@ func (s Store) replaceAllPermissionProfiles(profiles []PermissionProfileRow, syn
 		result, syncErr := tx.Exec(unbindQuery, unbindArgs...)
 		if syncErr != nil {
 			_ = tx.Rollback()
-			return 0, syncErr
+			return PermissionProfileSyncResult{}, syncErr
 		}
 		if rows, rowsErr := result.RowsAffected(); rowsErr == nil {
 			appliedCount += rows
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, err
+	cappedKeys, err := capProfileOwnedKeysTx(tx, s.tenantID, profiles, now)
+	if err != nil {
+		_ = tx.Rollback()
+		return PermissionProfileSyncResult{}, err
 	}
-	return appliedCount, nil
+	if err := tx.Commit(); err != nil {
+		return PermissionProfileSyncResult{}, err
+	}
+	return PermissionProfileSyncResult{AppliedCount: appliedCount, CappedKeys: cappedKeys}, nil
+}
+
+func lockBoundEndUsersForProfileUpdate(tx *sql.Tx, tenantID string) error {
+	query := `SELECT id FROM end_users WHERE tenant_id = ? AND permission_profile_id != '' ORDER BY id ASC FOR UPDATE`
+	rows, err := tx.Query(query, tenantID)
+	if err != nil {
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "no such table") {
+			return nil
+		}
+		if strings.Contains(message, "syntax") || strings.Contains(message, "for update") {
+			rows, err = tx.Query(strings.TrimSuffix(query, " FOR UPDATE"), tenantID)
+		}
+	}
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func capProfileOwnedKeysTx(tx *sql.Tx, tenantID string, profiles []PermissionProfileRow, now string) ([]quota.CappedKey, error) {
+	ceilings := make(map[string]quota.PeriodSpendingLimits, len(profiles))
+	for _, profile := range profiles {
+		profile = normalizePermissionProfile(profile)
+		ceilings[profile.ID] = profile.PeriodSpendingLimits
+	}
+	rows, err := tx.Query(`SELECT k.id, e.permission_profile_id,
+		COALESCE(k.daily_spending_limit,0), COALESCE(k.five_hour_spending_limit,0),
+		COALESCE(k.weekly_spending_limit,0), COALESCE(k.monthly_spending_limit,0)
+		FROM api_keys k JOIN end_users e ON e.id = k.end_user_id AND e.tenant_id = k.tenant_id
+		WHERE k.tenant_id = ? AND e.permission_profile_id != '' ORDER BY k.id ASC`, tenantID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	type item struct {
+		id, profileID string
+		limits        quota.PeriodSpendingLimits
+	}
+	items := make([]item, 0)
+	for rows.Next() {
+		var v item
+		if err := rows.Scan(&v.id, &v.profileID, &v.limits.Day, &v.limits.FiveHour, &v.limits.Week, &v.limits.Month); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		items = append(items, v)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := make([]quota.CappedKey, 0)
+	for _, v := range items {
+		ceiling, ok := ceilings[v.profileID]
+		if !ok {
+			continue
+		}
+		updated := v.limits
+		for _, period := range quota.OrderedPeriods {
+			from, to := updated.Value(period), ceiling.Value(period)
+			if from <= 0 || to <= 0 || from <= to {
+				continue
+			}
+			switch period {
+			case quota.PeriodFiveHour:
+				updated.FiveHour = to
+			case quota.PeriodDay:
+				updated.Day = to
+			case quota.PeriodWeek:
+				updated.Week = to
+			case quota.PeriodMonth:
+				updated.Month = to
+			}
+			out = append(out, quota.CappedKey{ID: v.id, Period: period, From: from, To: to})
+		}
+		if updated != v.limits {
+			if _, err := tx.Exec(`UPDATE api_keys SET daily_spending_limit=?, five_hour_spending_limit=?, weekly_spending_limit=?, monthly_spending_limit=?, updated_at=? WHERE tenant_id=? AND id=?`,
+				updated.Day, updated.FiveHour, updated.Week, updated.Month, now, tenantID, v.id); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
 }
 
 func normalizePermissionProfile(profile PermissionProfileRow) PermissionProfileRow {
@@ -296,7 +438,20 @@ func normalizePermissionProfile(profile PermissionProfileRow) PermissionProfileR
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.DailyLimit = normalizeNonNegativeInt(profile.DailyLimit)
 	profile.TotalQuota = normalizeNonNegativeInt(profile.TotalQuota)
-	profile.DailySpendingLimit = normalizeWholeUSD(profile.DailySpendingLimit)
+	limits, err := quota.NormalizeLimits(profile.PeriodSpendingLimits)
+	if err != nil {
+		limits = quota.PeriodSpendingLimits{}
+	}
+	day, err := quota.NormalizeWholeUSD(profile.DailySpendingLimit)
+	if err != nil {
+		day = 0
+	}
+	if limits.Day > 0 && day == 0 {
+		day = limits.Day
+	}
+	limits.Day = day
+	profile.DailySpendingLimit = day
+	profile.PeriodSpendingLimits = limits
 	profile.ConcurrencyLimit = normalizeNonNegativeInt(profile.ConcurrencyLimit)
 	profile.RPMLimit = normalizeNonNegativeInt(profile.RPMLimit)
 	profile.TPMLimit = normalizeNonNegativeInt(profile.TPMLimit)
@@ -313,7 +468,7 @@ func scanPermissionProfileRow(row scanner) (*PermissionProfileRow, bool) {
 	var channelsJSON string
 	var channelGroupsJSON string
 	if err := row.Scan(
-		&profile.ID, &profile.Name, &profile.DailyLimit, &profile.TotalQuota, &profile.DailySpendingLimit, &profile.ConcurrencyLimit,
+		&profile.ID, &profile.Name, &profile.DailyLimit, &profile.TotalQuota, &profile.DailySpendingLimit, &profile.PeriodSpendingLimits.FiveHour, &profile.PeriodSpendingLimits.Week, &profile.PeriodSpendingLimits.Month, &profile.ConcurrencyLimit,
 		&profile.RPMLimit, &profile.TPMLimit, &modelsJSON, &channelsJSON, &channelGroupsJSON,
 		&profile.SystemPrompt, &profile.CreatedAt, &profile.UpdatedAt,
 	); err != nil {
@@ -322,6 +477,7 @@ func scanPermissionProfileRow(row scanner) (*PermissionProfileRow, bool) {
 		}
 		return nil, false
 	}
+	profile.PeriodSpendingLimits.Day = profile.DailySpendingLimit
 	profile.AllowedModels = decodeJSONStringList(modelsJSON)
 	profile.AllowedChannels = decodeJSONStringList(channelsJSON)
 	profile.AllowedChannelGroups = decodeJSONStringList(channelGroupsJSON)

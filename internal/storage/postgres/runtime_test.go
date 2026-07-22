@@ -11,10 +11,17 @@ import (
 
 func TestRuntimeMigrationsCoverCoreTables(t *testing.T) {
 	migrations := RuntimeMigrations()
-	if len(migrations) != 21 {
-		t.Fatalf("RuntimeMigrations len = %d, want 21", len(migrations))
+	if len(migrations) != 22 {
+		t.Fatalf("RuntimeMigrations len = %d, want 22", len(migrations))
 	}
-	// Latest: append-only account-level daily spending reset history.
+	// Latest: fixed period spending columns.
+	periodSQL := migrations[21].SQL
+	for _, fragment := range []string{"five_hour_spending_limit", "weekly_spending_limit", "monthly_spending_limit"} {
+		if !strings.Contains(periodSQL, fragment) {
+			t.Fatalf("period migration missing %q", fragment)
+		}
+	}
+	// Prior: append-only account-level daily spending reset history.
 	endUserResetEventsSQL := migrations[20].SQL
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS end_user_daily_spending_reset_events",

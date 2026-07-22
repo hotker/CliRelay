@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -210,5 +212,33 @@ func TestOwnedKeyMutationsKeepOneActiveDefault(t *testing.T) {
 	}
 	if got := store.GetByID("default-b"); got == nil || got.Disabled || !got.IsDefault {
 		t.Fatalf("failed replace changed active/default state: %#v", got)
+	}
+}
+
+func TestOwnedKeyStripPreservesPeriodSpendingLimits(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	InitTable(db)
+	store := NewStore(db)
+	limits := quota.PeriodSpendingLimits{FiveHour: 5, Day: 10, Week: 20, Month: 30}
+	if err := store.Upsert(APIKeyRow{
+		ID: "owned-period", Key: "sk-owned-period", EndUserID: "user-a",
+		DailyLimit: 99, SpendingLimit: 1000, DailySpendingLimit: limits.Day, PeriodSpendingLimits: limits,
+		ConcurrencyLimit: 2, RPMLimit: 3, TPMLimit: 4,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got := store.Get("sk-owned-period")
+	if got == nil {
+		t.Fatal("missing owned key")
+	}
+	if got.DailyLimit != 0 || got.SpendingLimit != 0 || got.ConcurrencyLimit != 0 || got.RPMLimit != 0 || got.TPMLimit != 0 {
+		t.Fatalf("account-managed fields were not stripped: %+v", got)
+	}
+	if got.PeriodSpendingLimits != limits || got.DailySpendingLimit != limits.Day {
+		t.Fatalf("period limits = %+v/day=%v, want %+v", got.PeriodSpendingLimits, got.DailySpendingLimit, limits)
 	}
 }

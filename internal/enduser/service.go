@@ -17,27 +17,30 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrAccountDisabled    = errors.New("account disabled")
-	ErrAccountLocked      = errors.New("account locked")
-	ErrLoginCooldowned    = errors.New("login cooldown")
-	ErrMustChangePassword = errors.New("must change password")
-	ErrSessionExpired     = errors.New("session expired")
-	ErrSessionRevoked     = errors.New("session revoked")
-	ErrPermissionDenied   = errors.New("permission denied")
-	ErrTenantScope        = errors.New("tenant scope forbidden")
-	ErrTenantSuspended    = errors.New("tenant suspended")
-	ErrTenantExpired      = errors.New("tenant expired")
-	ErrValidation         = errors.New("validation failed")
-	ErrDuplicateKeyName   = errors.New("duplicate key name")
-	ErrLastKey            = errors.New("cannot delete last api key")
-	ErrNotFound           = errors.New("not found")
+	ErrInvalidCredentials        = errors.New("invalid credentials")
+	ErrAccountDisabled           = errors.New("account disabled")
+	ErrAccountLocked             = errors.New("account locked")
+	ErrLoginCooldowned           = errors.New("login cooldown")
+	ErrMustChangePassword        = errors.New("must change password")
+	ErrSessionExpired            = errors.New("session expired")
+	ErrSessionRevoked            = errors.New("session revoked")
+	ErrPermissionDenied          = errors.New("permission denied")
+	ErrTenantScope               = errors.New("tenant scope forbidden")
+	ErrTenantSuspended           = errors.New("tenant suspended")
+	ErrTenantExpired             = errors.New("tenant expired")
+	ErrValidation                = errors.New("validation failed")
+	ErrDuplicateKeyName          = errors.New("duplicate key name")
+	ErrLastKey                   = errors.New("cannot delete last api key")
+	ErrNotFound                  = errors.New("not found")
+	ErrFiveHourProjectionWarming = errors.New("five hour quota projection warming")
+	ErrPeriodDayLegacyConflict   = errors.New("period day legacy conflict")
 )
 
 const (
@@ -72,7 +75,20 @@ func Default() *Service {
 	return defaultService
 }
 
-func NewService(db *sql.DB) *Service { return &Service{db: db} }
+func NewService(db *sql.DB) *Service {
+	if db != nil {
+		_ = usage.EnsureEndUserQuotaColumns(db)
+		for _, column := range []string{"five_hour_spending_limit", "weekly_spending_limit", "monthly_spending_limit"} {
+			if _, err := db.Exec("ALTER TABLE api_keys ADD COLUMN " + column + " REAL NOT NULL DEFAULT 0"); err != nil {
+				message := strings.ToLower(err.Error())
+				if !strings.Contains(message, "duplicate") && !strings.Contains(message, "no such table") {
+					log.Warnf("enduser: migrate api_keys.%s: %v", column, err)
+				}
+			}
+		}
+	}
+	return &Service{db: db}
+}
 
 func NormalizeUsername(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
@@ -280,7 +296,7 @@ func scanUser(scanner interface{ Scan(dest ...any) error }) (User, error) {
 		&u.MustChangePassword, &lastLogin, &u.FailedLoginCount, &u.LockStage, &lockedUntil,
 		&u.CreatedAt, &u.UpdatedAt, &u.Version,
 		&u.PermissionProfileID, &u.DailyLimit, &u.TotalQuota, &u.SpendingLimit, &u.DailySpendingLimit,
-		&u.ConcurrencyLimit, &u.RPMLimit, &u.TPMLimit,
+		&u.PeriodSpendingLimits.FiveHour, &u.PeriodSpendingLimits.Week, &u.PeriodSpendingLimits.Month, &u.ConcurrencyLimit, &u.RPMLimit, &u.TPMLimit,
 		&modelsJSON, &channelsJSON, &groupsJSON, &u.SystemPrompt,
 	)
 	if err != nil {
@@ -294,6 +310,7 @@ func scanUser(scanner interface{ Scan(dest ...any) error }) (User, error) {
 		t := lockedUntil.Time
 		u.LockedUntil = &t
 	}
+	u.PeriodSpendingLimits.Day = u.DailySpendingLimit
 	u.AllowedModels = decodeJSONStringList(modelsJSON)
 	u.AllowedChannels = decodeJSONStringList(channelsJSON)
 	u.AllowedChannelGroups = decodeJSONStringList(groupsJSON)
@@ -341,6 +358,7 @@ const userSelect = `SELECT id, tenant_id, username, display_name, status, must_c
 	last_login_at, failed_login_count, lock_stage, locked_until, created_at, updated_at, version,
 	COALESCE(permission_profile_id, ''), COALESCE(daily_limit, 0), COALESCE(total_quota, 0),
 	COALESCE(spending_limit, 0), COALESCE(daily_spending_limit, 0),
+	COALESCE(five_hour_spending_limit, 0), COALESCE(weekly_spending_limit, 0), COALESCE(monthly_spending_limit, 0),
 	COALESCE(concurrency_limit, 0), COALESCE(rpm_limit, 0), COALESCE(tpm_limit, 0),
 	COALESCE(allowed_models, '[]'), COALESCE(allowed_channels, '[]'), COALESCE(allowed_channel_groups, '[]'),
 	COALESCE(system_prompt, '')
@@ -475,10 +493,10 @@ func (s *Service) insertDefaultKey(ctx context.Context, tx *sql.Tx, tenantID, en
 	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO api_keys (key, id, name, disabled, end_user_id, is_default, tenant_id, created_at, updated_at,
-			permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit,
+			permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit, five_hour_spending_limit, weekly_spending_limit, monthly_spending_limit,
 			concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt)
 		VALUES (?, ?, ?, 0, ?, true, ?, ?, ?,
-			'', 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', '')
+			'', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', '')
 	`, plain, id, name, endUserID, tenantID, now, now); err != nil {
 		return APIKey{}, "", err
 	}
@@ -554,7 +572,7 @@ func (s *Service) CreateUser(ctx context.Context, actor identity.Principal, tena
 	return result, nil
 }
 
-func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tenantID, userID string, username, displayName, password, status *string, quota *QuotaPatch) (User, error) {
+func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tenantID, userID string, username, displayName, password, status *string, accountQuotaPatch *QuotaPatch) (User, error) {
 	if !actor.Has("end_users.write") && !actor.PlatformAdmin {
 		return User{}, ErrPermissionDenied
 	}
@@ -574,6 +592,30 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 		return User{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var currentProfileID string
+	profileQuery := `SELECT COALESCE(permission_profile_id,'') FROM end_users WHERE id = ? AND tenant_id = ? FOR UPDATE`
+	if err := tx.QueryRowContext(ctx, profileQuery, userID, tenantID).Scan(&currentProfileID); err != nil {
+		if err = tx.QueryRowContext(ctx, strings.TrimSuffix(profileQuery, " FOR UPDATE"), userID, tenantID).Scan(&currentProfileID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return User{}, ErrNotFound
+			}
+			return User{}, err
+		}
+	}
+	var resolvedPeriodPatch *quota.PeriodSpendingLimitsPatch
+	if accountQuotaPatch != nil {
+		resolvedPeriodPatch, err = quotaPkgResolveLegacyDay(accountQuotaPatch.DailySpendingLimit, accountQuotaPatch.PeriodSpendingLimits)
+		if err != nil {
+			return User{}, err
+		}
+		targetProfileID := currentProfileID
+		if accountQuotaPatch.PermissionProfileID != nil {
+			targetProfileID = strings.TrimSpace(*accountQuotaPatch.PermissionProfileID)
+		}
+		if resolvedPeriodPatch != nil && targetProfileID != "" {
+			return User{}, fmt.Errorf("%w: period limits are managed by permission profile %s", ErrValidation, targetProfileID)
+		}
+	}
 
 	if username != nil {
 		base := NormalizeUsername(*username)
@@ -600,7 +642,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 		if err != nil {
 			return User{}, err
 		}
-		sets = append(sets, "password_hash = ?", "must_change_password = false", "password_changed_at = now()",
+		sets = append(sets, "password_hash = ?", "must_change_password = false", "password_changed_at = CURRENT_TIMESTAMP",
 			"failed_login_count = 0", "lock_stage = 0", "locked_until = NULL")
 		args = append(args, hash)
 	}
@@ -615,54 +657,71 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 			sets = append(sets, "failed_login_count = 0", "lock_stage = 0", "locked_until = NULL")
 		}
 	}
-	if quota != nil {
-		if quota.PermissionProfileID != nil {
+	if accountQuotaPatch != nil {
+		if accountQuotaPatch.PermissionProfileID != nil {
 			sets = append(sets, "permission_profile_id = ?")
-			args = append(args, strings.TrimSpace(*quota.PermissionProfileID))
+			args = append(args, strings.TrimSpace(*accountQuotaPatch.PermissionProfileID))
 		}
-		if quota.DailyLimit != nil {
+		if accountQuotaPatch.DailyLimit != nil {
 			sets = append(sets, "daily_limit = ?")
-			args = append(args, clampNonNegInt(*quota.DailyLimit))
+			args = append(args, clampNonNegInt(*accountQuotaPatch.DailyLimit))
 		}
-		if quota.TotalQuota != nil {
+		if accountQuotaPatch.TotalQuota != nil {
 			sets = append(sets, "total_quota = ?")
-			args = append(args, clampNonNegInt(*quota.TotalQuota))
+			args = append(args, clampNonNegInt(*accountQuotaPatch.TotalQuota))
 		}
-		if quota.SpendingLimit != nil {
+		if accountQuotaPatch.SpendingLimit != nil {
 			sets = append(sets, "spending_limit = ?")
-			args = append(args, clampNonNegFloat(*quota.SpendingLimit))
+			args = append(args, clampNonNegFloat(*accountQuotaPatch.SpendingLimit))
 		}
-		if quota.DailySpendingLimit != nil {
-			sets = append(sets, "daily_spending_limit = ?")
-			args = append(args, clampNonNegFloat(*quota.DailySpendingLimit))
+		if resolvedPeriodPatch != nil {
+			if resolvedPeriodPatch.FiveHour != nil {
+				if *resolvedPeriodPatch.FiveHour > 0 && !usage.FiveHourQuotaProjectionReady() {
+					return User{}, ErrFiveHourProjectionWarming
+				}
+				sets = append(sets, "five_hour_spending_limit = ?")
+				args = append(args, *resolvedPeriodPatch.FiveHour)
+			}
+			if resolvedPeriodPatch.Day != nil {
+				sets = append(sets, "daily_spending_limit = ?")
+				args = append(args, *resolvedPeriodPatch.Day)
+			}
+			if resolvedPeriodPatch.Week != nil {
+				sets = append(sets, "weekly_spending_limit = ?")
+				args = append(args, *resolvedPeriodPatch.Week)
+			}
+			if resolvedPeriodPatch.Month != nil {
+				sets = append(sets, "monthly_spending_limit = ?")
+				args = append(args, *resolvedPeriodPatch.Month)
+			}
 		}
-		if quota.ConcurrencyLimit != nil {
+		if accountQuotaPatch.ConcurrencyLimit != nil {
 			sets = append(sets, "concurrency_limit = ?")
-			args = append(args, clampNonNegInt(*quota.ConcurrencyLimit))
+			args = append(args, clampNonNegInt(*accountQuotaPatch.ConcurrencyLimit))
 		}
-		if quota.RPMLimit != nil {
+		if accountQuotaPatch.RPMLimit != nil {
 			sets = append(sets, "rpm_limit = ?")
-			args = append(args, clampNonNegInt(*quota.RPMLimit))
+			args = append(args, clampNonNegInt(*accountQuotaPatch.RPMLimit))
 		}
-		if quota.TPMLimit != nil {
+		if accountQuotaPatch.TPMLimit != nil {
 			sets = append(sets, "tpm_limit = ?")
-			args = append(args, clampNonNegInt(*quota.TPMLimit))
+			args = append(args, clampNonNegInt(*accountQuotaPatch.TPMLimit))
 		}
-		if quota.AllowedModels != nil {
+		if accountQuotaPatch.AllowedModels != nil {
 			sets = append(sets, "allowed_models = ?")
-			args = append(args, encodeJSONStringList(*quota.AllowedModels))
+			args = append(args, encodeJSONStringList(*accountQuotaPatch.AllowedModels))
 		}
-		if quota.AllowedChannels != nil {
+		if accountQuotaPatch.AllowedChannels != nil {
 			sets = append(sets, "allowed_channels = ?")
-			args = append(args, encodeJSONStringList(*quota.AllowedChannels))
+			args = append(args, encodeJSONStringList(*accountQuotaPatch.AllowedChannels))
 		}
-		if quota.AllowedChannelGroups != nil {
+		if accountQuotaPatch.AllowedChannelGroups != nil {
 			sets = append(sets, "allowed_channel_groups = ?")
-			args = append(args, encodeJSONStringList(*quota.AllowedChannelGroups))
+			args = append(args, encodeJSONStringList(*accountQuotaPatch.AllowedChannelGroups))
 		}
-		if quota.SystemPrompt != nil {
+		if accountQuotaPatch.SystemPrompt != nil {
 			sets = append(sets, "system_prompt = ?")
-			args = append(args, *quota.SystemPrompt)
+			args = append(args, *accountQuotaPatch.SystemPrompt)
 		}
 	}
 	if len(sets) == 0 {
@@ -670,7 +729,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 		return s.GetUser(ctx, tenantID, userID)
 	}
 
-	sets = append(sets, "updated_at = now()", "version = version + 1")
+	sets = append(sets, "updated_at = CURRENT_TIMESTAMP", "version = version + 1")
 	args = append(args, userID, tenantID)
 	q := `UPDATE end_users SET ` + strings.Join(sets, ", ") + ` WHERE id = ? AND tenant_id = ?`
 	res, err := tx.ExecContext(ctx, q, args...)
@@ -682,7 +741,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 	}
 	if password != nil && strings.TrimSpace(*password) != "" {
 		if _, err = tx.ExecContext(ctx, `
-			UPDATE end_user_sessions SET revoked_at = now(), revoke_reason = 'password_change'
+			UPDATE end_user_sessions SET revoked_at = CURRENT_TIMESTAMP, revoke_reason = 'password_change'
 			WHERE end_user_id = ? AND revoked_at IS NULL
 		`, userID); err != nil {
 			return User{}, err
@@ -692,16 +751,39 @@ func (s *Service) UpdateUser(ctx context.Context, actor identity.Principal, tena
 	// that would wipe per-key admin disables on re-activate. Auth refuses non-active accounts.
 	if status != nil && *status != "active" {
 		if _, err = tx.ExecContext(ctx, `
-				UPDATE end_user_sessions SET revoked_at = now(), revoke_reason = 'status_change'
+				UPDATE end_user_sessions SET revoked_at = CURRENT_TIMESTAMP, revoke_reason = 'status_change'
 				WHERE end_user_id = ? AND revoked_at IS NULL
 			`, userID); err != nil {
 			return User{}, err
 		}
 	}
+	capped, err := capOwnedKeyPeriodLimitsTx(ctx, tx, tenantID, userID)
+	if err != nil {
+		return User{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return User{}, err
 	}
-	return s.GetUser(ctx, tenantID, userID)
+	updated, err := s.GetUser(ctx, tenantID, userID)
+	if err != nil {
+		return User{}, err
+	}
+	if loaded := usage.GetEndUserQuota(userID); loaded != nil {
+		effective := usage.EffectiveEndUserQuota(*loaded)
+		updated.DailySpendingLimit = effective.DailySpendingLimit
+		updated.PeriodSpendingLimits = effective.PeriodSpendingLimits
+	}
+	updated.CappedKeys = capped
+	if len(capped) > 0 {
+		if audit := identity.Default(); audit != nil {
+			audit.RecordAudit(ctx, identity.AuditEvent{
+				TenantID: tenantID, ActorKind: actor.Kind, ActorUserID: actor.User.ID, ActorSessionID: actor.SessionID,
+				Action: "end_user.period_quota.cap_keys", ResourceType: "end_user", ResourceID: userID, Result: "success",
+				Changes: map[string]any{"capped-keys": capped},
+			})
+		}
+	}
+	return updated, nil
 }
 
 func (s *Service) ResetPassword(ctx context.Context, actor identity.Principal, tenantID, userID, password string) (string, error) {
@@ -736,10 +818,10 @@ func (s *Service) ResetPassword(ctx context.Context, actor identity.Principal, t
 	}
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `
-		UPDATE end_users SET password_hash = ?, must_change_password = true, password_changed_at = now(),
+		UPDATE end_users SET password_hash = ?, must_change_password = true, password_changed_at = CURRENT_TIMESTAMP,
 			failed_login_count = 0, lock_stage = 0, locked_until = NULL,
 			status = CASE WHEN status = 'locked' THEN 'active' ELSE status END,
-			updated_at = now(), version = version + 1
+			updated_at = CURRENT_TIMESTAMP, version = version + 1
 		WHERE id = ? AND tenant_id = ?
 	`, hash, userID, tenantID)
 	if err != nil {
@@ -749,7 +831,7 @@ func (s *Service) ResetPassword(ctx context.Context, actor identity.Principal, t
 		return "", ErrNotFound
 	}
 	if _, err = tx.ExecContext(ctx, `
-		UPDATE end_user_sessions SET revoked_at = now(), revoke_reason = 'password_reset'
+		UPDATE end_user_sessions SET revoked_at = CURRENT_TIMESTAMP, revoke_reason = 'password_reset'
 		WHERE end_user_id = ? AND revoked_at IS NULL
 	`, userID); err != nil {
 		return "", err
@@ -787,7 +869,7 @@ func (s *Service) DeleteUser(ctx context.Context, actor identity.Principal, tena
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
-		UPDATE end_user_sessions SET revoked_at = now(), revoke_reason = 'user_deleted'
+		UPDATE end_user_sessions SET revoked_at = CURRENT_TIMESTAMP, revoke_reason = 'user_deleted'
 		WHERE end_user_id = ? AND revoked_at IS NULL
 	`, userID); err != nil {
 		return err
@@ -838,7 +920,8 @@ func (s *Service) ListKeys(ctx context.Context, tenantID, endUserID string) ([]A
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, end_user_id, key, name, disabled, COALESCE(is_default, false),
-			COALESCE(created_at, ''), COALESCE(updated_at, '')
+			COALESCE(created_at, ''), COALESCE(updated_at, ''),
+			COALESCE(daily_spending_limit, 0), COALESCE(five_hour_spending_limit, 0), COALESCE(weekly_spending_limit, 0), COALESCE(monthly_spending_limit, 0)
 		FROM api_keys WHERE tenant_id = ? AND end_user_id = ? AND disabled = 0
 		ORDER BY is_default DESC, created_at ASC
 	`, tenantID, endUserID)
@@ -847,101 +930,52 @@ func (s *Service) ListKeys(ctx context.Context, tenantID, endUserID string) ([]A
 	}
 	defer rows.Close()
 	out := make([]APIKey, 0)
+	ids := make([]string, 0)
 	for rows.Next() {
 		var k APIKey
-		var endUserID sql.NullString
+		var ownerID sql.NullString
 		var disabledInt int
 		var isDefault bool
-		if err := rows.Scan(&k.ID, &k.TenantID, &endUserID, &k.Key, &k.Name, &disabledInt, &isDefault, &k.CreatedAt, &k.UpdatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.TenantID, &ownerID, &k.Key, &k.Name, &disabledInt, &isDefault, &k.CreatedAt, &k.UpdatedAt, &k.DailySpendingLimit, &k.PeriodSpendingLimits.FiveHour, &k.PeriodSpendingLimits.Week, &k.PeriodSpendingLimits.Month); err != nil {
 			return nil, err
 		}
-		if endUserID.Valid {
-			k.EndUserID = endUserID.String
+		if ownerID.Valid {
+			k.EndUserID = ownerID.String
 		}
 		k.Disabled = disabledInt != 0
+		k.PeriodSpendingLimits.Day = k.DailySpendingLimit
 		k.IsDefault = isDefault
 		k.KeyMasked = MaskAPIKey(k.Key)
 		k.Key = "" // never list full secret
 		out = append(out, k)
+		ids = append(ids, k.ID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if usage.RuntimeDB() == nil {
+		return out, nil
+	}
+	usedByID, err := usage.QueryPeriodSpendingByAPIKeyIDsForTenant(tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	resetCounts, err := usage.ListDailySpendingResetEventCounts(tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		used := usedByID[out[i].ID]
+		out[i].DailySpendingUsed = used.Day
+		out[i].LifetimeSpendingUsed = used.Lifetime
+		out[i].PeriodSpending = quota.BuildPeriodSpending(out[i].PeriodSpendingLimits, used)
+		out[i].DailySpendingResetCount = resetCounts[out[i].ID]
+	}
+	return out, nil
 }
 
 func (s *Service) CreateKey(ctx context.Context, tenantID, endUserID, name string) (CreateKeyResult, error) {
-	var result CreateKeyResult
-	if err := requireUUID(tenantID); err != nil {
-		return result, err
-	}
-	if err := requireUUID(endUserID); err != nil {
-		return result, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return result, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var status string
-	if err = tx.QueryRowContext(ctx, `
-		SELECT status FROM end_users WHERE id = ? AND tenant_id = ? FOR UPDATE
-	`, endUserID, tenantID).Scan(&status); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return result, ErrNotFound
-		}
-		// SQLite may not support FOR UPDATE; retry without lock.
-		if err2 := tx.QueryRowContext(ctx, `SELECT status FROM end_users WHERE id = ? AND tenant_id = ?`, endUserID, tenantID).Scan(&status); err2 != nil {
-			if errors.Is(err2, sql.ErrNoRows) {
-				return result, ErrNotFound
-			}
-			return result, err2
-		}
-	}
-	if status != "active" {
-		return result, fmt.Errorf("%w: cannot create api key for non-active end user", ErrValidation)
-	}
-	var count int
-	_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys WHERE tenant_id = ? AND end_user_id = ? AND disabled = 0`, tenantID, endUserID).Scan(&count)
-	isDefault := count == 0
-	var plain string
-	for attempt := 0; attempt < 8; attempt++ {
-		plain, err = GenerateAPIKey()
-		if err != nil {
-			return result, err
-		}
-		var exists int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys WHERE key = ?`, plain).Scan(&exists); err != nil {
-			return result, err
-		}
-		if exists == 0 {
-			break
-		}
-	}
-	id := uuid.NewString()
-	now := time.Now().UTC().Format(time.RFC3339)
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return result, fmt.Errorf("%w: key name is required", ErrValidation)
-	}
-	if err = ensureUniqueKeyName(ctx, tx, tenantID, endUserID, name, ""); err != nil {
-		return result, err
-	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO api_keys (key, id, name, disabled, end_user_id, is_default, tenant_id, created_at, updated_at,
-			permission_profile_id, daily_limit, total_quota, spending_limit, daily_spending_limit,
-			concurrency_limit, rpm_limit, tpm_limit, allowed_models, allowed_channels, allowed_channel_groups, system_prompt)
-		VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?,
-			'', 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', '')
-	`, plain, id, name, endUserID, isDefault, tenantID, now, now); err != nil {
-		return result, err
-	}
-	if err = tx.Commit(); err != nil {
-		return result, err
-	}
-	result.APIKey = APIKey{
-		ID: id, TenantID: tenantID, EndUserID: endUserID, Name: name, IsDefault: isDefault,
-		KeyMasked: MaskAPIKey(plain), CreatedAt: now, UpdatedAt: now,
-	}
-	result.PlaintextKey = plain
-	return result, nil
+	return s.CreateKeyWithPeriodLimits(ctx, tenantID, endUserID, name, nil)
 }
 
 func (s *Service) SetDefaultKey(ctx context.Context, tenantID, endUserID, keyID string) error {
@@ -973,31 +1007,7 @@ func (s *Service) SetDefaultKey(ctx context.Context, tenantID, endUserID, keyID 
 }
 
 func (s *Service) UpdateKeyName(ctx context.Context, tenantID, endUserID, keyID, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("%w: name required", ErrValidation)
-	}
-	if err := requireUUID(tenantID); err != nil {
-		return err
-	}
-	if err := requireUUID(endUserID); err != nil {
-		return err
-	}
-	if err := requireUUID(keyID); err != nil {
-		return err
-	}
-	if err := ensureUniqueKeyName(ctx, s.db, tenantID, endUserID, name, keyID); err != nil {
-		return err
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET name = ?, updated_at = ? WHERE tenant_id = ? AND end_user_id = ? AND id = ? AND disabled = 0`,
-		name, time.Now().UTC().Format(time.RFC3339), tenantID, endUserID, keyID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.UpdateKey(ctx, tenantID, endUserID, keyID, &name, nil)
 }
 
 // ensureUniqueKeyName rejects case-insensitive name collisions within one end user.

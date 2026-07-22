@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 )
 
 // EndUserQuota is the account-level limit/permission snapshot used by auth + quota.
@@ -19,6 +21,7 @@ type EndUserQuota struct {
 	TotalQuota           int
 	SpendingLimit        float64
 	DailySpendingLimit   float64
+	PeriodSpendingLimits quota.PeriodSpendingLimits
 	ConcurrencyLimit     int
 	RPMLimit             int
 	TPMLimit             int
@@ -56,6 +59,7 @@ func GetEndUserQuota(endUserID string) *EndUserQuota {
 		SELECT id, tenant_id, display_name, COALESCE(status, 'active'),
 			COALESCE(permission_profile_id, ''), COALESCE(daily_limit, 0), COALESCE(total_quota, 0),
 			COALESCE(spending_limit, 0), COALESCE(daily_spending_limit, 0),
+			COALESCE(five_hour_spending_limit, 0), COALESCE(weekly_spending_limit, 0), COALESCE(monthly_spending_limit, 0),
 			COALESCE(concurrency_limit, 0), COALESCE(rpm_limit, 0), COALESCE(tpm_limit, 0),
 			COALESCE(allowed_models, '[]'), COALESCE(allowed_channels, '[]'), COALESCE(allowed_channel_groups, '[]'),
 			COALESCE(system_prompt, '')
@@ -64,12 +68,30 @@ func GetEndUserQuota(endUserID string) *EndUserQuota {
 		&q.ID, &q.TenantID, &q.DisplayName, &q.Status,
 		&q.PermissionProfileID, &q.DailyLimit, &q.TotalQuota,
 		&q.SpendingLimit, &q.DailySpendingLimit,
-		&q.ConcurrencyLimit, &q.RPMLimit, &q.TPMLimit,
+		&q.PeriodSpendingLimits.FiveHour, &q.PeriodSpendingLimits.Week, &q.PeriodSpendingLimits.Month, &q.ConcurrencyLimit, &q.RPMLimit, &q.TPMLimit,
 		&modelsJSON, &channelsJSON, &groupsJSON, &q.SystemPrompt,
 	)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "no such column") {
+		err = db.QueryRow(`
+			SELECT id, tenant_id, display_name, COALESCE(status, 'active'),
+				COALESCE(permission_profile_id, ''), COALESCE(daily_limit, 0), COALESCE(total_quota, 0),
+				COALESCE(spending_limit, 0), COALESCE(daily_spending_limit, 0),
+				COALESCE(concurrency_limit, 0), COALESCE(rpm_limit, 0), COALESCE(tpm_limit, 0),
+				COALESCE(allowed_models, '[]'), COALESCE(allowed_channels, '[]'), COALESCE(allowed_channel_groups, '[]'),
+				COALESCE(system_prompt, '')
+			FROM end_users WHERE id = ?
+		`, endUserID).Scan(
+			&q.ID, &q.TenantID, &q.DisplayName, &q.Status,
+			&q.PermissionProfileID, &q.DailyLimit, &q.TotalQuota,
+			&q.SpendingLimit, &q.DailySpendingLimit,
+			&q.ConcurrencyLimit, &q.RPMLimit, &q.TPMLimit,
+			&modelsJSON, &channelsJSON, &groupsJSON, &q.SystemPrompt,
+		)
+	}
 	if err != nil {
 		return nil
 	}
+	q.PeriodSpendingLimits.Day = q.DailySpendingLimit
 	q.AllowedModels = decodeQuotaStringList(modelsJSON)
 	q.AllowedChannels = decodeQuotaStringList(channelsJSON)
 	q.AllowedChannelGroups = decodeQuotaStringList(groupsJSON)
@@ -78,30 +100,7 @@ func GetEndUserQuota(endUserID string) *EndUserQuota {
 
 // EffectiveEndUserQuota merges a permission profile over the end-user row when set.
 func EffectiveEndUserQuota(q EndUserQuota) EndUserQuota {
-	profileID := strings.TrimSpace(q.PermissionProfileID)
-	if profileID == "" {
-		return q
-	}
-	profiles := ListAPIKeyPermissionProfilesForTenant(q.TenantID)
-	for _, profile := range profiles {
-		if strings.TrimSpace(profile.ID) != profileID {
-			continue
-		}
-		q.PermissionProfileID = profileID
-		q.DailyLimit = profile.DailyLimit
-		q.TotalQuota = profile.TotalQuota
-		q.SpendingLimit = 0
-		q.DailySpendingLimit = profile.DailySpendingLimit
-		q.ConcurrencyLimit = profile.ConcurrencyLimit
-		q.RPMLimit = profile.RPMLimit
-		q.TPMLimit = profile.TPMLimit
-		q.AllowedModels = append([]string(nil), profile.AllowedModels...)
-		q.AllowedChannels = append([]string(nil), profile.AllowedChannels...)
-		q.AllowedChannelGroups = append([]string(nil), profile.AllowedChannelGroups...)
-		q.SystemPrompt = profile.SystemPrompt
-		return q
-	}
-	return q
+	return EffectiveEndUserQuotaWithProfiles(q, ListAPIKeyPermissionProfilesForTenant(q.TenantID))
 }
 
 // ListAPIKeyIDsForEndUser returns stable key ids owned by the end user.
@@ -320,6 +319,9 @@ func EnsureEndUserQuotaColumns(db *sql.DB) error {
 		{"total_quota", "INTEGER NOT NULL DEFAULT 0"},
 		{"spending_limit", "REAL NOT NULL DEFAULT 0"},
 		{"daily_spending_limit", "REAL NOT NULL DEFAULT 0"},
+		{"five_hour_spending_limit", "REAL NOT NULL DEFAULT 0"},
+		{"weekly_spending_limit", "REAL NOT NULL DEFAULT 0"},
+		{"monthly_spending_limit", "REAL NOT NULL DEFAULT 0"},
 		{"concurrency_limit", "INTEGER NOT NULL DEFAULT 0"},
 		{"rpm_limit", "INTEGER NOT NULL DEFAULT 0"},
 		{"tpm_limit", "INTEGER NOT NULL DEFAULT 0"},
@@ -340,4 +342,90 @@ func EnsureEndUserQuotaColumns(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// ListEndUserQuotasByIDs batch-loads account quota rows for provider cache rebuilds.
+func ListEndUserQuotasByIDs(endUserIDs []string) (map[string]EndUserQuota, error) {
+	db := getReadDB()
+	if db == nil {
+		return nil, fmt.Errorf("usage: end user quota database unavailable")
+	}
+	ids := dedupeExactStrings(endUserIDs)
+	out := make(map[string]EndUserQuota, len(ids))
+	const chunkSize = 400
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		rows, err := db.Query(`
+			SELECT id, tenant_id, display_name, COALESCE(status, 'active'),
+				COALESCE(permission_profile_id, ''), COALESCE(daily_limit, 0), COALESCE(total_quota, 0),
+				COALESCE(spending_limit, 0), COALESCE(daily_spending_limit, 0),
+				COALESCE(five_hour_spending_limit, 0), COALESCE(weekly_spending_limit, 0), COALESCE(monthly_spending_limit, 0),
+				COALESCE(concurrency_limit, 0), COALESCE(rpm_limit, 0), COALESCE(tpm_limit, 0),
+				COALESCE(allowed_models, '[]'), COALESCE(allowed_channels, '[]'), COALESCE(allowed_channel_groups, '[]'),
+				COALESCE(system_prompt, '')
+			FROM end_users WHERE id IN (`+placeholders(len(chunk))+`)`, stringsToAny(chunk)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var q EndUserQuota
+			var modelsJSON, channelsJSON, groupsJSON string
+			if err := rows.Scan(&q.ID, &q.TenantID, &q.DisplayName, &q.Status,
+				&q.PermissionProfileID, &q.DailyLimit, &q.TotalQuota, &q.SpendingLimit, &q.DailySpendingLimit,
+				&q.PeriodSpendingLimits.FiveHour, &q.PeriodSpendingLimits.Week, &q.PeriodSpendingLimits.Month,
+				&q.ConcurrencyLimit, &q.RPMLimit, &q.TPMLimit,
+				&modelsJSON, &channelsJSON, &groupsJSON, &q.SystemPrompt); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			q.PeriodSpendingLimits.Day = q.DailySpendingLimit
+			q.AllowedModels = decodeQuotaStringList(modelsJSON)
+			q.AllowedChannels = decodeQuotaStringList(channelsJSON)
+			q.AllowedChannelGroups = decodeQuotaStringList(groupsJSON)
+			out[q.ID] = q
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func stringsToAny(values []string) []any {
+	out := make([]any, len(values))
+	for i := range values {
+		out[i] = values[i]
+	}
+	return out
+}
+
+func EffectiveEndUserQuotaWithProfiles(q EndUserQuota, profiles []APIKeyPermissionProfileRow) EndUserQuota {
+	profileID := strings.TrimSpace(q.PermissionProfileID)
+	if profileID == "" {
+		return q
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ID) != profileID {
+			continue
+		}
+		q.PermissionProfileID = profileID
+		q.DailyLimit = profile.DailyLimit
+		q.TotalQuota = profile.TotalQuota
+		q.DailySpendingLimit = profile.DailySpendingLimit
+		q.PeriodSpendingLimits = profile.PeriodSpendingLimits
+		q.PeriodSpendingLimits.Day = q.DailySpendingLimit
+		q.ConcurrencyLimit = profile.ConcurrencyLimit
+		q.RPMLimit = profile.RPMLimit
+		q.TPMLimit = profile.TPMLimit
+		q.AllowedModels = append([]string(nil), profile.AllowedModels...)
+		q.AllowedChannels = append([]string(nil), profile.AllowedChannels...)
+		q.AllowedChannelGroups = append([]string(nil), profile.AllowedChannelGroups...)
+		q.SystemPrompt = profile.SystemPrompt
+		return q
+	}
+	return q
 }

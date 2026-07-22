@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
@@ -392,9 +393,22 @@ func TestGetPublicUsageSummary_AggregatesOwnedBusinessTenantKeys(t *testing.T) {
 	keyA := "sk-business-owned-a"
 	keyB := "sk-business-owned-b"
 	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := usage.RuntimeDB().Exec(`CREATE TABLE IF NOT EXISTS end_users (
+		id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+		permission_profile_id TEXT NOT NULL DEFAULT '', daily_limit INTEGER NOT NULL DEFAULT 0, total_quota INTEGER NOT NULL DEFAULT 0,
+		spending_limit REAL NOT NULL DEFAULT 0, daily_spending_limit REAL NOT NULL DEFAULT 0,
+		five_hour_spending_limit REAL NOT NULL DEFAULT 0, weekly_spending_limit REAL NOT NULL DEFAULT 0, monthly_spending_limit REAL NOT NULL DEFAULT 0,
+		concurrency_limit INTEGER NOT NULL DEFAULT 0, rpm_limit INTEGER NOT NULL DEFAULT 0, tpm_limit INTEGER NOT NULL DEFAULT 0,
+		allowed_models TEXT NOT NULL DEFAULT '[]', allowed_channels TEXT NOT NULL DEFAULT '[]', allowed_channel_groups TEXT NOT NULL DEFAULT '[]', system_prompt TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("create end_users: %v", err)
+	}
+	if _, err := usage.RuntimeDB().Exec(`INSERT INTO end_users(id,tenant_id,display_name,daily_spending_limit) VALUES(?,?,?,300)`, endUserID, tenantID, "Business"); err != nil {
+		t.Fatalf("insert end user: %v", err)
+	}
 	for _, row := range []usage.APIKeyRow{
-		{ID: "00000000-0000-0000-0000-0000000000a1", Key: keyA, Name: "Laptop", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now},
-		{ID: "00000000-0000-0000-0000-0000000000b1", Key: keyB, Name: "Automation", EndUserID: endUserID, CreatedAt: now, UpdatedAt: now},
+		{ID: "00000000-0000-0000-0000-0000000000a1", Key: keyA, Name: "Laptop", EndUserID: endUserID, DailySpendingLimit: 100, PeriodSpendingLimits: quota.PeriodSpendingLimits{Day: 100}, CreatedAt: now, UpdatedAt: now},
+		{ID: "00000000-0000-0000-0000-0000000000b1", Key: keyB, Name: "Automation", EndUserID: endUserID, DailySpendingLimit: 100, PeriodSpendingLimits: quota.PeriodSpendingLimits{Day: 100}, CreatedAt: now, UpdatedAt: now},
 	} {
 		if err := usage.UpsertAPIKeyForTenant(tenantID, row); err != nil {
 			t.Fatalf("UpsertAPIKeyForTenant(%s): %v", row.Key, err)
@@ -419,11 +433,18 @@ func TestGetPublicUsageSummary_AggregatesOwnedBusinessTenantKeys(t *testing.T) {
 		Stats struct {
 			TotalCalls int64 `json:"total_calls"`
 		} `json:"stats"`
+		QuotaScopes []struct {
+			Scope          string                 `json:"scope"`
+			PeriodSpending []quota.PeriodSpending `json:"period-spending"`
+		} `json:"quota-scopes"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !got.Found || got.Stats.TotalCalls != 2 {
 		t.Fatalf("summary = %+v, want found and two account calls", got)
+	}
+	if len(got.QuotaScopes) != 2 || got.QuotaScopes[0].Scope != "account" || got.QuotaScopes[1].Scope != "key" {
+		t.Fatalf("quota scopes = %+v, want account then key", got.QuotaScopes)
 	}
 }

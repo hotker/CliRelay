@@ -6,8 +6,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/quota"
 	sqlapikey "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlite/apikey"
 	_ "modernc.org/sqlite"
 )
@@ -35,8 +38,8 @@ func openEndUserTestDB(t *testing.T) *sql.DB {
 			failed_login_count INTEGER NOT NULL DEFAULT 0,
 			lock_stage INTEGER NOT NULL DEFAULT 0,
 			locked_until TEXT,
-			created_at TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
 			version INTEGER NOT NULL DEFAULT 1,
 			permission_profile_id TEXT NOT NULL DEFAULT '',
 			daily_limit INTEGER NOT NULL DEFAULT 0,
@@ -165,4 +168,40 @@ func TestSetDefaultKeyOnSQLite(t *testing.T) {
 		t.Fatalf("default count = %d, want 1", defaultCount)
 	}
 	_ = a
+}
+
+func TestUpdateUserAutoCapsOwnedKeyPeriodLimits(t *testing.T) {
+	db := openEndUserTestDB(t)
+	svc := NewService(db)
+	ctx := context.Background()
+	tenantID := "00000000-0000-0000-0000-000000000001"
+	userID := uuid.NewString()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`
+		INSERT INTO end_users (id, tenant_id, username, username_normalized, display_name, password_hash, status, daily_spending_limit, created_at, updated_at)
+		VALUES (?, ?, 'cap', 'cap', 'Cap', 'x', 'active', 200, ?, ?)
+	`, userID, tenantID, now, now); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	day := 150.0
+	created, err := svc.CreateKeyWithPeriodLimits(ctx, tenantID, userID, "limited", &quota.PeriodSpendingLimitsPatch{Day: &day})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	newDay := 100.0
+	actor := identity.Principal{EffectiveTenant: identity.Tenant{ID: tenantID}, Permissions: map[string]bool{"end_users.write": true}}
+	updated, err := svc.UpdateUser(ctx, actor, tenantID, userID, nil, nil, nil, nil, &QuotaPatch{PeriodSpendingLimits: &quota.PeriodSpendingLimitsPatch{Day: &newDay}})
+	if err != nil {
+		t.Fatalf("UpdateUser: %v", err)
+	}
+	if len(updated.CappedKeys) != 1 || updated.CappedKeys[0].ID != created.APIKey.ID || updated.CappedKeys[0].Period != quota.PeriodDay || updated.CappedKeys[0].From != 150 || updated.CappedKeys[0].To != 100 {
+		t.Fatalf("capped keys = %+v", updated.CappedKeys)
+	}
+	var stored float64
+	if err := db.QueryRow(`SELECT daily_spending_limit FROM api_keys WHERE id = ?`, created.APIKey.ID).Scan(&stored); err != nil {
+		t.Fatalf("query key: %v", err)
+	}
+	if stored != 100 {
+		t.Fatalf("stored day = %v, want 100", stored)
+	}
 }
