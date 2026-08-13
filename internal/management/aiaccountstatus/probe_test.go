@@ -252,6 +252,26 @@ func TestParseXAIBillingFullSummaryAndPlan(t *testing.T) {
 	}
 }
 
+func TestResolveXAIPlanUsesEntitlementWhenMonthlyLimitIsZero(t *testing.T) {
+	weekly := []byte(`{"config":{"currentPeriod":{"type":"WEEKLY","end":"2026-08-20T00:00:00Z"},"creditUsagePercent":12,"productUsage":[{"product":"grok-code","usagePercent":8}]}}`)
+	zeroMonthly := []byte(`{"config":{"monthlyLimit":{"val":0},"used":{"val":0},"onDemandCap":{"val":0},"billingPeriodEnd":"2026-09-01T00:00:00Z"}}`)
+	if got := resolveXAIPlan(zeroMonthly, weekly); got != "supergrok" {
+		t.Fatalf("zero monthly + weekly entitlement plan=%q, want supergrok", got)
+	}
+	if got := resolveXAIPlan([]byte(`{"config":{"monthlyLimit":{"val":150000}}}`), weekly); got != "supergrok-heavy" {
+		t.Fatalf("legacy heavy monthly plan=%q", got)
+	}
+	if got := resolveXAIPlan([]byte(`{"config":{"planType":"SuperGrok Heavy"}}`), weekly); got != "supergrok-heavy" {
+		t.Fatalf("explicit heavy plan=%q", got)
+	}
+	if got := resolveXAIPlan(weekly); got != "" {
+		t.Fatalf("weekly-only free grok plan=%q, want empty", got)
+	}
+	if got := resolveXAIPlan(zeroMonthly); got != "" {
+		t.Fatalf("zero monthly without weekly plan=%q, want empty", got)
+	}
+}
+
 func TestParseAntigravityModelsSummarizesWorstRemainingAndEarliestReset(t *testing.T) {
 	body := []byte(`{"models":{
 		"gemini-3-pro-high":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2026-07-20T00:00:00Z"}},
