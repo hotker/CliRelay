@@ -400,7 +400,11 @@ func codexIdentityFingerprintMeaningful(fp config.CodexIdentityFingerprintConfig
 		strings.TrimSpace(clean.Version) != "" ||
 		strings.TrimSpace(clean.Originator) != "" ||
 		strings.TrimSpace(clean.WebsocketBeta) != "" ||
-		strings.TrimSpace(clean.SessionMode) != ""
+		strings.TrimSpace(clean.SessionMode) != "" ||
+		strings.TrimSpace(clean.ConvergenceMode) != "" ||
+		strings.TrimSpace(clean.InstallationID) != "" ||
+		clean.TLSFingerprint.Enabled ||
+		strings.TrimSpace(clean.TLSFingerprint.Profile) != ""
 }
 
 func claudeIdentityFingerprintMeaningful(fp config.ClaudeIdentityFingerprintConfig) bool {

@@ -65,8 +65,15 @@ func newProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 	}
 	recordRequestLogEgressRoute(ctx, cfg, auth, proxyURL)
 
+	// A TLS fingerprint transport dials and tunnels on its own, because the
+	// ClientHello has to be emitted by utls rather than by http.Transport. It
+	// therefore replaces the transport selection below instead of wrapping it.
+	if rt := tlsFingerprintRoundTripper(cfg, auth, proxyURL); rt != nil {
+		httpClient.Transport = rt
+	}
+
 	// If we have a proxy URL configured, set up the transport
-	if proxyURL != "" {
+	if proxyURL != "" && httpClient.Transport == nil {
 		transport := cachedProxyTransport(proxyURL, cfgToSDKCfg(cfg))
 		if transport != nil {
 			httpClient.Transport = transport
