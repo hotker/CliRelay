@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/tlsfingerprint"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,6 +17,21 @@ const (
 	DefaultCodexFingerprintWebsocketBeta = "responses_websockets=2026-02-06"
 	DefaultCodexFingerprintBetaFeatures  = ""
 	DefaultCodexFingerprintSessionMode   = "per-request"
+
+	// Codex device fingerprint convergence modes. Upstream counts distinct
+	// installation/session/thread identifiers to derive per-account device and
+	// session quotas, so several people sharing one OAuth account each burn a
+	// separate device slot. Convergence rewrites those identifiers to
+	// account-stable values before the request leaves the proxy.
+	CodexFingerprintConvergenceOff     = "off"
+	CodexFingerprintConvergenceDevice  = "device"
+	CodexFingerprintConvergenceSession = "session"
+	CodexFingerprintConvergenceFull    = "full"
+
+	// DefaultCodexFingerprintConvergenceMode converges installation and session
+	// while keeping one thread per real client session, which is the shape a
+	// single user spawning sub-agents produces upstream.
+	DefaultCodexFingerprintConvergenceMode = CodexFingerprintConvergenceSession
 
 	DefaultClaudeFingerprintCLIVersion              = "2.1.161"
 	DefaultClaudeFingerprintEntrypoint              = "cli"
@@ -53,7 +69,40 @@ type CodexIdentityFingerprintConfig struct {
 	SessionMode   string            `yaml:"session-mode,omitempty" json:"session-mode,omitempty"`
 	SessionID     string            `yaml:"session-id,omitempty" json:"session-id,omitempty"`
 	CustomHeaders map[string]string `yaml:"custom-headers,omitempty" json:"custom-headers,omitempty"`
-	enabledSet    bool
+	// ConvergenceMode selects how aggressively per-client device identifiers are
+	// rewritten to account-stable values: off, device, session or full.
+	ConvergenceMode string `yaml:"convergence-mode,omitempty" json:"convergence-mode,omitempty"`
+	// InstallationID pins the converged x-codex-installation-id. Leave empty to
+	// derive a stable value from the account key; set it to replay an
+	// installation id captured from a real Codex client.
+	InstallationID string `yaml:"installation-id,omitempty" json:"installation-id,omitempty"`
+	// TLSFingerprint shapes the ClientHello sent to the Codex upstream.
+	TLSFingerprint TLSFingerprintConfig `yaml:"tls-fingerprint,omitempty" json:"tls-fingerprint,omitempty"`
+	enabledSet     bool
+}
+
+// TLSFingerprintConfig selects the TLS ClientHello presented to an upstream.
+//
+// This is off by default: a ClientHello that does not match the client the
+// User-Agent claims to be is its own inconsistency, and the correct profile
+// depends on what the operator has verified against the upstream. Turn it on
+// after confirming the profile with a fingerprint echo service.
+type TLSFingerprintConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Profile names a client to imitate: chrome, firefox, safari, edge, ios,
+	// android or randomized. Empty selects the built-in default.
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+}
+
+// CleanTLSFingerprint normalizes a TLS fingerprint block, dropping a profile
+// name that does not identify a known client.
+func CleanTLSFingerprint(in TLSFingerprintConfig) TLSFingerprintConfig {
+	out := in
+	out.Profile = strings.ToLower(strings.TrimSpace(out.Profile))
+	if out.Profile != "" && !tlsfingerprint.IsValidProfile(out.Profile) {
+		out.Profile = ""
+	}
+	return out
 }
 
 // DefaultCodexIdentityFingerprint returns the recommended Codex identity template.
@@ -67,6 +116,20 @@ func DefaultCodexIdentityFingerprint() CodexIdentityFingerprintConfig {
 		BetaFeatures:  DefaultCodexFingerprintBetaFeatures,
 		SessionMode:   DefaultCodexFingerprintSessionMode,
 		CustomHeaders: map[string]string{},
+
+		ConvergenceMode: DefaultCodexFingerprintConvergenceMode,
+	}
+}
+
+// IsValidCodexFingerprintConvergenceMode reports whether mode is one of the
+// four supported convergence strengths.
+func IsValidCodexFingerprintConvergenceMode(mode string) bool {
+	switch mode {
+	case CodexFingerprintConvergenceOff, CodexFingerprintConvergenceDevice,
+		CodexFingerprintConvergenceSession, CodexFingerprintConvergenceFull:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -235,6 +298,9 @@ func NormalizeCodexIdentityFingerprint(in CodexIdentityFingerprintConfig) CodexI
 	if out.SessionMode != "server-stable" && out.SessionMode != "fixed" && out.SessionMode != "per-request" {
 		out.SessionMode = DefaultCodexFingerprintSessionMode
 	}
+	if !IsValidCodexFingerprintConvergenceMode(out.ConvergenceMode) {
+		out.ConvergenceMode = DefaultCodexFingerprintConvergenceMode
+	}
 
 	return out
 }
@@ -253,6 +319,12 @@ func CleanCodexIdentityFingerprint(in CodexIdentityFingerprintConfig) CodexIdent
 	if out.SessionMode != "" && out.SessionMode != "server-stable" && out.SessionMode != "fixed" && out.SessionMode != "per-request" {
 		out.SessionMode = DefaultCodexFingerprintSessionMode
 	}
+	out.ConvergenceMode = strings.TrimSpace(strings.ToLower(out.ConvergenceMode))
+	if out.ConvergenceMode != "" && !IsValidCodexFingerprintConvergenceMode(out.ConvergenceMode) {
+		out.ConvergenceMode = DefaultCodexFingerprintConvergenceMode
+	}
+	out.InstallationID = strings.TrimSpace(out.InstallationID)
+	out.TLSFingerprint = CleanTLSFingerprint(out.TLSFingerprint)
 	out.CustomHeaders = cleanIdentityFingerprintHeaders(out.CustomHeaders)
 	return out
 }
@@ -419,7 +491,9 @@ func defaultXAIIdentityFingerprintEnabled(in XAIIdentityFingerprintConfig) XAIId
 }
 
 func codexLegacyDefaultDisabled(fp CodexIdentityFingerprintConfig) bool {
-	if fp.Enabled || strings.TrimSpace(fp.SessionID) != "" || len(fp.CustomHeaders) > 0 {
+	if fp.Enabled || strings.TrimSpace(fp.SessionID) != "" ||
+		strings.TrimSpace(fp.InstallationID) != "" || fp.TLSFingerprint.Enabled ||
+		strings.TrimSpace(fp.TLSFingerprint.Profile) != "" || len(fp.CustomHeaders) > 0 {
 		return false
 	}
 	defaults := DefaultCodexIdentityFingerprint()
@@ -428,7 +502,8 @@ func codexLegacyDefaultDisabled(fp CodexIdentityFingerprintConfig) bool {
 		emptyOrEqual(fp.Originator, defaults.Originator) &&
 		emptyOrEqual(fp.WebsocketBeta, defaults.WebsocketBeta) &&
 		emptyOrEqual(fp.BetaFeatures, defaults.BetaFeatures) &&
-		emptyOrEqual(fp.SessionMode, defaults.SessionMode)
+		emptyOrEqual(fp.SessionMode, defaults.SessionMode) &&
+		emptyOrEqual(fp.ConvergenceMode, defaults.ConvergenceMode)
 }
 
 func claudeLegacyDefaultDisabled(fp ClaudeIdentityFingerprintConfig) bool {
