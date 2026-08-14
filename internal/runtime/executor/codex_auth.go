@@ -45,6 +45,17 @@ func applyCodexHeaders(r *http.Request, cfg *config.Config, auth *cliproxyauth.A
 		misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", codexUserAgent)
 	}
 
+	// Device fingerprint convergence runs after the client headers above have
+	// been copied in, so it rewrites the values that actually reach upstream.
+	// The executor resolves the id set before translating the body and stores it
+	// on the context; requests that never pass through that path (token probes,
+	// PrepareRequest) resolve their own set here.
+	convergedIDs := codexConvergedIDsFromContext(r.Context())
+	if convergedIDs == nil {
+		convergedIDs = resolveCodexConvergedIDs(cfg, auth, ginHeaders)
+	}
+	applyCodexConvergenceHeaders(r.Header, convergedIDs, ginHeaders)
+
 	// Upstream codex-tui behavior: only attach Session_id when the UA indicates a desktop client.
 	if strings.Contains(r.Header.Get("User-Agent"), "Mac OS") && strings.TrimSpace(r.Header.Get("Session_id")) == "" {
 		r.Header.Set("Session_id", uuid.NewString())
