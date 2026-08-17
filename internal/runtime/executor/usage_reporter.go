@@ -54,6 +54,9 @@ type usageReporter struct {
 
 func newUsageReporter(ctx context.Context, provider, model, upstreamModel string, auth *cliproxyauth.Auth) *usageReporter {
 	apiKey := apiKeyFromContext(ctx)
+	if sameModelIdentity(model, upstreamModel) {
+		upstreamModel = ""
+	}
 	reporter := &usageReporter{
 		provider:           provider,
 		model:              model,
@@ -112,6 +115,14 @@ func (r *usageReporter) setModel(model string) {
 	}
 	if model = strings.TrimSpace(model); model != "" {
 		r.model = model
+		// Keep the invariant that upstream/fallback names recorded on the usage
+		// record are genuinely different models than the logged one.
+		if sameModelIdentity(r.model, r.upstreamModel) {
+			r.upstreamModel = ""
+		}
+		if sameModelIdentity(r.model, r.visionFallbackModel) {
+			r.visionFallbackModel = ""
+		}
 	}
 }
 
@@ -122,11 +133,14 @@ func (r *usageReporter) setThinkingLevel(level string) {
 	r.thinkingLevel = strings.TrimSpace(level)
 }
 
+// setUpstreamModel records the model actually sent upstream. Names that only
+// differ from the requested model by a routing prefix are dropped: see
+// sameModelIdentity for why an alias is not a different model.
 func (r *usageReporter) setUpstreamModel(model string) {
 	if r == nil {
 		return
 	}
-	if model = strings.TrimSpace(model); model != "" {
+	if model = strings.TrimSpace(model); model != "" && !sameModelIdentity(r.model, model) {
 		r.upstreamModel = model
 	}
 }
@@ -135,7 +149,7 @@ func (r *usageReporter) setVisionFallbackModel(model string) {
 	if r == nil {
 		return
 	}
-	if model = strings.TrimSpace(model); model != "" {
+	if model = strings.TrimSpace(model); model != "" && !sameModelIdentity(r.model, model) {
 		r.visionFallbackModel = model
 	}
 }
@@ -327,6 +341,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail coreusage
 	if r == nil {
 		return
 	}
+	detail = applyOllamaPromptCacheEstimate(ctx, detail)
 	if detail.TotalTokens == 0 {
 		total := detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
 		if total > 0 {
