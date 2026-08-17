@@ -49,6 +49,7 @@ type Handler struct {
 	systemStatsCacheMu   sync.Mutex
 	systemStatsCache     systemStatsCacheEntry
 	imageGeneration      *imagegeneration.Service
+	videoGeneration      *imagegeneration.Service
 	identityService      *identity.Service
 	aiAccountStatus      *aiaccountstatus.Service
 }
@@ -81,6 +82,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		trendCache:          make(map[string]trendCacheEntry),
 	}
 	h.imageGeneration = h.newImageGenerationService()
+	h.videoGeneration = h.newVideoGenerationService()
 	return h
 }
 
@@ -103,6 +105,18 @@ func (h *Handler) ensureImageGenerationService() *imagegeneration.Service {
 		h.imageGeneration = h.newImageGenerationService()
 	}
 	return h.imageGeneration
+}
+
+func (h *Handler) ensureVideoGenerationService() *imagegeneration.Service {
+	if h == nil || h.authManager == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.videoGeneration == nil {
+		h.videoGeneration = h.newVideoGenerationService()
+	}
+	return h.videoGeneration
 }
 
 // Close stops background cleanup workers owned by the management handler.

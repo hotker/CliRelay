@@ -68,6 +68,9 @@ var PermissionCatalog = []PermissionSeed{
 	{Code: "image_generation.read", Name: "Read image generation", Scope: "tenant", Resource: "image_generation", Action: "read"},
 	{Code: "image_generation.write", Name: "Write image generation", Scope: "tenant", Resource: "image_generation", Action: "write", Sensitive: true},
 	{Code: "image_generation.test", Name: "Test image generation", Scope: "tenant", Resource: "image_generation", Action: "test", Sensitive: true},
+	{Code: "video_generation.read", Name: "Read video generation", Scope: "tenant", Resource: "video_generation", Action: "read"},
+	{Code: "video_generation.write", Name: "Write video generation", Scope: "tenant", Resource: "video_generation", Action: "write", Sensitive: true},
+	{Code: "video_generation.test", Name: "Test video generation", Scope: "tenant", Resource: "video_generation", Action: "test", Sensitive: true},
 	{Code: "routing.read", Name: "Read routing", Scope: "tenant", Resource: "routing", Action: "read"},
 	{Code: "routing.write", Name: "Write routing", Scope: "tenant", Resource: "routing", Action: "write", Sensitive: true},
 	{Code: "proxies.read", Name: "Read proxies", Scope: "tenant", Resource: "proxies", Action: "read", Sensitive: true},
@@ -123,6 +126,8 @@ func menuCodeForPermission(permission PermissionSeed) string {
 		return "models.catalog"
 	case "image_generation":
 		return "models.image-generation"
+	case "video_generation":
+		return "models.video-generation"
 	case "routing":
 		return "models.channel-groups"
 	case "proxies":
