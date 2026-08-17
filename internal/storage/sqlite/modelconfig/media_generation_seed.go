@@ -7,6 +7,32 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// seedModelChannels lists the provider channels whose static models are seeded
+// into the model library.
+//
+// xai was missing from this list, which is why no Grok model ever reached the
+// library: the catalog knew them, but the library — what the channel-group editor
+// and the pricing table read — did not, so a request for one was rejected with
+// "not in the allowed models of channel group" and the operator had no way to add
+// it from the console.
+func seedModelChannels() []string {
+	return []string{
+		"claude",
+		"gemini",
+		"vertex",
+		"gemini-cli",
+		"aistudio",
+		"codex",
+		"qwen",
+		"iflow",
+		"kimi",
+		"cline",
+		"opencode-go",
+		"antigravity",
+		"xai",
+	}
+}
+
 // applyMediaGenerationSeedDefaults stamps the billing and modality shape a media
 // model needs onto a seed row.
 //

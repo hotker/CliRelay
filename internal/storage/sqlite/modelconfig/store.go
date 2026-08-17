@@ -648,26 +648,7 @@ func NormalizeModelReasoningJSON(value string) string {
 }
 
 func defaultModelConfigRows() []ModelConfigRow {
-	channels := []string{
-		"claude",
-		"gemini",
-		"vertex",
-		"gemini-cli",
-		"aistudio",
-		"codex",
-		"qwen",
-		"iflow",
-		"kimi",
-		"cline",
-		"opencode-go",
-		"antigravity",
-		// xai was missing here, which is why no Grok model ever reached the model
-		// library: the catalog knew them, but the library — what the channel-group
-		// editor and the pricing table read — did not, so a request for one was
-		// rejected with "not in the allowed models of channel group" and the
-		// operator had no way to add it.
-		"xai",
-	}
+	channels := seedModelChannels()
 
 	seen := make(map[string]struct{})
 	rows := make([]ModelConfigRow, 0, 256)

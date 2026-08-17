@@ -50,7 +50,7 @@
       },
       {
         "path": "internal/storage/sqlite/modelconfig/store.go",
-        "max_lines": 946
+        "max_lines": 934
       },
       {
         "path": "internal/usage/ai_account_subject_store.go",
