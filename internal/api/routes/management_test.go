@@ -26,7 +26,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 321; got != want {
+	if got, want := len(routes), 324; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 	if got, want := sortedRouteKeys(routes), expectedManagementRoutes(); !slices.Equal(got, want) {
@@ -72,6 +72,9 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		"GET /v0/management/auth-files/models",
 		"GET /v0/management/image-generation/size-presets",
 		"PUT /v0/management/image-generation/size-presets",
+		"GET /v0/management/video-generation/models",
+		"POST /v0/management/video-generation/test",
+		"GET /v0/management/video-generation/test/:task_id",
 		"GET /v0/management/identity-fingerprint/account",
 		"PUT /v0/management/identity-fingerprint/account/policy",
 		"DELETE /v0/management/identity-fingerprint/account/profile",
@@ -333,6 +336,8 @@ func expectedManagementRoutes() []string {
 		"GET /v0/management/image-generation/channels",
 		"GET /v0/management/image-generation/size-presets",
 		"GET /v0/management/image-generation/test/:task_id",
+		"GET /v0/management/video-generation/models",
+		"GET /v0/management/video-generation/test/:task_id",
 		"GET /v0/management/kimi-auth-url",
 		"GET /v0/management/latest-version",
 		"GET /v0/management/logging-to-file",
@@ -460,6 +465,7 @@ func expectedManagementRoutes() []string {
 		"POST /v0/management/usage/import",
 		"POST /v0/management/update/apply",
 		"POST /v0/management/vertex/import",
+		"POST /v0/management/video-generation/test",
 		"PUT /v0/management/ampcode/force-model-mappings",
 		"PUT /v0/management/ampcode/model-mappings",
 		"PUT /v0/management/ampcode/restrict-management-to-localhost",

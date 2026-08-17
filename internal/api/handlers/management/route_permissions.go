@@ -178,6 +178,14 @@ func permissionForManagementRequest(method, path string) string {
 			return "content_moderation.write"
 		}
 		return "content_moderation.read"
+	case strings.HasPrefix(relative, "/video-generation"):
+		if strings.Contains(relative, "/test") {
+			return "video_generation.test"
+		}
+		if write {
+			return "video_generation.write"
+		}
+		return "video_generation.read"
 	case strings.HasPrefix(relative, "/image-generation"):
 		if strings.Contains(relative, "/test") {
 			return "image_generation.test"

@@ -112,6 +112,7 @@ var MenuCatalog = []MenuSeed{
 	{Code: "models.plaza", ParentCode: "group.models", Type: "menu", Path: "/models/plaza", Component: "model-plaza", LabelKey: "shell.nav_model_plaza", Icon: "store", PermissionCode: "system.status.read", SortOrder: 5},
 	{Code: "models.catalog", ParentCode: "group.models", Type: "menu", Path: "/models/catalog", Component: "models", LabelKey: "shell.nav_models", Icon: "cpu", PermissionCode: "models.read", SortOrder: 10},
 	{Code: "models.image-generation", ParentCode: "group.models", Type: "menu", Path: "/models/image-generation", Component: "image-generation", LabelKey: "shell.nav_image_generation", Icon: "image", PermissionCode: "system.config.read", SortOrder: 20},
+	{Code: "models.video-generation", ParentCode: "group.models", Type: "menu", Path: "/models/video-generation", Component: "video-generation", LabelKey: "shell.nav_video_generation", Icon: "video", PermissionCode: "system.config.read", SortOrder: 25},
 	{Code: "models.channel-groups", ParentCode: "group.models", Type: "menu", Path: "/models/channel-groups", Component: "channel-groups", LabelKey: "shell.nav_channel_groups", Icon: "layers", PermissionCode: "routing.read", SortOrder: 30},
 	{Code: "models.proxies", ParentCode: "group.models", Type: "menu", Path: "/models/proxies", Component: "proxies", LabelKey: "shell.nav_proxies", Icon: "network", PermissionCode: "proxies.read", SortOrder: 40},
 	// Organization
