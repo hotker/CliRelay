@@ -161,6 +161,7 @@ func InitTables(db *sql.DB) {
 	seedDefaultModelConfigRows(db)
 	mergeLegacyPricingIntoModelConfigs(db)
 	repairDefaultPerCallModelConfigRows(db)
+	repairMediaGenerationModelConfigRows(db)
 }
 
 func NormalizeModelOwnerValue(value string) string {
@@ -660,6 +661,12 @@ func defaultModelConfigRows() []ModelConfigRow {
 		"cline",
 		"opencode-go",
 		"antigravity",
+		// xai was missing here, which is why no Grok model ever reached the model
+		// library: the catalog knew them, but the library — what the channel-group
+		// editor and the pricing table read — did not, so a request for one was
+		// rejected with "not in the allowed models of channel group" and the
+		// operator had no way to add it.
+		"xai",
 	}
 
 	seen := make(map[string]struct{})
@@ -699,7 +706,7 @@ func defaultModelConfigRows() []ModelConfigRow {
 				PricingMode:         "token",
 				Source:              "seed",
 			}
-			applyImageGenerationSeedDefaults(&row, modelID)
+			applyMediaGenerationSeedDefaults(&row, modelID)
 			rows = append(rows, row)
 		}
 	}
