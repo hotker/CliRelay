@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,10 +38,21 @@ const (
 	videoPollBudget = 8 * time.Minute
 )
 
+// ListVideoGenerationModels reports the video models together with the channels
+// this tenant can actually reach.
+//
+// The catalog alone is not enough for the console: a tenant with no xAI credential
+// would still see a selectable model and a live "generate" button, and only learn
+// at request time that nothing can serve it ("auth_not_found: no auth available").
+// Availability is therefore computed per effective tenant and returned alongside,
+// so the page can disable the action and say why.
 func (h *Handler) ListVideoGenerationModels(c *gin.Context) {
 	models := registry.ListVideoGenerationModels()
+	channelsByProvider := h.videoGenerationChannelsByProvider(c)
+
 	items := make([]gin.H, 0, len(models))
 	for _, model := range models {
+		channels := channelsByProvider[strings.ToLower(strings.TrimSpace(model.Provider))]
 		items = append(items, gin.H{
 			"id":                      model.ID,
 			"provider":                model.Provider,
@@ -49,9 +61,68 @@ func (h *Handler) ListVideoGenerationModels(c *gin.Context) {
 			"supports_image_to_video": model.SupportsImage,
 			"max_duration_seconds":    model.MaxDurationSeconds,
 			"price_per_call":          model.PricePerCall,
+			"channels":                channels,
+			"available":               len(channels) > 0,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"models": items})
+
+	flat := make([]string, 0)
+	flatSeen := make(map[string]struct{})
+	for _, channels := range channelsByProvider {
+		for _, name := range channels {
+			key := strings.ToLower(name)
+			if _, ok := flatSeen[key]; ok {
+				continue
+			}
+			flatSeen[key] = struct{}{}
+			flat = append(flat, name)
+		}
+	}
+	sort.Strings(flat)
+
+	c.JSON(http.StatusOK, gin.H{"models": items, "channels": flat})
+}
+
+// videoGenerationChannelsByProvider lists the enabled credentials of this tenant
+// that can serve a video model, keyed by provider.
+//
+// Unlike the image equivalent this does not require an OAuth account: xAI serves
+// the media host with an API key just as well, and filtering those out would hide
+// working credentials.
+func (h *Handler) videoGenerationChannelsByProvider(c *gin.Context) map[string][]string {
+	byProvider := make(map[string][]string)
+	if h == nil || h.authManager == nil {
+		return byProvider
+	}
+	providers := make(map[string]struct{})
+	for _, model := range registry.ListVideoGenerationModels() {
+		providers[strings.ToLower(strings.TrimSpace(model.Provider))] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, auth := range h.authManager.ListForTenant(effectiveTenantID(c)) {
+		if auth == nil || auth.Disabled || auth.Status == coreauth.StatusDisabled {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+		if _, ok := providers[provider]; !ok {
+			continue
+		}
+		name := strings.TrimSpace(auth.ChannelName())
+		if name == "" {
+			continue
+		}
+		key := provider + "\x00" + strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		byProvider[provider] = append(byProvider[provider], name)
+	}
+	for provider := range byProvider {
+		sort.Strings(byProvider[provider])
+	}
+	return byProvider
 }
 
 func (h *Handler) PostVideoGenerationTest(c *gin.Context) {
