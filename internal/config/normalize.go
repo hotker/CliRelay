@@ -435,6 +435,71 @@ func normalizeOllamaCloudBaseURL(baseURL string) string {
 	return strings.TrimSuffix(base, "/")
 }
 
+// SanitizeCommandCodeKeys deduplicates and normalizes Command Code credentials.
+func (cfg *Config) SanitizeCommandCodeKeys() {
+	if cfg == nil || len(cfg.CommandCodeKey) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(cfg.CommandCodeKey))
+	out := make([]CommandCodeKey, 0, len(cfg.CommandCodeKey))
+	for i := range cfg.CommandCodeKey {
+		entry := cfg.CommandCodeKey[i]
+		entry.APIKey = strings.TrimSpace(entry.APIKey)
+		if entry.APIKey == "" {
+			continue
+		}
+		entry.BaseURL = normalizeCommandCodeBaseURL(entry.BaseURL)
+		seenKey := entry.APIKey + "\x00" + entry.BaseURL
+		if _, exists := seen[seenKey]; exists {
+			continue
+		}
+		seen[seenKey] = struct{}{}
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.ProxyID = strings.TrimSpace(entry.ProxyID)
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.Models = NormalizeCommandCodeModels(entry.Models)
+		entry.ExcludedModels = NormalizeProviderModelAccessExcludedModels(entry.ExcludedModels)
+		if IsProviderModelAccessDisabledAll(entry.ExcludedModels) {
+			entry.Models = nil
+		}
+		entry.VisionFallbackModel = strings.TrimSpace(entry.VisionFallbackModel)
+		out = append(out, entry)
+	}
+	cfg.CommandCodeKey = out
+}
+
+func NormalizeCommandCodeModels(models []CommandCodeModel) []CommandCodeModel {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]CommandCodeModel, 0, len(models))
+	for i := range models {
+		name := strings.TrimSpace(models[i].Name)
+		if name == "" {
+			continue
+		}
+		alias := strings.TrimSpace(models[i].Alias)
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, CommandCodeModel{Name: name, Alias: alias})
+	}
+	return out
+}
+
+func normalizeCommandCodeBaseURL(baseURL string) string {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		return DefaultCommandCodeBaseURL
+	}
+	return strings.TrimSuffix(base, "/")
+}
+
 // SanitizeGeminiKeys deduplicates and normalizes Gemini credentials.
 func (cfg *Config) SanitizeGeminiKeys() {
 	if cfg == nil {

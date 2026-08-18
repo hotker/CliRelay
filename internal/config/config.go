@@ -147,6 +147,9 @@ type Config struct {
 	// OllamaCloudKey defines Ollama Cloud API key configurations.
 	OllamaCloudKey []OllamaCloudKey `yaml:"ollama-cloud-api-key" json:"ollama-cloud-api-key"`
 
+	// CommandCodeKey defines Command Code Provider API key configurations.
+	CommandCodeKey []CommandCodeKey `yaml:"commandcode-api-key" json:"commandcode-api-key"`
+
 	// ClaudeHeaderDefaults configures default header values for Claude API requests.
 	// These are used as fallbacks when the client does not send its own headers.
 	ClaudeHeaderDefaults ClaudeHeaderDefaults `yaml:"claude-header-defaults" json:"claude-header-defaults"`

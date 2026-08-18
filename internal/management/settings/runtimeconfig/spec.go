@@ -16,6 +16,7 @@ const (
 	RuntimeSettingOpenCodeGoKeys       = "opencode-go-api-key"
 	RuntimeSettingClineKeys            = "cline-api-key"
 	RuntimeSettingOllamaCloudKeys      = "ollama-cloud-api-key"
+	RuntimeSettingCommandCodeKeys      = "commandcode-api-key"
 	RuntimeSettingOpenAICompatibility  = "openai-compatibility"
 	RuntimeSettingVertexCompatKeys     = "vertex-api-key"
 	RuntimeSettingClaudeHeaderDefaults = "claude-header-defaults"
@@ -187,6 +188,28 @@ func Specs() []Spec {
 				holder := &config.Config{OllamaCloudKey: value}
 				holder.SanitizeOllamaCloudKeys()
 				cfg.OllamaCloudKey = holder.OllamaCloudKey
+				return true
+			},
+		},
+		{
+			Key: RuntimeSettingCommandCodeKeys,
+			Meaningful: func(cfg *config.Config) bool {
+				return len(cfg.CommandCodeKey) > 0
+			},
+			Value: func(cfg *config.Config) any {
+				holder := &config.Config{CommandCodeKey: append([]config.CommandCodeKey(nil), cfg.CommandCodeKey...)}
+				holder.SanitizeCommandCodeKeys()
+				return holder.CommandCodeKey
+			},
+			Apply: func(cfg *config.Config, raw json.RawMessage) bool {
+				var value []config.CommandCodeKey
+				if err := json.Unmarshal(raw, &value); err != nil {
+					log.Warnf("runtimeconfig: decode %s: %v", RuntimeSettingCommandCodeKeys, err)
+					return false
+				}
+				holder := &config.Config{CommandCodeKey: value}
+				holder.SanitizeCommandCodeKeys()
+				cfg.CommandCodeKey = holder.CommandCodeKey
 				return true
 			},
 		},
