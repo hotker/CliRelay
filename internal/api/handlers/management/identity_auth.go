@@ -527,6 +527,7 @@ func isTenantScopedManagementPath(path string) bool {
 		strings.HasPrefix(relative, "/opencode-go-api-key"),
 		strings.HasPrefix(relative, "/cline-api-key"),
 		strings.HasPrefix(relative, "/ollama-cloud-api-key"),
+		strings.HasPrefix(relative, "/commandcode-api-key"),
 		strings.HasPrefix(relative, "/codex-api-key"),
 		strings.HasPrefix(relative, "/vertex-api-key"),
 		strings.HasPrefix(relative, "/openai-compatibility"),

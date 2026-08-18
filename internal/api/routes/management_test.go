@@ -26,7 +26,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 324; got != want {
+	if got, want := len(routes), 329; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 	if got, want := sortedRouteKeys(routes), expectedManagementRoutes(); !slices.Equal(got, want) {
@@ -69,6 +69,11 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		"PATCH /v0/management/ollama-cloud-api-key",
 		"DELETE /v0/management/ollama-cloud-api-key",
 		"POST /v0/management/ollama-cloud-api-key/usage",
+		"GET /v0/management/commandcode-api-key",
+		"PUT /v0/management/commandcode-api-key",
+		"PATCH /v0/management/commandcode-api-key",
+		"DELETE /v0/management/commandcode-api-key",
+		"POST /v0/management/commandcode-api-key/usage",
 		"GET /v0/management/auth-files/models",
 		"GET /v0/management/image-generation/size-presets",
 		"PUT /v0/management/image-generation/size-presets",
@@ -281,6 +286,11 @@ func expectedManagementRoutes() []string {
 		"DELETE /v0/management/oauth-excluded-models",
 		"DELETE /v0/management/oauth-model-alias",
 		"DELETE /v0/management/ollama-cloud-api-key",
+		"DELETE /v0/management/commandcode-api-key",
+		"GET /v0/management/commandcode-api-key",
+		"PATCH /v0/management/commandcode-api-key",
+		"POST /v0/management/commandcode-api-key/usage",
+		"PUT /v0/management/commandcode-api-key",
 		"DELETE /v0/management/opencode-go-api-key",
 		"DELETE /v0/management/openai-compatibility",
 		"DELETE /v0/management/proxy-url",

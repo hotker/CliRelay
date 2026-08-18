@@ -218,7 +218,7 @@ func managementVisibleModels(modelRegistry *registry.ModelRegistry) []map[string
 	for _, model := range modelRegistry.GetAvailableModels("openai") {
 		add(model)
 	}
-	for _, provider := range []string{"opencode-go", "cline", "ollama-cloud"} {
+	for _, provider := range []string{"opencode-go", "cline", "ollama-cloud", "commandcode"} {
 		for _, info := range modelRegistry.GetAvailableModelsByProvider(provider) {
 			add(registryModelInfoAsOpenAIModel(info))
 		}
@@ -779,7 +779,7 @@ func registryModelOnlyHasDynamicProviderSources(modelRegistry *registry.ModelReg
 		// These config-backed providers publish their serviceable models from runtime model lists,
 		// so a missing system model-config row must not hide the registry model.
 		switch provider {
-		case "opencode-go", "cline", "ollama-cloud":
+		case "opencode-go", "cline", "ollama-cloud", "commandcode":
 		default:
 			return false
 		}
