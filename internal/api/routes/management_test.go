@@ -26,7 +26,7 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		routes[key] = route
 	}
 
-	if got, want := len(routes), 321; got != want {
+	if got, want := len(routes), 329; got != want {
 		t.Fatalf("route count = %d, want %d", got, want)
 	}
 	if got, want := sortedRouteKeys(routes), expectedManagementRoutes(); !slices.Equal(got, want) {
@@ -69,9 +69,17 @@ func TestRegisterManagementRouteTable(t *testing.T) {
 		"PATCH /v0/management/ollama-cloud-api-key",
 		"DELETE /v0/management/ollama-cloud-api-key",
 		"POST /v0/management/ollama-cloud-api-key/usage",
+		"GET /v0/management/commandcode-api-key",
+		"PUT /v0/management/commandcode-api-key",
+		"PATCH /v0/management/commandcode-api-key",
+		"DELETE /v0/management/commandcode-api-key",
+		"POST /v0/management/commandcode-api-key/usage",
 		"GET /v0/management/auth-files/models",
 		"GET /v0/management/image-generation/size-presets",
 		"PUT /v0/management/image-generation/size-presets",
+		"GET /v0/management/video-generation/models",
+		"POST /v0/management/video-generation/test",
+		"GET /v0/management/video-generation/test/:task_id",
 		"GET /v0/management/identity-fingerprint/account",
 		"PUT /v0/management/identity-fingerprint/account/policy",
 		"DELETE /v0/management/identity-fingerprint/account/profile",
@@ -278,6 +286,11 @@ func expectedManagementRoutes() []string {
 		"DELETE /v0/management/oauth-excluded-models",
 		"DELETE /v0/management/oauth-model-alias",
 		"DELETE /v0/management/ollama-cloud-api-key",
+		"DELETE /v0/management/commandcode-api-key",
+		"GET /v0/management/commandcode-api-key",
+		"PATCH /v0/management/commandcode-api-key",
+		"POST /v0/management/commandcode-api-key/usage",
+		"PUT /v0/management/commandcode-api-key",
 		"DELETE /v0/management/opencode-go-api-key",
 		"DELETE /v0/management/openai-compatibility",
 		"DELETE /v0/management/proxy-url",
@@ -333,6 +346,8 @@ func expectedManagementRoutes() []string {
 		"GET /v0/management/image-generation/channels",
 		"GET /v0/management/image-generation/size-presets",
 		"GET /v0/management/image-generation/test/:task_id",
+		"GET /v0/management/video-generation/models",
+		"GET /v0/management/video-generation/test/:task_id",
 		"GET /v0/management/kimi-auth-url",
 		"GET /v0/management/latest-version",
 		"GET /v0/management/logging-to-file",
@@ -460,6 +475,7 @@ func expectedManagementRoutes() []string {
 		"POST /v0/management/usage/import",
 		"POST /v0/management/update/apply",
 		"POST /v0/management/vertex/import",
+		"POST /v0/management/video-generation/test",
 		"PUT /v0/management/ampcode/force-model-mappings",
 		"PUT /v0/management/ampcode/model-mappings",
 		"PUT /v0/management/ampcode/restrict-management-to-localhost",

@@ -101,9 +101,9 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 	}
 	provider := strings.ToLower(strings.TrimSpace(a.Provider))
 	compatProviderKey, compatDisplayName, compatDetected := openAICompatInfoFromAuth(a)
-	// Cline and Ollama Cloud use OpenAI-compatible transport metadata to pick
-	// executors, but their model lists are owned by their native config blocks.
-	if compatDetected && provider != "cline" && provider != "ollama-cloud" {
+	// Cline, Ollama Cloud and Command Code use OpenAI-compatible transport metadata
+	// to pick executors, but their model lists are owned by their native config blocks.
+	if compatDetected && provider != "cline" && provider != "ollama-cloud" && provider != "commandcode" {
 		provider = "openai-compatibility"
 	}
 	excluded := s.oauthExcludedModels(provider, authKind)
@@ -186,6 +186,15 @@ func (s *Service) registerModelsForAuth(ctx context.Context, a *coreauth.Auth) {
 		if entry := s.resolveConfigClineKey(a); entry != nil && authKind == "apikey" {
 			if len(entry.Models) > 0 {
 				models = buildClineConfigModels(entry)
+			}
+			excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
+		}
+		models = applyExcludedModels(models, excluded)
+	case "commandcode":
+		models = sdkmodelcatalog.StaticModelDefinitionsByChannel("commandcode")
+		if entry := s.resolveConfigCommandCodeKey(a); entry != nil && authKind == "apikey" {
+			if len(entry.Models) > 0 {
+				models = buildCommandCodeConfigModels(entry)
 			}
 			excluded = providerModelAccessExcludedModels(entry.ExcludedModels)
 		}

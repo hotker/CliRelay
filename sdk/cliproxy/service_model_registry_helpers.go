@@ -382,6 +382,16 @@ func buildClineConfigModels(entry *config.ClineKey) []*ModelInfo {
 	return buildConfigModels(models, "cline", "cline", nil)
 }
 
+func buildCommandCodeConfigModels(entry *config.CommandCodeKey) []*ModelInfo {
+	if entry == nil || len(entry.Models) == 0 {
+		return nil
+	}
+	models := filterConfigModels(entry.Models, func(name string) bool {
+		return !isClinePassConfigModelID(name)
+	})
+	return buildConfigModels(models, "command-code", "commandcode", nil)
+}
+
 func buildOllamaCloudConfigModels(entry *config.OllamaCloudKey) []*ModelInfo {
 	if entry == nil || len(entry.Models) == 0 {
 		return nil
