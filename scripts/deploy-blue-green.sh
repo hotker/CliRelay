@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SCRIPT_VERSION must stay in sync with deploy gate expectations.
-SCRIPT_VERSION="${SCRIPT_VERSION:-2026.07.16}"
+SCRIPT_VERSION="${SCRIPT_VERSION:-2026.08.19}"
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-clirelay2}"
@@ -97,8 +97,70 @@ case "${redis_enable,,}" in
 esac
 
 config_port="$(awk '/^port:[[:space:]]*[0-9]+/ {print $2; exit}' "$config_path" 2>/dev/null || true)"
+find_host_nginx_conf() {
+	if [ -n "${NGINX_CONF:-}" ]; then
+		echo "$NGINX_CONF"
+		return
+	fi
+	grep -Rsl "$DOMAIN" /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | grep -v '\.bak\.' | head -n1 || true
+}
+
+find_container_nginx_conf() {
+	if ! command -v docker >/dev/null 2>&1; then
+		return
+	fi
+	if ! docker inspect "$NGINX_CONTAINER" >/dev/null 2>&1; then
+		return
+	fi
+	docker exec "$NGINX_CONTAINER" sh -c "grep -Rsl '$DOMAIN' /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | grep -v '\\.bak\\.' | head -n1" || true
+}
+
+# Nginx is the third state source, and the only one that decides where traffic
+# actually goes. It is resolved here, before any slot arithmetic, because both
+# the active-slot decision and the failure path depend on knowing which slot
+# nginx currently routes to.
+nginx_mode="host"
+nginx_conf="$(find_host_nginx_conf)"
+if [ -z "$nginx_conf" ]; then
+	nginx_conf="$(find_container_nginx_conf)"
+	nginx_mode="container"
+fi
+[ -n "$nginx_conf" ] || fail "nginx config for ${DOMAIN} not found on host or docker container ${NGINX_CONTAINER}; set NGINX_CONF/NGINX_CONTAINER"
+
+# nginx_slot_port reports the blue-green slot nginx currently proxies to, or an
+# empty string when it points at neither.
+nginx_slot_port() {
+	slot_match=""
+	if [ "$nginx_mode" = "container" ]; then
+		slot_match="$(docker exec "$NGINX_CONTAINER" sh -c "grep -hoE '127\\.0\\.0\\.1:(${PORT_A}|${PORT_B})' '$nginx_conf' 2>/dev/null | head -n1" 2>/dev/null || true)"
+	else
+		slot_match="$(grep -hoE "127\.0\.0\.1:(${PORT_A}|${PORT_B})" "$nginx_conf" 2>/dev/null | head -n1 || true)"
+	fi
+	printf '%s' "${slot_match##*:}"
+}
+
 active_port="$("$RECONCILE_SCRIPT")"
 active_port="${active_port:-${config_port:-$PORT_A}}"
+
+# Trust nginx over the recorded value when the two disagree.
+#
+# The recorded slot and the routed slot do drift — carrying an nginx config
+# across a server migration is enough to do it. Once drifted, every deploy fails
+# at the cutover grep (it looks for the recorded port, which is not in the
+# config), and the failure path then stops the "candidate" slot, which under
+# drift is the one actually serving production. That is how a failed deploy
+# became an outage. Reconciling here makes the same situation a no-op.
+routed_port="$(nginx_slot_port)"
+if [ -n "$routed_port" ] && [ "$routed_port" != "$active_port" ]; then
+	if systemctl is-active --quiet "${SERVICE_NAME}-${routed_port}"; then
+		echo "active slot drift: recorded ${active_port}, nginx routes to ${routed_port}; trusting nginx" >&2
+		active_port="$routed_port"
+		printf '%s\n' "$active_port" > "$ACTIVE_PORT_FILE"
+	else
+		echo "warning: nginx routes to ${routed_port} but that slot is not running; keeping recorded ${active_port}" >&2
+	fi
+fi
+
 # Alternate between two local ports so nginx can cut over only after the new slot is healthy.
 case "$active_port" in
 	"$PORT_A") next_port="$PORT_B" ;;
@@ -112,7 +174,15 @@ cutover_done=0
 cleanup_failed_deploy() {
 	status=$?
 	if [ "$status" -ne 0 ] && [ "$cutover_done" -ne 1 ]; then
-		systemctl disable --now "$next_unit" >/dev/null 2>&1 || true
+		# Never stop the slot nginx is routing to. The candidate is normally the
+		# idle slot, but if anything moved nginx onto it, stopping it here turns
+		# a failed deploy into a 502. A stray slot left running is cheap; taking
+		# production down to tidy it up is not.
+		if [ "$(nginx_slot_port)" = "$next_port" ]; then
+			echo "refusing to stop ${next_unit}: nginx is routing traffic to port ${next_port}" >&2
+		else
+			systemctl disable --now "$next_unit" >/dev/null 2>&1 || true
+		fi
 	fi
 	exit "$status"
 }
@@ -221,32 +291,6 @@ ensure_container_body_size_conf() {
 client_max_body_size 2000m;
 EOF
 }
-
-find_host_nginx_conf() {
-	if [ -n "${NGINX_CONF:-}" ]; then
-		echo "$NGINX_CONF"
-		return
-	fi
-	grep -Rsl "$DOMAIN" /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | grep -v '\.bak\.' | head -n1 || true
-}
-
-find_container_nginx_conf() {
-	if ! command -v docker >/dev/null 2>&1; then
-		return
-	fi
-	if ! docker inspect "$NGINX_CONTAINER" >/dev/null 2>&1; then
-		return
-	fi
-	docker exec "$NGINX_CONTAINER" sh -c "grep -Rsl '$DOMAIN' /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | grep -v '\\.bak\\.' | head -n1" || true
-}
-
-nginx_mode="host"
-nginx_conf="$(find_host_nginx_conf)"
-if [ -z "$nginx_conf" ]; then
-	nginx_conf="$(find_container_nginx_conf)"
-	nginx_mode="container"
-fi
-[ -n "$nginx_conf" ] || fail "nginx config for ${DOMAIN} not found on host or docker container ${NGINX_CONTAINER}; set NGINX_CONF/NGINX_CONTAINER"
 
 switch_nginx_port() {
 	from_port="$1"
