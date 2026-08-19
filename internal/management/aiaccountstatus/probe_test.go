@@ -5,12 +5,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/tidwall/gjson"
 )
 
 func TestParseCodexWhamQuotas(t *testing.T) {
@@ -275,13 +277,144 @@ func TestResolveXAIPlanUsesEntitlementWhenMonthlyLimitIsZero(t *testing.T) {
 func TestParseAntigravityModelsSummarizesWorstRemainingAndEarliestReset(t *testing.T) {
 	body := []byte(`{"models":{
 		"gemini-3-pro-high":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2026-07-20T00:00:00Z"}},
-		"gemini-3.1-pro-low":{"quota_info":{"remaining_fraction":0.4,"reset_time":"2026-07-19T00:00:00Z"}},
-		"gemini-2.5-pro":{"quotaInfo":{"remainingFraction":0.1}}
+		"gemini-3.1-pro-low":{"quota_info":{"remaining_fraction":0.4,"reset_time":"2026-07-19T00:00:00Z"}}
 	}}`)
 	items := parseAntigravityModels(body)
-	pro := quotaByKey(items, "provider:gemini3-pro")
+	pro := quotaByKey(items, "antigravity:gemini_pro")
 	if pro == nil || pro.Percent == nil || *pro.Percent != 40 || pro.ResetAt == nil || pro.ResetAt.Format(time.RFC3339) != "2026-07-19T00:00:00Z" {
 		t.Fatalf("pro=%+v", pro)
+	}
+	if pro.WindowSeconds != antigravityWindowFiveHour {
+		t.Fatalf("window=%d, want %d", pro.WindowSeconds, antigravityWindowFiveHour)
+	}
+}
+
+// A model the upstream ships after this code was written must still reach the
+// card. The previous grouping dropped anything missing from a hand-written id
+// list, so a new model family silently rendered as nothing at all.
+func TestParseAntigravityModelsKeepsUnknownModels(t *testing.T) {
+	body := []byte(`{"models":{
+		"gemini-9-ultra":{"quotaInfo":{"remainingFraction":0.5},"displayName":"Gemini 9 Ultra"},
+		"grok-5-fast":{"quotaInfo":{"remainingFraction":0.25},"displayName":"Grok 5 Fast"},
+		"chat_20706":{"quotaInfo":{"remainingFraction":0.9}},
+		"tab_flash_lite_preview":{"quotaInfo":{"remainingFraction":0.9}}
+	}}`)
+	items := parseAntigravityModels(body)
+
+	// gemini-9-ultra has neither "flash" nor "pro" nor "image" in its id, so it
+	// lands in the unclassified bucket under its own name rather than vanishing.
+	ultra := quotaByKey(items, "antigravity:model_gemini_9_ultra")
+	if ultra == nil || ultra.Percent == nil || *ultra.Percent != 50 || ultra.QuotaLabel != "Gemini 9 Ultra" {
+		t.Fatalf("ultra=%+v", ultra)
+	}
+	grok := quotaByKey(items, "antigravity:model_grok_5_fast")
+	if grok == nil || grok.Percent == nil || *grok.Percent != 25 {
+		t.Fatalf("grok=%+v", grok)
+	}
+	for _, item := range items {
+		if strings.Contains(item.QuotaKey, "chat_") || strings.Contains(item.QuotaKey, "tab_") {
+			t.Fatalf("internal model leaked into quotas: %+v", item)
+		}
+	}
+}
+
+// retrieveUserQuotaSummary is the authoritative view: the upstream reports one
+// bucket per family per window, and both the grouping and the wording are its
+// own. Splitting a single bucket into several rows by model id is what made one
+// quota render three times with identical numbers.
+func TestParseAntigravityQuotaSummaryUsesUpstreamGrouping(t *testing.T) {
+	body := []byte(`{"groups":[
+		{"displayName":"Gemini Models","description":"Gemini family","buckets":[
+			{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.72,"resetTime":"2026-08-19T07:00:00Z"},
+			{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.51,"resetTime":"2026-08-24T07:00:00Z"}
+		]},
+		{"displayName":"Claude and GPT models","buckets":[
+			{"bucketId":"3p-5h","window":"5h","remainingFraction":1,"resetTime":"2026-08-19T11:00:00Z"}
+		]}
+	]}`)
+	items := parseAntigravityQuotaSummary(body)
+	if len(items) != 3 {
+		t.Fatalf("items=%d, want 3: %+v", len(items), items)
+	}
+
+	fiveHour := quotaByKey(items, "antigravity:gemini_5h")
+	if fiveHour == nil || fiveHour.Percent == nil || *fiveHour.Percent != 72 {
+		t.Fatalf("gemini 5h=%+v", fiveHour)
+	}
+	if fiveHour.WindowSeconds != antigravityWindowFiveHour {
+		t.Fatalf("gemini 5h window=%d", fiveHour.WindowSeconds)
+	}
+	if fiveHour.QuotaLabel != "Gemini Models · 5h" {
+		t.Fatalf("gemini 5h label=%q", fiveHour.QuotaLabel)
+	}
+
+	weekly := quotaByKey(items, "antigravity:gemini_weekly")
+	if weekly == nil || weekly.Percent == nil || *weekly.Percent != 51 {
+		t.Fatalf("gemini weekly=%+v", weekly)
+	}
+	if weekly.WindowSeconds != antigravityWindowWeek {
+		t.Fatalf("gemini weekly window=%d, want %d", weekly.WindowSeconds, antigravityWindowWeek)
+	}
+
+	thirdParty := quotaByKey(items, "antigravity:3p_5h")
+	if thirdParty == nil || thirdParty.Percent == nil || *thirdParty.Percent != 100 {
+		t.Fatalf("3p 5h=%+v", thirdParty)
+	}
+}
+
+func TestAntigravityWindowSecondsFallsBackToBucketID(t *testing.T) {
+	cases := []struct {
+		window, bucketID string
+		want             int64
+	}{
+		{"weekly", "gemini-weekly", antigravityWindowWeek},
+		{"5h", "gemini-5h", antigravityWindowFiveHour},
+		{"", "3p-weekly", antigravityWindowWeek},
+		{"", "3p-5h", antigravityWindowFiveHour},
+		{"24h", "", 24 * 60 * 60},
+		{"", "", 0},
+		{"per-request", "odd-bucket", 0},
+		// The `h` inside "flash" has no digits before it; the one that matters
+		// is further along.
+		{"", "gemini-flash-5h", antigravityWindowFiveHour},
+		{"", "high-throughput", 0},
+	}
+	for _, tc := range cases {
+		if got := antigravityWindowSeconds(tc.window, tc.bucketID); got != tc.want {
+			t.Fatalf("window(%q,%q)=%d, want %d", tc.window, tc.bucketID, got, tc.want)
+		}
+	}
+}
+
+// The plan ladder mirrors the upstream client: paid wins, current counts only
+// while the account is eligible, and an ineligible account reports its default
+// allowed tier as restricted.
+func TestParseAntigravityPlanType(t *testing.T) {
+	cases := []struct {
+		name, body, want string
+	}{
+		{"paid tier wins", `{"paidTier":{"name":"Ultra"},"currentTier":{"name":"Pro"}}`, "Ultra"},
+		{"paid tier id fallback", `{"paidTier":{"id":"ultra-tier"}}`, "ultra-tier"},
+		{"current tier when eligible", `{"currentTier":{"name":"Pro"}}`, "Pro"},
+		{"ineligible falls to default allowed tier", `{"currentTier":{"name":"Pro"},"ineligibleTiers":[{"reasonCode":"RESTRICTED"}],"allowedTiers":[{"isDefault":true,"name":"Free"}]}`, "Free (Restricted)"},
+		{"ineligible without allowed tiers", `{"currentTier":{"name":"Pro"},"ineligibleTiers":[{"reasonCode":"RESTRICTED"}]}`, ""},
+		{"empty", `{}`, ""},
+	}
+	for _, tc := range cases {
+		if got := parseAntigravityPlanType(gjson.Parse(tc.body)); got != tc.want {
+			t.Fatalf("%s: plan=%q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestParseAntigravityCodeAssistReadsProjectAndPlan(t *testing.T) {
+	account := parseAntigravityCodeAssist([]byte(`{"cloudaicompanionProject":"real-project-123","paidTier":{"name":"Ultra"}}`))
+	if account.projectID != "real-project-123" || account.planType != "Ultra" {
+		t.Fatalf("account=%+v", account)
+	}
+	nested := parseAntigravityCodeAssist([]byte(`{"cloudaicompanionProject":{"id":"nested-project"}}`))
+	if nested.projectID != "nested-project" {
+		t.Fatalf("nested=%+v", nested)
 	}
 }
 
@@ -411,5 +544,62 @@ func TestParseClaudePlanType(t *testing.T) {
 		if got := parseClaudePlanType([]byte(tc.body)); got != tc.want {
 			t.Fatalf("body=%s got=%q want=%q", tc.body, got, tc.want)
 		}
+	}
+}
+
+// weeklyUsedFromQuotas picks the cycle a card's "used this week" figure refers
+// to. Providers that declare a primary key keep their exact-match behaviour;
+// antigravity has none, and used to be handed whichever window happened to come
+// first — a 5h window reported as the weekly number.
+func TestWeeklyUsedFromQuotasPrefersWeeklyWindowWithoutPrimaryKey(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	quotas := []usage.QuotaWindowDTO{
+		{QuotaKey: "antigravity:gemini_5h", Percent: pct(72), WindowSeconds: antigravityWindowFiveHour},
+		{QuotaKey: "antigravity:gemini_weekly", Percent: pct(51), WindowSeconds: antigravityWindowWeek},
+		{QuotaKey: "antigravity:3p_5h", Percent: pct(100), WindowSeconds: antigravityWindowFiveHour},
+	}
+	got := weeklyUsedFromQuotas(quotas)
+	if got == nil || *got != 49 {
+		t.Fatalf("used=%v, want 49 (from the weekly window)", got)
+	}
+}
+
+func TestWeeklyUsedFromQuotasPrefersNarrowestWeeklyWindow(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	quotas := []usage.QuotaWindowDTO{
+		{QuotaKey: "monthly", Percent: pct(90), WindowSeconds: 30 * 24 * 60 * 60},
+		{QuotaKey: "weekly", Percent: pct(40), WindowSeconds: antigravityWindowWeek},
+	}
+	got := weeklyUsedFromQuotas(quotas)
+	if got == nil || *got != 60 {
+		t.Fatalf("used=%v, want 60 (weekly beats monthly)", got)
+	}
+}
+
+// Only windows narrower than a week exist: the figure still has to come from
+// somewhere, so the original first-window behaviour remains as the last resort.
+func TestWeeklyUsedFromQuotasFallsBackWhenNoWeeklyWindow(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	quotas := []usage.QuotaWindowDTO{{QuotaKey: "only_5h", Percent: pct(30), WindowSeconds: antigravityWindowFiveHour}}
+	got := weeklyUsedFromQuotas(quotas)
+	if got == nil || *got != 70 {
+		t.Fatalf("used=%v, want 70", got)
+	}
+}
+
+// Providers that declare a primary weekly key must not start matching by window
+// width: an unrelated window of the same width would silently take over.
+func TestWeeklyUsedFromQuotasKeepsExactMatchForKeyedProviders(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	quotas := []usage.QuotaWindowDTO{
+		{QuotaKey: "review_week", Percent: pct(10), WindowSeconds: antigravityWindowWeek},
+		{QuotaKey: "code_week", Percent: pct(80), WindowSeconds: antigravityWindowWeek},
+	}
+	got := weeklyUsedFromQuotas(quotas, "code_week")
+	if got == nil || *got != 20 {
+		t.Fatalf("used=%v, want 20 (code_week, not review_week)", got)
+	}
+	if missing := weeklyUsedFromQuotas(quotas, "seven_day"); missing != nil {
+		t.Fatalf("used=%v, want nil when the declared key is absent", missing)
 	}
 }

@@ -53,20 +53,7 @@ func timePointer(value time.Time) *time.Time {
 }
 
 func weeklyUsedFromQuotas(quotas []usage.QuotaWindowDTO, preferred ...string) *float64 {
-	pref := make(map[string]struct{}, len(preferred))
-	for _, k := range preferred {
-		pref[k] = struct{}{}
-	}
-	for i := range quotas {
-		q := &quotas[i]
-		if q.Percent == nil {
-			continue
-		}
-		if len(pref) > 0 {
-			if _, ok := pref[q.QuotaKey]; !ok {
-				continue
-			}
-		}
+	usedFrom := func(q *usage.QuotaWindowDTO) *float64 {
 		used := 100 - *q.Percent
 		if used < 0 {
 			used = 0
@@ -75,6 +62,55 @@ func weeklyUsedFromQuotas(quotas []usage.QuotaWindowDTO, preferred ...string) *f
 			used = 100
 		}
 		return &used
+	}
+
+	if len(preferred) > 0 {
+		pref := make(map[string]struct{}, len(preferred))
+		for _, k := range preferred {
+			pref[k] = struct{}{}
+		}
+		for i := range quotas {
+			q := &quotas[i]
+			if q.Percent == nil {
+				continue
+			}
+			if _, ok := pref[q.QuotaKey]; !ok {
+				continue
+			}
+			return usedFrom(q)
+		}
+		return nil
+	}
+
+	// Providers with no fixed weekly key — antigravity names its buckets after
+	// whatever the upstream calls them — are matched by window width instead.
+	// Falling through to "whichever window came first" reported a 5h window as
+	// the weekly figure, so the card showed a number for a cycle it never
+	// measured. The narrowest window at or above a week is the weekly one; a
+	// monthly window sorts after it rather than displacing it.
+	var weekly *usage.QuotaWindowDTO
+	for i := range quotas {
+		q := &quotas[i]
+		if q.Percent == nil || q.WindowSeconds < usage.WeeklyQuotaWindowSeconds {
+			continue
+		}
+		if weekly == nil || q.WindowSeconds < weekly.WindowSeconds {
+			weekly = q
+		}
+	}
+	if weekly != nil {
+		return usedFrom(weekly)
+	}
+
+	// No window is wide enough to be a weekly cycle. Providers that report a
+	// single unlabelled window still need a figure, so keep the original
+	// first-window behaviour as the last resort.
+	for i := range quotas {
+		q := &quotas[i]
+		if q.Percent == nil {
+			continue
+		}
+		return usedFrom(q)
 	}
 	return nil
 }

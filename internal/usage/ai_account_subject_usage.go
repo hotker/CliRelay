@@ -11,6 +11,12 @@ import (
 const aiAccountSubjectDayRetention = 400 * 24 * time.Hour
 const aiAccountSubjectWeeklyWindowSeconds = int64(7 * 24 * time.Hour / time.Second)
 
+// WeeklyQuotaWindowSeconds is the width at which a quota window counts as the
+// weekly cycle. Readers outside this package need the same threshold to pick a
+// weekly window out of a quota list; exporting it keeps them from hard-coding a
+// second copy that can drift from the one the cycle projection uses.
+const WeeklyQuotaWindowSeconds = aiAccountSubjectWeeklyWindowSeconds
+
 // Keep every (subject, quota key) cycle so additional weekly windows cannot
 // replace the provider's primary card cycle.
 var sharedCycleCache = struct {
