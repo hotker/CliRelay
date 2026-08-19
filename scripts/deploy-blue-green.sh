@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SCRIPT_VERSION must stay in sync with deploy gate expectations.
-SCRIPT_VERSION="${SCRIPT_VERSION:-2026.08.19}"
+SCRIPT_VERSION="${SCRIPT_VERSION:-2026.08.19.2}"
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-clirelay2}"
@@ -33,6 +33,14 @@ fail() {
 	echo "$*" >&2
 	exit 1
 }
+
+# Refuse to start when a tool the cutover depends on is missing. The previous
+# version simply carried on without perl, silently skipping the config rewrite
+# while reporting success, so a missing binary was indistinguishable from a
+# working deploy. Failing here costs one red build; not failing cost an outage.
+for required_cmd in sed grep systemctl nginx; do
+	command -v "$required_cmd" >/dev/null 2>&1 || fail "required command not found on deploy host: ${required_cmd}"
+done
 
 read_service_property() {
 	systemctl show -p "$1" --value "$SERVICE_NAME" 2>/dev/null || true
@@ -139,25 +147,122 @@ nginx_slot_port() {
 	printf '%s' "${slot_match##*:}"
 }
 
+
+ensure_host_body_size_conf() {
+	[ -d /etc/nginx ] || return 0
+	body_size_conf="/etc/nginx/conf.d/90-clirelay-body-size.conf"
+	mkdir -p "$(dirname "$body_size_conf")"
+	cat > "$body_size_conf" <<'EOF'
+# Managed by CliRelay GitHub Actions deploy workflow
+client_max_body_size 2000m;
+EOF
+}
+
+ensure_container_body_size_conf() {
+	docker exec -i "$NGINX_CONTAINER" sh -c 'cat > /etc/nginx/conf.d/90-clirelay-body-size.conf' <<'EOF'
+# Managed by CliRelay GitHub Actions deploy workflow
+client_max_body_size 2000m;
+EOF
+}
+
+# rewrite_slot_port swaps the slot port inside a config file and proves it took.
+#
+# sed, not perl: this host has no perl, and the previous implementation could
+# not tell. The failed perl call left the file untouched, then `nginx -t` and
+# `reload` both succeeded on the unchanged config, so the function returned 0
+# and the deploy reported a cutover that never happened. Every deploy advanced
+# .active-port while nginx kept pointing at the old slot — that is where the
+# drift came from, and the drift is what later let a failed deploy stop the
+# slot that was serving production.
+#
+# The verification below is the point: never infer that an edit happened from
+# the exit status of the command that was supposed to make it.
+rewrite_slot_port() {
+	rewrite_file="$1"
+	rewrite_from="$2"
+	rewrite_to="$3"
+	# Nothing to rewrite is a failure, not a success. Reporting success for a
+	# transition the file cannot express is exactly the bug this function was
+	# written to eliminate.
+	grep -q ":${rewrite_from}" "$rewrite_file" || return 1
+	# Word-boundary form first — GNU sed on the deploy host handles it. Then a
+	# literal form for sed builds without \b (BSD sed has none). Neither is
+	# trusted: the check below decides whether the edit happened.
+	sed -i -E "s|:${rewrite_from}\\b|:${rewrite_to}|g" "$rewrite_file" 2>/dev/null || true
+	if grep -q ":${rewrite_from}" "$rewrite_file"; then
+		sed -i "s|127\\.0\\.0\\.1:${rewrite_from}|127.0.0.1:${rewrite_to}|g" "$rewrite_file" 2>/dev/null || true
+		sed -i "s|localhost:${rewrite_from}|localhost:${rewrite_to}|g" "$rewrite_file" 2>/dev/null || true
+	fi
+	# Plain substring checks so the verification itself cannot depend on a
+	# regex dialect. The old port must be gone and the new one present.
+	if grep -q ":${rewrite_from}" "$rewrite_file"; then
+		return 1
+	fi
+	grep -q ":${rewrite_to}" "$rewrite_file"
+}
+
+switch_nginx_port() {
+	from_port="$1"
+	to_port="$2"
+	if [ "$nginx_mode" = "container" ]; then
+		tmp_conf="$(mktemp)"
+		docker cp "${NGINX_CONTAINER}:${nginx_conf}" "$tmp_conf"
+		if ! grep -Eq ":${from_port}\\b" "$tmp_conf"; then
+			rm -f "$tmp_conf"
+			return 1
+		fi
+		if ! rewrite_slot_port "$tmp_conf" "$from_port" "$to_port"; then
+			rm -f "$tmp_conf"
+			return 1
+		fi
+		ensure_container_body_size_conf
+		docker cp "$tmp_conf" "${NGINX_CONTAINER}:${nginx_conf}"
+		rm -f "$tmp_conf"
+		docker exec "$NGINX_CONTAINER" nginx -t || return 1
+		docker exec "$NGINX_CONTAINER" nginx -s reload || return 1
+	else
+		[ -f "$nginx_conf" ] || return 1
+		ensure_host_body_size_conf
+		if ! grep -Eq ":${from_port}\\b" "$nginx_conf"; then
+			return 1
+		fi
+		if ! rewrite_slot_port "$nginx_conf" "$from_port" "$to_port"; then
+			return 1
+		fi
+		nginx -t || return 1
+		nginx -s reload || systemctl reload nginx || return 1
+	fi
+	# Final proof: the port nginx now routes to must be the requested one.
+	[ "$(nginx_slot_port)" = "$to_port" ]
+}
+
 active_port="$("$RECONCILE_SCRIPT")"
 active_port="${active_port:-${config_port:-$PORT_A}}"
 
-# Trust nginx over the recorded value when the two disagree.
-#
-# The recorded slot and the routed slot do drift — carrying an nginx config
-# across a server migration is enough to do it. Once drifted, every deploy fails
-# at the cutover grep (it looks for the recorded port, which is not in the
-# config), and the failure path then stops the "candidate" slot, which under
-# drift is the one actually serving production. That is how a failed deploy
-# became an outage. Reconciling here makes the same situation a no-op.
+# Reconcile against nginx, which is the only source that decides where traffic
+# actually goes.
 routed_port="$(nginx_slot_port)"
 if [ -n "$routed_port" ] && [ "$routed_port" != "$active_port" ]; then
 	if systemctl is-active --quiet "${SERVICE_NAME}-${routed_port}"; then
-		echo "active slot drift: recorded ${active_port}, nginx routes to ${routed_port}; trusting nginx" >&2
+		# nginx points at a live slot the record disagrees with. nginx wins:
+		# it is serving the traffic. Correcting the record here turns what used
+		# to be a guaranteed cutover failure into an ordinary deploy.
+		echo "active slot drift: recorded ${active_port}, nginx routes to live ${routed_port}; trusting nginx" >&2
 		active_port="$routed_port"
 		printf '%s\n' "$active_port" > "$ACTIVE_PORT_FILE"
+	elif systemctl is-active --quiet "${SERVICE_NAME}-${active_port}"; then
+		# nginx points at a slot that is not running while a healthy one sits
+		# beside it. That is an outage in progress: every request 502s. Repair
+		# it before deploying anything, so the site comes back immediately and
+		# the deploy starts from a consistent state.
+		echo "nginx routes to ${routed_port} which is not running; repointing at live slot ${active_port}" >&2
+		if switch_nginx_port "$routed_port" "$active_port"; then
+			echo "nginx repaired: now routing to ${active_port}" >&2
+		else
+			fail "nginx routes to dead slot ${routed_port} and repointing at ${active_port} failed"
+		fi
 	else
-		echo "warning: nginx routes to ${routed_port} but that slot is not running; keeping recorded ${active_port}" >&2
+		fail "nginx routes to ${routed_port} and neither slot is running"
 	fi
 fi
 
@@ -274,51 +379,6 @@ if ! http_ok "$probe_url"; then
 	journalctl -u "$next_unit" --no-pager -n 80 >&2 || true
 	fail "new slot failed readiness check after ${HEALTH_TIMEOUT_SECONDS}s: $ready_url (fallback $health_url)"
 fi
-
-ensure_host_body_size_conf() {
-	[ -d /etc/nginx ] || return 0
-	body_size_conf="/etc/nginx/conf.d/90-clirelay-body-size.conf"
-	mkdir -p "$(dirname "$body_size_conf")"
-	cat > "$body_size_conf" <<'EOF'
-# Managed by CliRelay GitHub Actions deploy workflow
-client_max_body_size 2000m;
-EOF
-}
-
-ensure_container_body_size_conf() {
-	docker exec -i "$NGINX_CONTAINER" sh -c 'cat > /etc/nginx/conf.d/90-clirelay-body-size.conf' <<'EOF'
-# Managed by CliRelay GitHub Actions deploy workflow
-client_max_body_size 2000m;
-EOF
-}
-
-switch_nginx_port() {
-	from_port="$1"
-	to_port="$2"
-	if [ "$nginx_mode" = "container" ]; then
-		tmp_conf="$(mktemp)"
-		docker cp "${NGINX_CONTAINER}:${nginx_conf}" "$tmp_conf"
-		if ! grep -Eq ":${from_port}\\b" "$tmp_conf"; then
-			rm -f "$tmp_conf"
-			return 1
-		fi
-		perl -0pi -e "s/:${from_port}\\b/:${to_port}/g" "$tmp_conf"
-		ensure_container_body_size_conf
-		docker cp "$tmp_conf" "${NGINX_CONTAINER}:${nginx_conf}"
-		rm -f "$tmp_conf"
-		docker exec "$NGINX_CONTAINER" nginx -t
-		docker exec "$NGINX_CONTAINER" nginx -s reload
-	else
-		[ -f "$nginx_conf" ] || return 1
-		ensure_host_body_size_conf
-		if ! grep -Eq ":${from_port}\\b" "$nginx_conf"; then
-			return 1
-		fi
-		perl -0pi -e "s/:${from_port}\\b/:${to_port}/g" "$nginx_conf"
-		nginx -t
-		nginx -s reload || systemctl reload nginx
-	fi
-}
 
 if [ "$nginx_mode" = "container" ]; then
 	backup="${nginx_conf}.bak.$(date +%Y%m%d_%H%M%S)"
