@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SCRIPT_VERSION must stay in sync with deploy gate expectations.
-SCRIPT_VERSION="${SCRIPT_VERSION:-2026.08.19.2}"
+SCRIPT_VERSION="${SCRIPT_VERSION:-2026.08.19.3}"
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-clirelay2}"
@@ -10,7 +10,16 @@ DOMAIN="${DOMAIN:-relay.07230805.xyz}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://${DOMAIN}}"
 PORT_A="${PORT_A:-8318}"
 PORT_B="${PORT_B:-8319}"
-DRAIN_SECONDS="${DRAIN_SECONDS:-35}"
+# How long the retired slot keeps serving after nginx has stopped sending it
+# new traffic. It only needs to outlast requests already in flight, and this
+# proxy fronts LLMs where a single streamed answer runs for minutes — 35s cut
+# those off. Draining is scheduled asynchronously, so a longer window costs
+# one idle process, not deploy time.
+DRAIN_SECONDS="${DRAIN_SECONDS:-180}"
+# Upper bound the retiring process may spend finishing in-flight requests
+# after SIGTERM. Passed to the unit as TimeoutStopSec and to the binary as
+# CLIRELAY_SHUTDOWN_GRACE so systemd cannot kill it mid-stream.
+SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-300}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-90}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-30}"
 MIN_AVAILABLE_MB="${MIN_AVAILABLE_MB:-512}"
@@ -330,7 +339,8 @@ unit_file="/etc/systemd/system/${next_unit}.service"
 	echo "Restart=always"
 	echo "RestartSec=3"
 	echo "KillSignal=SIGTERM"
-	echo "TimeoutStopSec=90"
+	echo "TimeoutStopSec=${SHUTDOWN_GRACE_SECONDS}"
+	echo "Environment=CLIRELAY_SHUTDOWN_GRACE=${SHUTDOWN_GRACE_SECONDS}s"
 	[ -n "$SERVICE_CPU_QUOTA" ] && echo "CPUQuota=${SERVICE_CPU_QUOTA}"
 	[ -n "$SERVICE_MEMORY_HIGH" ] && echo "MemoryHigh=${SERVICE_MEMORY_HIGH}"
 	[ -n "$SERVICE_MEMORY_MAX" ] && echo "MemoryMax=${SERVICE_MEMORY_MAX}"
