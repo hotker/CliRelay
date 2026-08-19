@@ -178,6 +178,15 @@ func commandCodeWindowItem(usageType, label string, window *commandCodeWindow) (
 // past the year 2001 in milliseconds exceed 1e12, which is the only reliable way
 // to tell the two apart without a documented unit.
 func commandCodeResetIn(resetAt *float64) string {
+	return commandCodeResetInAt(resetAt, time.Now())
+}
+
+// commandCodeResetInAt is commandCodeResetIn with the reference instant passed
+// in. Reading the clock inside the formatter makes the result depend on when it
+// is called, which is untestable at the boundaries: two calls a microsecond
+// apart can land on either side of a rounding step and render "2 hours" and
+// "1 hour 59 minutes" for the same input.
+func commandCodeResetInAt(resetAt *float64, now time.Time) string {
 	if resetAt == nil || *resetAt <= 0 || math.IsNaN(*resetAt) || math.IsInf(*resetAt, 0) {
 		return ""
 	}
@@ -185,7 +194,7 @@ func commandCodeResetIn(resetAt *float64) string {
 	if milliseconds <= 1e12 {
 		milliseconds *= 1000
 	}
-	seconds := int64(math.Round(time.Until(time.UnixMilli(int64(milliseconds))).Seconds()))
+	seconds := int64(math.Round(time.UnixMilli(int64(milliseconds)).Sub(now).Seconds()))
 	if seconds < 0 {
 		seconds = 0
 	}
