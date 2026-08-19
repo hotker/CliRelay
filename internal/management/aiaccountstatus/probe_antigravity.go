@@ -11,26 +11,19 @@ import (
 	"sync"
 	"time"
 
+	antigravityauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/antigravity"
 	managementapitools "github.com/router-for-me/CLIProxyAPI/v6/internal/management/apitools"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
-// antigravityClientVersion is the floor for the client version we advertise to
-// the CloudCode upstream.
-//
-// The upstream gates its answer on this version: an outdated client is served a
-// reduced model set and a coarser quota view, which is how a probe can report
-// three separate model families sharing one identical percentage and reset time.
-// The probe previously sent 1.11.5 while the request executor sent 1.104.0, so
-// the two halves of this provider disagreed about what client they were.
-const antigravityClientVersion = "4.3.0"
-
-// antigravityProbeUserAgent matches the header the Antigravity client sends on
-// its own quota calls. The literal `1.X.X` is not a placeholder we failed to
-// fill in — that is the string the client itself sends.
-const antigravityProbeUserAgent = "vscode/1.X.X (Antigravity/" + antigravityClientVersion + ")"
+// antigravityProbeUserAgent is the shared Antigravity client identity. The
+// probe and the request executor must present the same client to CloudCode:
+// when they drifted apart the upstream answered them differently, and the probe
+// — on the older version — was served a coarser quota view than the account
+// actually had.
+const antigravityProbeUserAgent = antigravityauth.ClientUserAgent
 
 // antigravityHosts is ordered sandbox-first. The sandbox host is the one that
 // stays reachable when the production host is shedding load with 429s.
