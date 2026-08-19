@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	antigravityauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/antigravity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -29,10 +30,13 @@ const (
 	antigravityStreamPath          = "/v1internal:streamGenerateContent"
 	antigravityGeneratePath        = "/v1internal:generateContent"
 	antigravityModelsPath          = "/v1internal:fetchAvailableModels"
-	defaultAntigravityAgent        = "antigravity/1.104.0 darwin/arm64"
-	antigravityAuthType            = "antigravity"
-	refreshSkew                    = 3000 * time.Second
-	systemInstruction              = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+	// Shared with the account status probe. The two had drifted to different
+	// versions, so CloudCode saw one account as two different clients and
+	// served the older one a reduced model set.
+	defaultAntigravityAgent = antigravityauth.ClientUserAgent
+	antigravityAuthType     = "antigravity"
+	refreshSkew             = 3000 * time.Second
+	systemInstruction       = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
 )
 
 // AntigravityExecutor proxies requests to the antigravity upstream.
