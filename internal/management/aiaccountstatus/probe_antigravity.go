@@ -443,11 +443,22 @@ func parseAntigravityHourToken(value string) int64 {
 	return 0
 }
 
-// parseAntigravityModels is the fallback view built from fetchAvailableModels.
-// It carries only the 5h window, and the upstream does not group the models, so
-// we classify them by shape. Anything we cannot classify is still reported under
-// its own id: a model list is a moving target, and a model missing from a
-// hand-written table used to vanish from the card entirely.
+// parseAntigravityModels is the fallback view built from fetchAvailableModels,
+// used when the account cannot read the grouped summary.
+//
+// Models are grouped by the quota they actually draw on, which the payload
+// states directly: models sharing a bucket report the same resetTime and the
+// same remainingFraction. Nothing here classifies by model name.
+//
+// That distinction is the whole point. A previous version grouped by model
+// family — "Gemini Pro", "Gemini Flash", "Claude" — and the real buckets do not
+// follow family lines at all. On a live account the buckets split by generation:
+// nineteen models including claude-sonnet-4-6, gpt-oss-120b-medium and the whole
+// gemini-3.x line share one weekly bucket, while gemini-2.5-* sit in a separate
+// 5h one. Family grouping therefore drew one shared quota as five independent
+// bars, and worse, put gemini-2.5-pro and gemini-3.1-pro-high on the same row
+// while they belong to different buckets — the row then reported the minimum of
+// two unrelated quotas, a number matching neither.
 func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 	root := gjson.ParseBytes(body)
 	models := root.Get("models")
@@ -458,8 +469,8 @@ func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 		return nil
 	}
 
-	grouped := make(map[string]*antigravityModelGroup, 8)
-	keys := make([]string, 0, 8)
+	buckets := make(map[string]*antigravityModelBucket, 4)
+	order := make([]string, 0, 4)
 
 	models.ForEach(func(modelID, model gjson.Result) bool {
 		id := normalizeAntigravityModelID(modelID.String())
@@ -468,86 +479,79 @@ func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 		}
 		info := firstJSONResult(model, "quotaInfo", "quota_info")
 		fraction := firstJSONResult(info, "remainingFraction", "remaining_fraction", "remaining")
+		resetRaw := strings.TrimSpace(firstJSONResult(info, "resetTime", "reset_time").String())
 		resetAt := parseFlexibleTime(firstJSONResult(info, "resetTime", "reset_time"))
 		if !fraction.Exists() && resetAt == nil {
 			return true
 		}
 
-		category := categorizeAntigravityModel(id)
-		key := category
-		label := antigravityCategoryLabel(category)
-		if category == antigravityCategoryOther {
-			key = "model_" + normalizeQuotaKeyPart(id)
-			label = strings.TrimSpace(firstJSONResult(model, "displayName", "display_name").String())
-			if label == "" {
-				label = id
-			}
-		}
-
-		current := grouped[key]
-		if current == nil {
-			current = &antigravityModelGroup{label: label}
-			grouped[key] = current
-			keys = append(keys, key)
-		}
-		current.count++
+		var percent *float64
 		if fraction.Exists() {
 			if value := quotaFraction(fraction); value != nil {
 				remaining := math.Round(clampPct(*value * 100))
-				if current.percent == nil || remaining < *current.percent {
-					current.percent = &remaining
-				}
+				percent = &remaining
 			}
 		}
-		if resetAt != nil && (current.resetAt == nil || resetAt.Before(*current.resetAt)) {
-			current.resetAt = resetAt
+
+		// Reset instant plus remaining fraction identifies the bucket. Pairing
+		// the two is deliberately conservative: two buckets that happen to reset
+		// together stay separate as soon as their usage differs, whereas keying
+		// on the reset alone would merge them and invent a shared quota.
+		percentKey := "none"
+		if percent != nil {
+			percentKey = strconv.FormatFloat(*percent, 'f', -1, 64)
 		}
+		bucketKey := resetRaw + "|" + percentKey
+
+		current := buckets[bucketKey]
+		if current == nil {
+			current = &antigravityModelBucket{percent: percent, resetAt: resetAt}
+			buckets[bucketKey] = current
+			order = append(order, bucketKey)
+		}
+		current.models = append(current.models, id)
 		return true
 	})
 
-	// Ranked so the well-known families lead and the unclassified models trail
-	// them, rather than surfacing in Go's randomized map order.
-	sort.SliceStable(keys, func(i, j int) bool {
-		return antigravityCategoryRank(keys[i]) < antigravityCategoryRank(keys[j])
-	})
-
-	out := make([]usage.QuotaWindowDTO, 0, len(keys))
-	for _, key := range keys {
-		value := grouped[key]
-		if value == nil || value.count == 0 {
+	out := make([]usage.QuotaWindowDTO, 0, len(order))
+	for _, bucketKey := range order {
+		bucket := buckets[bucketKey]
+		if bucket == nil || len(bucket.models) == 0 {
 			continue
 		}
+		sort.Strings(bucket.models)
 		out = append(out, usage.QuotaWindowDTO{
-			QuotaKey:      "antigravity:" + key,
-			QuotaLabel:    value.label,
-			Percent:       value.percent,
-			ResetAt:       value.resetAt,
-			WindowSeconds: antigravityWindowFiveHour,
+			// Named after the first model in the bucket so the key survives the
+			// reset that changes resetTime every cycle.
+			QuotaKey: "antigravity:group_" + normalizeQuotaKeyPart(bucket.models[0]),
+			// The card counts the models and renders the phrase; sending a
+			// sentence from here could not be localised.
+			QuotaLabel: antigravitySharedGroupLabel,
+			Meta:       strings.Join(bucket.models, ","),
+			Percent:    bucket.percent,
+			ResetAt:    bucket.resetAt,
 		})
 	}
+
+	// Soonest reset first: the bucket about to run out is the one worth reading.
+	sort.SliceStable(out, func(i, j int) bool {
+		left, right := out[i].ResetAt, out[j].ResetAt
+		if left == nil || right == nil {
+			return right != nil
+		}
+		return left.Before(*right)
+	})
 	return out
 }
 
-type antigravityModelGroup struct {
-	label   string
+// antigravitySharedGroupLabel tells the card to name the row after how many
+// models draw on the bucket. The count lives in Meta, which carries the ids.
+const antigravitySharedGroupLabel = "antigravity_quota.shared_group"
+
+type antigravityModelBucket struct {
+	models  []string
 	percent *float64
 	resetAt *time.Time
-	count   int
-}
-
-func antigravityCategoryRank(key string) int {
-	switch key {
-	case antigravityCategoryGeminiPro:
-		return 0
-	case antigravityCategoryGeminiFlash:
-		return 1
-	case antigravityCategoryGeminiImage:
-		return 2
-	case antigravityCategoryClaude:
-		return 3
-	default:
-		return 4
-	}
 }
 
 func normalizeAntigravityModelID(raw string) string {
@@ -560,52 +564,6 @@ func normalizeAntigravityModelID(raw string) string {
 // does not surface as a user-visible quota row.
 func isAntigravityInternalModel(id string) bool {
 	return strings.HasPrefix(id, "chat_") || strings.HasPrefix(id, "tab_")
-}
-
-const (
-	antigravityCategoryGeminiPro   = "gemini_pro"
-	antigravityCategoryGeminiFlash = "gemini_flash"
-	antigravityCategoryGeminiImage = "gemini_image"
-	antigravityCategoryClaude      = "claude"
-	antigravityCategoryOther       = "other"
-)
-
-// categorizeAntigravityModel groups a model by the shape of its id instead of by
-// membership in a list. A list has to be edited every time the upstream ships a
-// model; the shapes below already cover the ones that do not exist yet.
-func categorizeAntigravityModel(id string) string {
-	switch {
-	case strings.HasPrefix(id, "gemini") && strings.Contains(id, "image"),
-		strings.HasPrefix(id, "image"),
-		strings.HasPrefix(id, "imagen"):
-		return antigravityCategoryGeminiImage
-	case strings.HasPrefix(id, "gemini") && strings.Contains(id, "flash"):
-		return antigravityCategoryGeminiFlash
-	case strings.HasPrefix(id, "gemini") && strings.Contains(id, "pro"):
-		return antigravityCategoryGeminiPro
-	case strings.Contains(id, "claude"),
-		strings.Contains(id, "opus"),
-		strings.Contains(id, "sonnet"),
-		strings.Contains(id, "haiku"):
-		return antigravityCategoryClaude
-	default:
-		return antigravityCategoryOther
-	}
-}
-
-func antigravityCategoryLabel(category string) string {
-	switch category {
-	case antigravityCategoryGeminiPro:
-		return "Gemini Pro"
-	case antigravityCategoryGeminiFlash:
-		return "Gemini Flash"
-	case antigravityCategoryGeminiImage:
-		return "Gemini Image"
-	case antigravityCategoryClaude:
-		return "Claude"
-	default:
-		return ""
-	}
 }
 
 func stringSet(values ...string) map[string]struct{} {

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -274,47 +273,83 @@ func TestResolveXAIPlanUsesEntitlementWhenMonthlyLimitIsZero(t *testing.T) {
 	}
 }
 
-func TestParseAntigravityModelsSummarizesWorstRemainingAndEarliestReset(t *testing.T) {
+// Models sharing a bucket report the same reset and the same remaining
+// fraction. Grouping on those two values reproduces the account's real quota
+// structure; grouping by model family does not, and this payload is the shape
+// a live account actually returns — claude, gpt-oss and gemini-3.x on one
+// weekly bucket, gemini-2.5-* on a separate 5h one.
+func TestParseAntigravityModelsGroupsByTheQuotaModelsShare(t *testing.T) {
 	body := []byte(`{"models":{
-		"gemini-3-pro-high":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2026-07-20T00:00:00Z"}},
-		"gemini-3.1-pro-low":{"quota_info":{"remaining_fraction":0.4,"reset_time":"2026-07-19T00:00:00Z"}}
+		"claude-sonnet-4-6":{"quotaInfo":{"remainingFraction":1,"resetTime":"2026-08-27T15:17:11Z"}},
+		"gpt-oss-120b-medium":{"quotaInfo":{"remainingFraction":1,"resetTime":"2026-08-27T15:17:11Z"}},
+		"gemini-3.1-pro-high":{"quotaInfo":{"remainingFraction":1,"resetTime":"2026-08-27T15:17:11Z"}},
+		"gemini-2.5-pro":{"quotaInfo":{"remainingFraction":1,"resetTime":"2026-08-20T20:17:11Z"}},
+		"gemini-2.5-flash":{"quotaInfo":{"remainingFraction":1,"resetTime":"2026-08-20T20:17:11Z"}},
+		"chat_20706":{"quotaInfo":{"remainingFraction":1}}
 	}}`)
 	items := parseAntigravityModels(body)
-	pro := quotaByKey(items, "antigravity:gemini_pro")
-	if pro == nil || pro.Percent == nil || *pro.Percent != 40 || pro.ResetAt == nil || pro.ResetAt.Format(time.RFC3339) != "2026-07-19T00:00:00Z" {
-		t.Fatalf("pro=%+v", pro)
+	if len(items) != 2 {
+		t.Fatalf("buckets=%d, want 2: %+v", len(items), items)
 	}
-	if pro.WindowSeconds != antigravityWindowFiveHour {
-		t.Fatalf("window=%d, want %d", pro.WindowSeconds, antigravityWindowFiveHour)
+
+	// Soonest reset first: the bucket about to run out is the one worth reading.
+	if items[0].ResetAt == nil || items[0].ResetAt.Format(time.RFC3339) != "2026-08-20T20:17:11Z" {
+		t.Fatalf("first bucket reset=%v, want the 5h one", items[0].ResetAt)
+	}
+
+	shortWindow := items[0]
+	if shortWindow.Meta != "gemini-2.5-flash,gemini-2.5-pro" {
+		t.Fatalf("5h bucket members=%q", shortWindow.Meta)
+	}
+	if shortWindow.QuotaKey != "antigravity:group_gemini_2_5_flash" {
+		t.Fatalf("5h bucket key=%q, want it named after its first model", shortWindow.QuotaKey)
+	}
+
+	weekly := items[1]
+	if weekly.Meta != "claude-sonnet-4-6,gemini-3.1-pro-high,gpt-oss-120b-medium" {
+		t.Fatalf("weekly bucket members=%q, want claude, gemini and gpt-oss together", weekly.Meta)
+	}
+
+	// The card counts the members and renders the phrase, so the label is a key
+	// rather than a sentence that could not be localised.
+	for _, item := range items {
+		if item.QuotaLabel != antigravitySharedGroupLabel {
+			t.Fatalf("label=%q, want %q", item.QuotaLabel, antigravitySharedGroupLabel)
+		}
+		if item.Percent == nil || *item.Percent != 100 {
+			t.Fatalf("percent=%+v", item.Percent)
+		}
 	}
 }
 
-// A model the upstream ships after this code was written must still reach the
-// card. The previous grouping dropped anything missing from a hand-written id
-// list, so a new model family silently rendered as nothing at all.
-func TestParseAntigravityModelsKeepsUnknownModels(t *testing.T) {
+// Two buckets that reset at the same instant but differ in usage must stay
+// apart. Keying on the reset alone would merge them and report a shared quota
+// that does not exist.
+func TestParseAntigravityModelsKeepsBucketsWithDifferentUsageApart(t *testing.T) {
 	body := []byte(`{"models":{
-		"gemini-9-ultra":{"quotaInfo":{"remainingFraction":0.5},"displayName":"Gemini 9 Ultra"},
-		"grok-5-fast":{"quotaInfo":{"remainingFraction":0.25},"displayName":"Grok 5 Fast"},
-		"chat_20706":{"quotaInfo":{"remainingFraction":0.9}},
-		"tab_flash_lite_preview":{"quotaInfo":{"remainingFraction":0.9}}
+		"model-a":{"quotaInfo":{"remainingFraction":0.4,"resetTime":"2026-08-27T15:17:11Z"}},
+		"model-b":{"quotaInfo":{"remainingFraction":0.9,"resetTime":"2026-08-27T15:17:11Z"}}
 	}}`)
 	items := parseAntigravityModels(body)
+	if len(items) != 2 {
+		t.Fatalf("buckets=%d, want 2 (same reset, different usage): %+v", len(items), items)
+	}
+}
 
-	// gemini-9-ultra has neither "flash" nor "pro" nor "image" in its id, so it
-	// lands in the unclassified bucket under its own name rather than vanishing.
-	ultra := quotaByKey(items, "antigravity:model_gemini_9_ultra")
-	if ultra == nil || ultra.Percent == nil || *ultra.Percent != 50 || ultra.QuotaLabel != "Gemini 9 Ultra" {
-		t.Fatalf("ultra=%+v", ultra)
+// A model the upstream ships after this code was written still reaches the
+// card: membership follows the quota it reports, so there is no list to miss.
+func TestParseAntigravityModelsKeepsUnknownModels(t *testing.T) {
+	body := []byte(`{"models":{
+		"gemini-9-ultra":{"quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-27T15:17:11Z"}},
+		"brand-new-model":{"quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-27T15:17:11Z"}},
+		"tab_flash_lite_preview":{"quotaInfo":{"remainingFraction":0.9,"resetTime":"2026-08-27T15:17:11Z"}}
+	}}`)
+	items := parseAntigravityModels(body)
+	if len(items) != 1 {
+		t.Fatalf("buckets=%d, want 1: %+v", len(items), items)
 	}
-	grok := quotaByKey(items, "antigravity:model_grok_5_fast")
-	if grok == nil || grok.Percent == nil || *grok.Percent != 25 {
-		t.Fatalf("grok=%+v", grok)
-	}
-	for _, item := range items {
-		if strings.Contains(item.QuotaKey, "chat_") || strings.Contains(item.QuotaKey, "tab_") {
-			t.Fatalf("internal model leaked into quotas: %+v", item)
-		}
+	if items[0].Meta != "brand-new-model,gemini-9-ultra" {
+		t.Fatalf("members=%q, want both unknown models and no internal ones", items[0].Meta)
 	}
 }
 
