@@ -174,3 +174,56 @@ func TestProbeFailureKeepsQuotaObservationTimeBehind(t *testing.T) {
 		t.Fatal("attempt time must be strictly newer than the quota it describes")
 	}
 }
+
+// Antigravity reports its whole quota set on every probe, so a key the payload
+// no longer contains is genuinely gone. Carrying it forward is what left the
+// card showing the old and the new key set side by side after a rename.
+func TestMergeQuotaWindowsReplacesCompleteSnapshots(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-time.Hour)
+	pct := func(v float64) *float64 { return &v }
+	previous := []QuotaWindowDTO{
+		{QuotaKey: "antigravity:group_old_name", Percent: pct(10), ObservedAt: &old},
+	}
+	incoming := []QuotaWindowDTO{
+		{QuotaKey: "antigravity:gemini_pro", Percent: pct(80)},
+		{QuotaKey: "antigravity:claude", Percent: pct(90)},
+	}
+	merged := mergeQuotaWindows(previous, incoming, now)
+	if len(merged) != 2 {
+		t.Fatalf("merged=%d, want only the incoming snapshot: %+v", len(merged), merged)
+	}
+	for _, window := range merged {
+		if window.QuotaKey == "antigravity:group_old_name" {
+			t.Fatal("a key the provider stopped sending must not survive a full snapshot")
+		}
+		if window.ObservedAt == nil || !window.ObservedAt.Equal(now) {
+			t.Fatalf("window %q kept a stale timestamp", window.QuotaKey)
+		}
+	}
+}
+
+// Codex answers with a subset on roughly a fifth of probes, so a window missing
+// from one payload must keep its previous value and its original timestamp.
+func TestMergeQuotaWindowsStillCarriesPartialProvidersForward(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-time.Hour)
+	pct := func(v float64) *float64 { return &v }
+	previous := []QuotaWindowDTO{
+		{QuotaKey: "code_week", Percent: pct(60), ObservedAt: &old},
+		{QuotaKey: "review_week", Percent: pct(70), ObservedAt: &old},
+	}
+	incoming := []QuotaWindowDTO{{QuotaKey: "code_week", Percent: pct(55)}}
+	merged := mergeQuotaWindows(previous, incoming, now)
+	if len(merged) != 2 {
+		t.Fatalf("merged=%d, want the unmentioned window carried forward: %+v", len(merged), merged)
+	}
+	for _, window := range merged {
+		if window.QuotaKey != "review_week" {
+			continue
+		}
+		if window.ObservedAt == nil || !window.ObservedAt.Equal(old) {
+			t.Fatal("a carried-forward window must keep its original timestamp")
+		}
+	}
+}
