@@ -344,8 +344,14 @@ func TestParseAntigravityQuotaSummaryUsesUpstreamGrouping(t *testing.T) {
 	if fiveHour.WindowSeconds != antigravityWindowFiveHour {
 		t.Fatalf("gemini 5h window=%d", fiveHour.WindowSeconds)
 	}
-	if fiveHour.QuotaLabel != "Gemini Models · 5h" {
-		t.Fatalf("gemini 5h label=%q", fiveHour.QuotaLabel)
+	// The row is named after the group only; the window is rendered from
+	// WindowSeconds, and the upstream's bucket wording would make the label too
+	// long for a card row.
+	if fiveHour.QuotaLabel != "Gemini Models" {
+		t.Fatalf("gemini 5h label=%q, want the group name alone", fiveHour.QuotaLabel)
+	}
+	if fiveHour.Meta != "Gemini family" {
+		t.Fatalf("gemini 5h meta=%q, want the group description", fiveHour.Meta)
 	}
 
 	weekly := quotaByKey(items, "antigravity:gemini_weekly")
@@ -601,5 +607,38 @@ func TestWeeklyUsedFromQuotasKeepsExactMatchForKeyedProviders(t *testing.T) {
 	}
 	if missing := weeklyUsedFromQuotas(quotas, "seven_day"); missing != nil {
 		t.Fatalf("used=%v, want nil when the declared key is absent", missing)
+	}
+}
+
+// The card composes "<group> · <window>" itself, so the label must carry the
+// group name alone. Pairing it with the upstream's bucket wording produced
+// "Gemini Models · Weekly Limit Remaining", which is too long for a card row
+// and cannot be localised.
+func TestParseAntigravityQuotaSummaryLabelsRowsByGroupOnly(t *testing.T) {
+	body := []byte(`{"groups":[
+		{"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+			{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.51,"displayName":"Weekly Limit Remaining"},
+			{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.72,"displayName":"Five Hour Limit Remaining","description":"Quota available"}
+		]}
+	]}`)
+	items := parseAntigravityQuotaSummary(body)
+	if len(items) != 2 {
+		t.Fatalf("items=%d, want 2: %+v", len(items), items)
+	}
+	for _, item := range items {
+		if item.QuotaLabel != "Gemini Models" {
+			t.Fatalf("label=%q, want the group name alone", item.QuotaLabel)
+		}
+	}
+
+	weekly := quotaByKey(items, "antigravity:gemini_weekly")
+	if weekly == nil || weekly.Meta != "Models within this group: Gemini Flash, Gemini Pro" {
+		t.Fatalf("weekly meta=%+v, want the group description", weekly)
+	}
+	// A bucket that describes itself gets both, so the hint says which models
+	// the group covers and what state this particular window is in.
+	fiveHour := quotaByKey(items, "antigravity:gemini_5h")
+	if fiveHour == nil || fiveHour.Meta != "Models within this group: Gemini Flash, Gemini Pro · Quota available" {
+		t.Fatalf("5h meta=%+v, want group and bucket descriptions joined", fiveHour)
 	}
 }
