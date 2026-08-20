@@ -301,12 +301,13 @@ func parseAntigravityQuotaSummary(body []byte) []usage.QuotaWindowDTO {
 	seen := make(map[string]struct{}, 8)
 	groups.ForEach(func(groupIndex, group gjson.Result) bool {
 		groupName := strings.TrimSpace(firstJSONResult(group, "displayName", "display_name").String())
+		groupDescription := strings.TrimSpace(firstJSONResult(group, "description").String())
 		buckets := firstJSONResult(group, "buckets", "quotaBuckets", "quota_buckets")
 		if !buckets.IsArray() {
 			return true
 		}
 		buckets.ForEach(func(bucketIndex, bucket gjson.Result) bool {
-			dto, ok := antigravityBucketDTO(bucket, groupName, groupIndex.Int(), bucketIndex.Int())
+			dto, ok := antigravityBucketDTO(bucket, groupName, groupDescription, groupIndex.Int(), bucketIndex.Int())
 			if !ok {
 				return true
 			}
@@ -322,7 +323,7 @@ func parseAntigravityQuotaSummary(body []byte) []usage.QuotaWindowDTO {
 	return out
 }
 
-func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, bucketIndex int64) (usage.QuotaWindowDTO, bool) {
+func antigravityBucketDTO(bucket gjson.Result, groupName, groupDescription string, groupIndex, bucketIndex int64) (usage.QuotaWindowDTO, bool) {
 	fraction := firstJSONResult(bucket, "remainingFraction", "remaining_fraction", "remaining")
 	resetAt := parseFlexibleTime(firstJSONResult(bucket, "resetTime", "reset_time"))
 	if !fraction.Exists() && resetAt == nil {
@@ -343,7 +344,8 @@ func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, buc
 
 	dto := usage.QuotaWindowDTO{
 		QuotaKey:      "antigravity:" + key,
-		QuotaLabel:    antigravityBucketLabel(bucket, groupName, bucketID, window),
+		QuotaLabel:    antigravityGroupLabel(groupName, bucketID, window),
+		Meta:          antigravityBucketMeta(bucket, groupDescription),
 		ResetAt:       resetAt,
 		WindowSeconds: windowSeconds,
 	}
@@ -356,26 +358,35 @@ func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, buc
 	return dto, true
 }
 
-// antigravityBucketLabel keeps the upstream's own wording. Translating it here
-// would mean maintaining a table of names the upstream is free to change.
-func antigravityBucketLabel(bucket gjson.Result, groupName, bucketID, window string) string {
-	if name := strings.TrimSpace(firstJSONResult(bucket, "displayName", "display_name").String()); name != "" {
-		if groupName != "" && !strings.EqualFold(name, groupName) {
-			return groupName + " · " + name
+// antigravityGroupLabel names the row after the model group only.
+//
+// The upstream also names the bucket ("Weekly Limit Remaining"), and pairing
+// that with the group produced labels like
+// "Gemini Models · Weekly Limit Remaining" — too long for a card row, and
+// redundant once the window is rendered from WindowSeconds. The card composes
+// "<group> · <localised window>" itself, so the group name is all this has to
+// carry, and it still comes from the upstream rather than a table here.
+func antigravityGroupLabel(groupName, bucketID, window string) string {
+	if groupName != "" {
+		return groupName
+	}
+	if bucketID != "" {
+		return bucketID
+	}
+	return window
+}
+
+// antigravityBucketMeta carries the upstream's own explanation of the group —
+// typically which models draw on it. The card keeps it out of the row and shows
+// it on hover, so a long sentence cannot crowd out the numbers.
+func antigravityBucketMeta(bucket gjson.Result, groupDescription string) string {
+	if description := strings.TrimSpace(firstJSONResult(bucket, "description").String()); description != "" {
+		if groupDescription != "" && !strings.EqualFold(description, groupDescription) {
+			return groupDescription + " · " + description
 		}
-		return name
+		return description
 	}
-	label := groupName
-	if label == "" {
-		label = bucketID
-	}
-	if label == "" {
-		return window
-	}
-	if window != "" {
-		return label + " · " + window
-	}
-	return label
+	return groupDescription
 }
 
 // antigravityWindowSeconds maps the upstream's window token onto a duration.
