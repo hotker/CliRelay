@@ -56,6 +56,25 @@ type AIAccountSubjectStatusRecord struct {
 // varies the order it reports windows in.
 func mergeQuotaWindows(previous, incoming []QuotaWindowDTO, observedAt time.Time) []QuotaWindowDTO {
 	observedAt = observedAt.UTC()
+	// A provider whose probe always returns the full picture gets replacement
+	// instead: carrying a window forward there can only preserve a key the
+	// provider has stopped using. Renaming antigravity's keys once left the card
+	// rendering both the old and the new set side by side for a whole retention
+	// window, which reads as duplicated quotas.
+	if len(incoming) > 0 && quotaPayloadIsCompleteSnapshot(incoming) {
+		replaced := make([]QuotaWindowDTO, 0, len(incoming))
+		for _, window := range incoming {
+			key := strings.TrimSpace(window.QuotaKey)
+			if key == "" {
+				continue
+			}
+			window.QuotaKey = key
+			stamp := observedAt
+			window.ObservedAt = &stamp
+			replaced = append(replaced, window)
+		}
+		return replaced
+	}
 	incomingByKey := make(map[string]QuotaWindowDTO, len(incoming))
 	incomingOrder := make([]string, 0, len(incoming))
 	for _, window := range incoming {
@@ -102,6 +121,23 @@ func mergeQuotaWindows(previous, incoming []QuotaWindowDTO, observedAt time.Time
 		merged = append(merged, incomingByKey[key])
 	}
 	return merged
+}
+
+// quotaPayloadIsCompleteSnapshot reports whether every window in the payload
+// comes from a provider that reports all of its windows on every probe.
+//
+// Codex is the counter-example this merge exists for: it answers with only
+// `rate_limit` or only `additional_rate_limits` on roughly a fifth of probes,
+// so a missing window there means "not mentioned", not "gone". Antigravity's
+// two endpoints each return the account's full quota set or nothing at all,
+// so a missing window genuinely means the provider dropped it.
+func quotaPayloadIsCompleteSnapshot(windows []QuotaWindowDTO) bool {
+	for _, window := range windows {
+		if !strings.HasPrefix(strings.TrimSpace(window.QuotaKey), "antigravity:") {
+			return false
+		}
+	}
+	return true
 }
 
 // applyQuotaObservedFallback fills per-window ObservedAt for rows written before

@@ -274,47 +274,77 @@ func TestResolveXAIPlanUsesEntitlementWhenMonthlyLimitIsZero(t *testing.T) {
 	}
 }
 
-func TestParseAntigravityModelsSummarizesWorstRemainingAndEarliestReset(t *testing.T) {
+// One row per family, each carrying a single representative model's real quota.
+//
+// gemini-2.5-pro and gemini-3.1-pro-high are both "Gemini Pro" yet draw on
+// different buckets — captured from a live account, where gemini-3.x resets
+// weekly and gemini-2.5-* on a 5h cycle. Aggregating them reported the minimum
+// of two unrelated quotas with a countdown from the wrong one; picking the
+// preferred member reports something that is actually true of a model.
+func TestParseAntigravityModelsPicksOneRepresentativePerFamily(t *testing.T) {
 	body := []byte(`{"models":{
-		"gemini-3-pro-high":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2026-07-20T00:00:00Z"}},
-		"gemini-3.1-pro-low":{"quota_info":{"remaining_fraction":0.4,"reset_time":"2026-07-19T00:00:00Z"}}
+		"gemini-3.1-pro-high":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2026-08-27T15:17:11Z"}},
+		"gemini-2.5-pro":{"quotaInfo":{"remainingFraction":0.1,"resetTime":"2026-08-20T20:17:11Z"}},
+		"gemini-3-flash-agent":{"quotaInfo":{"remainingFraction":0.6,"resetTime":"2026-08-27T15:17:11Z"}},
+		"claude-sonnet-4-6":{"quotaInfo":{"remainingFraction":0.9,"resetTime":"2026-08-27T15:17:11Z"}},
+		"chat_20706":{"quotaInfo":{"remainingFraction":1}}
 	}}`)
 	items := parseAntigravityModels(body)
+
 	pro := quotaByKey(items, "antigravity:gemini_pro")
-	if pro == nil || pro.Percent == nil || *pro.Percent != 40 || pro.ResetAt == nil || pro.ResetAt.Format(time.RFC3339) != "2026-07-19T00:00:00Z" {
-		t.Fatalf("pro=%+v", pro)
+	if pro == nil || pro.Percent == nil || *pro.Percent != 80 {
+		t.Fatalf("pro=%+v, want the preferred gemini-3.1-pro-high at 80", pro)
 	}
-	if pro.WindowSeconds != antigravityWindowFiveHour {
-		t.Fatalf("window=%d, want %d", pro.WindowSeconds, antigravityWindowFiveHour)
+	if pro.Meta != "gemini-3.1-pro-high" {
+		t.Fatalf("pro represented by %q", pro.Meta)
+	}
+	// The 2.5 model's 10% must not leak into the row: different bucket.
+	if pro.ResetAt == nil || pro.ResetAt.Format(time.RFC3339) != "2026-08-27T15:17:11Z" {
+		t.Fatalf("pro reset=%v, want the represented model's own reset", pro.ResetAt)
+	}
+
+	flash := quotaByKey(items, "antigravity:gemini_flash")
+	if flash == nil || flash.Percent == nil || *flash.Percent != 60 {
+		t.Fatalf("flash=%+v", flash)
+	}
+	claude := quotaByKey(items, "antigravity:claude")
+	if claude == nil || claude.Percent == nil || *claude.Percent != 90 {
+		t.Fatalf("claude=%+v", claude)
+	}
+	for _, item := range items {
+		if strings.Contains(item.QuotaKey, "chat_") {
+			t.Fatalf("internal model leaked: %+v", item)
+		}
 	}
 }
 
-// A model the upstream ships after this code was written must still reach the
-// card. The previous grouping dropped anything missing from a hand-written id
-// list, so a new model family silently rendered as nothing at all.
-func TestParseAntigravityModelsKeepsUnknownModels(t *testing.T) {
+// Preference is a ranking, not an allowlist: a family whose preferred ids are
+// all absent still shows the member the upstream did send.
+func TestParseAntigravityModelsFallsBackToAnyFamilyMember(t *testing.T) {
 	body := []byte(`{"models":{
-		"gemini-9-ultra":{"quotaInfo":{"remainingFraction":0.5},"displayName":"Gemini 9 Ultra"},
-		"grok-5-fast":{"quotaInfo":{"remainingFraction":0.25},"displayName":"Grok 5 Fast"},
-		"chat_20706":{"quotaInfo":{"remainingFraction":0.9}},
-		"tab_flash_lite_preview":{"quotaInfo":{"remainingFraction":0.9}}
+		"gemini-9-pro-experimental":{"quotaInfo":{"remainingFraction":0.45,"resetTime":"2026-08-27T15:17:11Z"}}
+	}}`)
+	pro := quotaByKey(parseAntigravityModels(body), "antigravity:gemini_pro")
+	if pro == nil || pro.Percent == nil || *pro.Percent != 45 {
+		t.Fatalf("pro=%+v, want the only member of the family", pro)
+	}
+}
+
+// Unclassified models are unrelated to each other, so each gets its own row
+// under its own name rather than being collapsed into one "other" bar.
+func TestParseAntigravityModelsGivesUnclassifiedModelsTheirOwnRows(t *testing.T) {
+	body := []byte(`{"models":{
+		"gpt-oss-120b-medium":{"displayName":"GPT-OSS 120B (Medium)","quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-27T15:17:11Z"}},
+		"grok-5-fast":{"displayName":"Grok 5 Fast","quotaInfo":{"remainingFraction":0.25,"resetTime":"2026-08-27T15:17:11Z"}}
 	}}`)
 	items := parseAntigravityModels(body)
-
-	// gemini-9-ultra has neither "flash" nor "pro" nor "image" in its id, so it
-	// lands in the unclassified bucket under its own name rather than vanishing.
-	ultra := quotaByKey(items, "antigravity:model_gemini_9_ultra")
-	if ultra == nil || ultra.Percent == nil || *ultra.Percent != 50 || ultra.QuotaLabel != "Gemini 9 Ultra" {
-		t.Fatalf("ultra=%+v", ultra)
-	}
+	gpt := quotaByKey(items, "antigravity:model_gpt_oss_120b_medium")
 	grok := quotaByKey(items, "antigravity:model_grok_5_fast")
+	if gpt == nil || gpt.QuotaLabel != "GPT-OSS 120B (Medium)" || gpt.Percent == nil || *gpt.Percent != 50 {
+		t.Fatalf("gpt=%+v", gpt)
+	}
 	if grok == nil || grok.Percent == nil || *grok.Percent != 25 {
 		t.Fatalf("grok=%+v", grok)
-	}
-	for _, item := range items {
-		if strings.Contains(item.QuotaKey, "chat_") || strings.Contains(item.QuotaKey, "tab_") {
-			t.Fatalf("internal model leaked into quotas: %+v", item)
-		}
 	}
 }
 
@@ -344,8 +374,14 @@ func TestParseAntigravityQuotaSummaryUsesUpstreamGrouping(t *testing.T) {
 	if fiveHour.WindowSeconds != antigravityWindowFiveHour {
 		t.Fatalf("gemini 5h window=%d", fiveHour.WindowSeconds)
 	}
-	if fiveHour.QuotaLabel != "Gemini Models · 5h" {
-		t.Fatalf("gemini 5h label=%q", fiveHour.QuotaLabel)
+	// The row is named after the group only; the window is rendered from
+	// WindowSeconds, and the upstream's bucket wording would make the label too
+	// long for a card row.
+	if fiveHour.QuotaLabel != "Gemini Models" {
+		t.Fatalf("gemini 5h label=%q, want the group name alone", fiveHour.QuotaLabel)
+	}
+	if fiveHour.Meta != "Gemini family" {
+		t.Fatalf("gemini 5h meta=%q, want the group description", fiveHour.Meta)
 	}
 
 	weekly := quotaByKey(items, "antigravity:gemini_weekly")
@@ -601,5 +637,38 @@ func TestWeeklyUsedFromQuotasKeepsExactMatchForKeyedProviders(t *testing.T) {
 	}
 	if missing := weeklyUsedFromQuotas(quotas, "seven_day"); missing != nil {
 		t.Fatalf("used=%v, want nil when the declared key is absent", missing)
+	}
+}
+
+// The card composes "<group> · <window>" itself, so the label must carry the
+// group name alone. Pairing it with the upstream's bucket wording produced
+// "Gemini Models · Weekly Limit Remaining", which is too long for a card row
+// and cannot be localised.
+func TestParseAntigravityQuotaSummaryLabelsRowsByGroupOnly(t *testing.T) {
+	body := []byte(`{"groups":[
+		{"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+			{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.51,"displayName":"Weekly Limit Remaining"},
+			{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.72,"displayName":"Five Hour Limit Remaining","description":"Quota available"}
+		]}
+	]}`)
+	items := parseAntigravityQuotaSummary(body)
+	if len(items) != 2 {
+		t.Fatalf("items=%d, want 2: %+v", len(items), items)
+	}
+	for _, item := range items {
+		if item.QuotaLabel != "Gemini Models" {
+			t.Fatalf("label=%q, want the group name alone", item.QuotaLabel)
+		}
+	}
+
+	weekly := quotaByKey(items, "antigravity:gemini_weekly")
+	if weekly == nil || weekly.Meta != "Models within this group: Gemini Flash, Gemini Pro" {
+		t.Fatalf("weekly meta=%+v, want the group description", weekly)
+	}
+	// A bucket that describes itself gets both, so the hint says which models
+	// the group covers and what state this particular window is in.
+	fiveHour := quotaByKey(items, "antigravity:gemini_5h")
+	if fiveHour == nil || fiveHour.Meta != "Models within this group: Gemini Flash, Gemini Pro · Quota available" {
+		t.Fatalf("5h meta=%+v, want group and bucket descriptions joined", fiveHour)
 	}
 }
