@@ -301,12 +301,13 @@ func parseAntigravityQuotaSummary(body []byte) []usage.QuotaWindowDTO {
 	seen := make(map[string]struct{}, 8)
 	groups.ForEach(func(groupIndex, group gjson.Result) bool {
 		groupName := strings.TrimSpace(firstJSONResult(group, "displayName", "display_name").String())
+		groupDescription := strings.TrimSpace(firstJSONResult(group, "description").String())
 		buckets := firstJSONResult(group, "buckets", "quotaBuckets", "quota_buckets")
 		if !buckets.IsArray() {
 			return true
 		}
 		buckets.ForEach(func(bucketIndex, bucket gjson.Result) bool {
-			dto, ok := antigravityBucketDTO(bucket, groupName, groupIndex.Int(), bucketIndex.Int())
+			dto, ok := antigravityBucketDTO(bucket, groupName, groupDescription, groupIndex.Int(), bucketIndex.Int())
 			if !ok {
 				return true
 			}
@@ -322,7 +323,7 @@ func parseAntigravityQuotaSummary(body []byte) []usage.QuotaWindowDTO {
 	return out
 }
 
-func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, bucketIndex int64) (usage.QuotaWindowDTO, bool) {
+func antigravityBucketDTO(bucket gjson.Result, groupName, groupDescription string, groupIndex, bucketIndex int64) (usage.QuotaWindowDTO, bool) {
 	fraction := firstJSONResult(bucket, "remainingFraction", "remaining_fraction", "remaining")
 	resetAt := parseFlexibleTime(firstJSONResult(bucket, "resetTime", "reset_time"))
 	if !fraction.Exists() && resetAt == nil {
@@ -343,7 +344,8 @@ func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, buc
 
 	dto := usage.QuotaWindowDTO{
 		QuotaKey:      "antigravity:" + key,
-		QuotaLabel:    antigravityBucketLabel(bucket, groupName, bucketID, window),
+		QuotaLabel:    antigravityGroupLabel(groupName, bucketID, window),
+		Meta:          antigravityBucketMeta(bucket, groupDescription),
 		ResetAt:       resetAt,
 		WindowSeconds: windowSeconds,
 	}
@@ -356,26 +358,35 @@ func antigravityBucketDTO(bucket gjson.Result, groupName string, groupIndex, buc
 	return dto, true
 }
 
-// antigravityBucketLabel keeps the upstream's own wording. Translating it here
-// would mean maintaining a table of names the upstream is free to change.
-func antigravityBucketLabel(bucket gjson.Result, groupName, bucketID, window string) string {
-	if name := strings.TrimSpace(firstJSONResult(bucket, "displayName", "display_name").String()); name != "" {
-		if groupName != "" && !strings.EqualFold(name, groupName) {
-			return groupName + " · " + name
+// antigravityGroupLabel names the row after the model group only.
+//
+// The upstream also names the bucket ("Weekly Limit Remaining"), and pairing
+// that with the group produced labels like
+// "Gemini Models · Weekly Limit Remaining" — too long for a card row, and
+// redundant once the window is rendered from WindowSeconds. The card composes
+// "<group> · <localised window>" itself, so the group name is all this has to
+// carry, and it still comes from the upstream rather than a table here.
+func antigravityGroupLabel(groupName, bucketID, window string) string {
+	if groupName != "" {
+		return groupName
+	}
+	if bucketID != "" {
+		return bucketID
+	}
+	return window
+}
+
+// antigravityBucketMeta carries the upstream's own explanation of the group —
+// typically which models draw on it. The card keeps it out of the row and shows
+// it on hover, so a long sentence cannot crowd out the numbers.
+func antigravityBucketMeta(bucket gjson.Result, groupDescription string) string {
+	if description := strings.TrimSpace(firstJSONResult(bucket, "description").String()); description != "" {
+		if groupDescription != "" && !strings.EqualFold(description, groupDescription) {
+			return groupDescription + " · " + description
 		}
-		return name
+		return description
 	}
-	label := groupName
-	if label == "" {
-		label = bucketID
-	}
-	if label == "" {
-		return window
-	}
-	if window != "" {
-		return label + " · " + window
-	}
-	return label
+	return groupDescription
 }
 
 // antigravityWindowSeconds maps the upstream's window token onto a duration.
@@ -432,11 +443,19 @@ func parseAntigravityHourToken(value string) int64 {
 	return 0
 }
 
-// parseAntigravityModels is the fallback view built from fetchAvailableModels.
-// It carries only the 5h window, and the upstream does not group the models, so
-// we classify them by shape. Anything we cannot classify is still reported under
-// its own id: a model list is a moving target, and a model missing from a
-// hand-written table used to vanish from the card entirely.
+// parseAntigravityModels is the fallback view built from fetchAvailableModels,
+// used when the account cannot read the grouped summary.
+//
+// One row per model family, each showing a single representative model's real
+// quota. Picking a representative rather than aggregating the family matters:
+// on a live account gemini-2.5-pro and gemini-3.1-pro-high are both "Gemini
+// Pro" yet draw on different buckets, so folding them together produced the
+// minimum of two unrelated quotas — a number belonging to neither, and a reset
+// countdown from whichever bucket happened to expire first.
+//
+// Preference order is a ranking, not an allowlist: a family with none of its
+// preferred ids still shows whichever member the upstream did send, so a model
+// shipped after this code cannot make a row disappear.
 func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 	root := gjson.ParseBytes(body)
 	models := root.Get("models")
@@ -447,8 +466,13 @@ func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 		return nil
 	}
 
-	grouped := make(map[string]*antigravityModelGroup, 8)
-	keys := make([]string, 0, 8)
+	type candidate struct {
+		id          string
+		displayName string
+		percent     *float64
+		resetAt     *time.Time
+	}
+	families := make(map[string][]candidate, 8)
 
 	models.ForEach(func(modelID, model gjson.Result) bool {
 		id := normalizeAntigravityModelID(modelID.String())
@@ -461,94 +485,73 @@ func parseAntigravityModels(body []byte) []usage.QuotaWindowDTO {
 		if !fraction.Exists() && resetAt == nil {
 			return true
 		}
-
-		category := categorizeAntigravityModel(id)
-		key := category
-		label := antigravityCategoryLabel(category)
-		if category == antigravityCategoryOther {
-			key = "model_" + normalizeQuotaKeyPart(id)
-			label = strings.TrimSpace(firstJSONResult(model, "displayName", "display_name").String())
-			if label == "" {
-				label = id
-			}
-		}
-
-		current := grouped[key]
-		if current == nil {
-			current = &antigravityModelGroup{label: label}
-			grouped[key] = current
-			keys = append(keys, key)
-		}
-		current.count++
+		var percent *float64
 		if fraction.Exists() {
 			if value := quotaFraction(fraction); value != nil {
 				remaining := math.Round(clampPct(*value * 100))
-				if current.percent == nil || remaining < *current.percent {
-					current.percent = &remaining
-				}
+				percent = &remaining
 			}
 		}
-		if resetAt != nil && (current.resetAt == nil || resetAt.Before(*current.resetAt)) {
-			current.resetAt = resetAt
-		}
+		family := categorizeAntigravityModel(id)
+		families[family] = append(families[family], candidate{
+			id:          id,
+			displayName: strings.TrimSpace(firstJSONResult(model, "displayName", "display_name").String()),
+			percent:     percent,
+			resetAt:     resetAt,
+		})
 		return true
 	})
 
-	// Ranked so the well-known families lead and the unclassified models trail
-	// them, rather than surfacing in Go's randomized map order.
-	sort.SliceStable(keys, func(i, j int) bool {
-		return antigravityCategoryRank(keys[i]) < antigravityCategoryRank(keys[j])
-	})
-
-	out := make([]usage.QuotaWindowDTO, 0, len(keys))
-	for _, key := range keys {
-		value := grouped[key]
-		if value == nil || value.count == 0 {
+	out := make([]usage.QuotaWindowDTO, 0, len(families))
+	for _, family := range antigravityFamilyOrder {
+		members := families[family]
+		if len(members) == 0 {
 			continue
 		}
+		sort.SliceStable(members, func(i, j int) bool {
+			return antigravityPreferenceRank(family, members[i].id) < antigravityPreferenceRank(family, members[j].id)
+		})
+		chosen := members[0]
+		label := antigravityFamilyLabel(family)
+		if family == antigravityCategoryOther {
+			label = chosen.displayName
+			if label == "" {
+				label = chosen.id
+			}
+		}
 		out = append(out, usage.QuotaWindowDTO{
-			QuotaKey:      "antigravity:" + key,
-			QuotaLabel:    value.label,
-			Percent:       value.percent,
-			ResetAt:       value.resetAt,
+			QuotaKey:      "antigravity:" + family,
+			QuotaLabel:    label,
+			Percent:       chosen.percent,
+			ResetAt:       chosen.resetAt,
 			WindowSeconds: antigravityWindowFiveHour,
+			// The row shows one model's quota; naming it lets the card explain
+			// which, instead of implying the whole family was measured.
+			Meta: chosen.id,
 		})
 	}
-	return out
-}
 
-type antigravityModelGroup struct {
-	label   string
-	percent *float64
-	resetAt *time.Time
-	count   int
-}
-
-func antigravityCategoryRank(key string) int {
-	switch key {
-	case antigravityCategoryGeminiPro:
-		return 0
-	case antigravityCategoryGeminiFlash:
-		return 1
-	case antigravityCategoryGeminiImage:
-		return 2
-	case antigravityCategoryClaude:
-		return 3
-	default:
-		return 4
+	// "other" collapses every unclassified model onto one row, so emit each of
+	// them instead: they are unrelated models that merely failed classification.
+	if extras := families[antigravityCategoryOther]; len(extras) > 1 {
+		out = out[:len(out)-1]
+		sort.SliceStable(extras, func(i, j int) bool { return extras[i].id < extras[j].id })
+		for _, extra := range extras {
+			label := extra.displayName
+			if label == "" {
+				label = extra.id
+			}
+			out = append(out, usage.QuotaWindowDTO{
+				QuotaKey:      "antigravity:model_" + normalizeQuotaKeyPart(extra.id),
+				QuotaLabel:    label,
+				Percent:       extra.percent,
+				ResetAt:       extra.resetAt,
+				WindowSeconds: antigravityWindowFiveHour,
+				Meta:          extra.id,
+			})
+		}
 	}
-}
-
-func normalizeAntigravityModelID(raw string) string {
-	id := strings.ToLower(strings.TrimSpace(raw))
-	return strings.TrimPrefix(id, "models/")
-}
-
-// isAntigravityInternalModel filters the upstream's non-conversational entries.
-// These are matched by shape rather than by id so a newly added internal model
-// does not surface as a user-visible quota row.
-func isAntigravityInternalModel(id string) bool {
-	return strings.HasPrefix(id, "chat_") || strings.HasPrefix(id, "tab_")
+	return out
 }
 
 const (
@@ -559,9 +562,37 @@ const (
 	antigravityCategoryOther       = "other"
 )
 
+var antigravityFamilyOrder = []string{
+	antigravityCategoryGeminiPro,
+	antigravityCategoryGeminiFlash,
+	antigravityCategoryGeminiImage,
+	antigravityCategoryClaude,
+	antigravityCategoryOther,
+}
+
+// antigravityPreferences ranks which member best represents its family — the
+// agent-facing model an operator actually spends. Absent ids simply rank last,
+// so this never decides whether a row exists.
+var antigravityPreferences = map[string][]string{
+	antigravityCategoryGeminiPro:   {"gemini-pro-agent", "gemini-3.1-pro-high", "gemini-3.1-pro-low"},
+	antigravityCategoryGeminiFlash: {"gemini-3-flash-agent", "gemini-3-flash"},
+	antigravityCategoryGeminiImage: {"gemini-3.1-flash-image", "gemini-3-pro-image"},
+	antigravityCategoryClaude:      {"claude-sonnet-4-6", "claude-opus-4-6-thinking"},
+}
+
+func antigravityPreferenceRank(family, id string) int {
+	for index, preferred := range antigravityPreferences[family] {
+		if preferred == id {
+			return index
+		}
+	}
+	// Unpreferred members keep upstream order behind the preferred ones.
+	return len(antigravityPreferences[family]) + 1
+}
+
 // categorizeAntigravityModel groups a model by the shape of its id instead of by
-// membership in a list. A list has to be edited every time the upstream ships a
-// model; the shapes below already cover the ones that do not exist yet.
+// membership in a list, so a model that does not exist yet still lands in the
+// right family.
 func categorizeAntigravityModel(id string) string {
 	switch {
 	case strings.HasPrefix(id, "gemini") && strings.Contains(id, "image"),
@@ -582,8 +613,8 @@ func categorizeAntigravityModel(id string) string {
 	}
 }
 
-func antigravityCategoryLabel(category string) string {
-	switch category {
+func antigravityFamilyLabel(family string) string {
+	switch family {
 	case antigravityCategoryGeminiPro:
 		return "Gemini Pro"
 	case antigravityCategoryGeminiFlash:
@@ -595,6 +626,18 @@ func antigravityCategoryLabel(category string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeAntigravityModelID(raw string) string {
+	id := strings.ToLower(strings.TrimSpace(raw))
+	return strings.TrimPrefix(id, "models/")
+}
+
+// isAntigravityInternalModel filters the upstream's non-conversational entries.
+// These are matched by shape rather than by id so a newly added internal model
+// does not surface as a user-visible quota row.
+func isAntigravityInternalModel(id string) bool {
+	return strings.HasPrefix(id, "chat_") || strings.HasPrefix(id, "tab_")
 }
 
 func stringSet(values ...string) map[string]struct{} {
