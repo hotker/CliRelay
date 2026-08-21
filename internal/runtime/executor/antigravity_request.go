@@ -229,9 +229,13 @@ func antigravityBaseURLFallbackOrder(auth *cliproxyauth.Auth) []string {
 	if base := resolveCustomAntigravityBaseURL(auth); base != "" {
 		return []string{base}
 	}
+	// Sandbox first: the non-sandbox daily host throttles far more readily, and
+	// every 429 it returns costs a retry and risks being read as an exhausted
+	// quota. Production logs showed the daily host rate-limiting requests that
+	// the sandbox host then served without complaint.
 	return []string{
-		antigravityBaseURLDaily,
 		antigravitySandboxBaseURLDaily,
+		antigravityBaseURLDaily,
 		// antigravityBaseURLProd,
 	}
 }
