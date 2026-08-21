@@ -17,8 +17,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// executeClaudeNonStream performs a claude non-streaming request to the Antigravity API.
-func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+// executeViaStreamEndpoint serves a non-streaming request by calling the
+// upstream's streaming endpoint and assembling the chunks into one response.
+//
+// Named for what it does rather than for claude, which is all it used to serve:
+// the endpoint choice is about which upstream path actually works, not about
+// which model family asked.
+func (e *AntigravityExecutor) executeViaStreamEndpoint(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
