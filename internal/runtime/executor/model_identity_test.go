@@ -35,21 +35,21 @@ func TestSameModelIdentityTreatsRoutingPrefixAsSameModel(t *testing.T) {
 }
 
 func TestUsageReporterDropsAliasOnlyUpstreamModel(t *testing.T) {
-	reporter := newUsageReporter(context.Background(), "ollama-cloud", "ollama/deepseek-v4-flash:0731", "deepseek-v4-flash:0731", &cliproxyauth.Auth{})
+	reporter := newUsageReporter(context.Background(), "ollama-cloud", "ollama/deepseek-v4-flash:0731", "deepseek-v4-flash:0731", &cliproxyauth.Auth{}, false)
 	if reporter.upstreamModel != "" {
 		t.Fatalf("upstream model = %q, want empty for a prefix-only alias", reporter.upstreamModel)
 	}
 }
 
 func TestUsageReporterKeepsRenamingUpstreamModel(t *testing.T) {
-	reporter := newUsageReporter(context.Background(), "claude", "fast", "claude-sonnet-4", &cliproxyauth.Auth{})
+	reporter := newUsageReporter(context.Background(), "claude", "fast", "claude-sonnet-4", &cliproxyauth.Auth{}, false)
 	if reporter.upstreamModel != "claude-sonnet-4" {
 		t.Fatalf("upstream model = %q, want claude-sonnet-4", reporter.upstreamModel)
 	}
 }
 
 func TestUsageReporterSettersRejectAliasOnlyNames(t *testing.T) {
-	reporter := newUsageReporter(context.Background(), "ollama-cloud", "ollama/gpt-oss:20b", "", &cliproxyauth.Auth{})
+	reporter := newUsageReporter(context.Background(), "ollama-cloud", "ollama/gpt-oss:20b", "", &cliproxyauth.Auth{}, false)
 	reporter.setUpstreamModel("gpt-oss:20b")
 	reporter.setVisionFallbackModel("gpt-oss:20b")
 	if reporter.upstreamModel != "" || reporter.visionFallbackModel != "" {
@@ -66,7 +66,7 @@ func TestUsageReporterSettersRejectAliasOnlyNames(t *testing.T) {
 // logged model after construction, and the record must not keep a name that has
 // meanwhile become an alias of it.
 func TestUsageReporterSetModelClearsNowRedundantUpstream(t *testing.T) {
-	reporter := newUsageReporter(context.Background(), "ollama-cloud", "some-other-model", "deepseek-v4-flash:0731", &cliproxyauth.Auth{})
+	reporter := newUsageReporter(context.Background(), "ollama-cloud", "some-other-model", "deepseek-v4-flash:0731", &cliproxyauth.Auth{}, false)
 	if reporter.upstreamModel == "" {
 		t.Fatal("precondition: upstream model should be recorded for unrelated models")
 	}
