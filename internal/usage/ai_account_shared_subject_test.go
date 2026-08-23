@@ -266,7 +266,7 @@ func TestRequestProjectionSharesUsageWithoutTouchingBindingAndSurvivesLogCleanup
 		t.Fatalf("direct day summary id=%s 7d=%d 30d=%d start7=%s start30=%s", directID, direct7, direct30, start7, start30)
 	}
 
-	cycleStarts, err := QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{identity.ID}, []string{"code_week"})
+	cycleStarts, err := QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{identity.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,10 @@ func TestSharedSubjectBackfillUsesOnlySmallTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 	resetOld := now.Add(24 * time.Hour)
-	resetNew := now.Add(48 * time.Hour)
+	// The later probe must describe the period that follows the stored one, not a
+	// stored period whose reset simply drifted later: only a rollover replaces an
+	// anchor, so an arbitrary later reset would (correctly) be kept out.
+	resetNew := resetOld.Add(7 * 24 * time.Hour)
 	if err := RecordQuotaSnapshotPointsIdentityForTenant(sharedSubjectTenantA, authA.EnsureIndex(), identity.ID, "codex", []QuotaSnapshotPoint{{
 		RecordedAt: older, QuotaKey: "code_week", QuotaLabel: "Week", Percent: &pctOld, ResetAt: &resetOld, WindowSeconds: 604800,
 	}}); err != nil {
@@ -419,7 +422,7 @@ func TestSharedSubjectBackfillUsesOnlySmallTablesAndIsIdempotent(t *testing.T) {
 	if !ok || !parsedReset.Equal(resetNew) {
 		t.Fatalf("cycle reset=%q want %s", cycleReset, resetNew)
 	}
-	cycleStarts, err := QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{identity.ID}, []string{"code_week"})
+	cycleStarts, err := QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{identity.ID})
 	if err != nil {
 		t.Fatal(err)
 	}

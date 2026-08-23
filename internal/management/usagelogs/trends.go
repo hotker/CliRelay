@@ -145,7 +145,7 @@ func (s *Service) authFileTrendFromSharedSubject(authIndex string, auth *coreaut
 	}
 	weeklyQuotaUsed := latestWeeklyQuotaUsedPercent(series, preferredWeeklyQuotaKeys...)
 
-	cycleStarts, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{subjectID}, preferredWeeklyQuotaKeys)
+	cycleStarts, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{subjectID})
 	if err != nil {
 		return http.StatusInternalServerError, map[string]any{"error": err.Error()}
 	}

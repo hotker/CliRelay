@@ -719,7 +719,7 @@ func (s *Service) loadPersistedStatus(subjectID string) (*usage.AIAccountSubject
 }
 
 func (s *Service) viewFromPersistedRecord(tenantID string, auth *coreauth.Auth, record usage.AIAccountSubjectStatusRecord) *AccountStatusView {
-	cycleStarts, _ := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{record.AuthSubjectID}, primaryWeeklyKeys(auth.Provider))
+	cycleStarts, _ := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{record.AuthSubjectID})
 	summaries, _ := usage.QueryAIAccountSubjectUsageSummaries([]string{record.AuthSubjectID}, cycleStarts)
 	subjects, _ := usage.ListAIAccountSubjects([]string{record.AuthSubjectID})
 	counts, _ := usage.CountAIAccountTenantBindings(tenantID, []string{record.AuthSubjectID})
@@ -841,17 +841,7 @@ func (s *Service) ListStatus(tenantID string, authIndexes, authSubjectIDs []stri
 	if err != nil {
 		return StatusListResponse{}, err
 	}
-	prefKeys := make([]string, 0)
-	prefSeen := map[string]struct{}{}
-	for _, auth := range wanted {
-		for _, key := range primaryWeeklyKeys(auth.Provider) {
-			if _, ok := prefSeen[key]; !ok {
-				prefSeen[key] = struct{}{}
-				prefKeys = append(prefKeys, key)
-			}
-		}
-	}
-	cycleStart, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs, prefKeys)
+	cycleStart, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs)
 	if err != nil {
 		return StatusListResponse{}, err
 	}

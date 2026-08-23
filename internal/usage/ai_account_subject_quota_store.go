@@ -147,16 +147,48 @@ func anchorAIAccountSubjectQuotaCycleTx(tx *sql.Tx, cycle AIAccountSubjectQuotaC
 	if !start.Valid || window != cycle.WindowSeconds {
 		return cycle, nil
 	}
-	if !sameAIAccountSubjectCycle(cycle.CycleStartAt, start.Time, cycle.WindowSeconds) {
+	storedReset := time.Time{}
+	if reset.Valid {
+		storedReset = reset.Time.UTC()
+	}
+	if !sameAIAccountSubjectCycle(cycle.CycleStartAt, start.Time, cycle.WindowSeconds) &&
+		aiAccountSubjectCycleRollover(cycle, storedReset) {
 		return cycle, nil
 	}
 	cycle.CycleStartAt = start.Time.UTC()
-	if reset.Valid && !reset.Time.IsZero() {
+	if !storedReset.IsZero() {
 		// Keep reset_at consistent with the anchor so the card countdown stops
 		// jittering by a second or two on every probe.
-		cycle.ResetAt = reset.Time.UTC()
+		cycle.ResetAt = storedReset
 	}
 	return cycle, nil
+}
+
+// aiAccountSubjectCycleRollover reports whether a probe describes a genuinely new
+// period rather than the stored one seen through a moving countdown.
+//
+// Drift tolerance alone was not enough. A quota bucket the account has not touched
+// is answered as "a full window remaining", so its reset — and the start derived
+// from it — advances by however long has passed since the last probe. Hours of
+// that is far outside any tolerance, yet nothing has rolled: it is the same
+// untouched period. Treating each probe as a new period is what re-keyed the
+// usage bucket every few hours and scattered one week's requests across six of
+// them.
+//
+// A period may therefore only be replaced when the upstream shows the old one is
+// finished: the probe ran after it ended, the new period starts where it ended,
+// or the reset moved closer (credits reset, plan change).
+func aiAccountSubjectCycleRollover(incoming AIAccountSubjectQuotaCycle, storedReset time.Time) bool {
+	if storedReset.IsZero() {
+		return true
+	}
+	if !incoming.LastVerifiedAt.IsZero() && !incoming.LastVerifiedAt.UTC().Before(storedReset) {
+		return true
+	}
+	if sameAIAccountSubjectCycle(incoming.CycleStartAt, storedReset, incoming.WindowSeconds) {
+		return true
+	}
+	return incoming.ResetAt.UTC().Before(storedReset)
 }
 
 func upsertAIAccountSubjectQuotaCycleTx(tx *sql.Tx, cycle AIAccountSubjectQuotaCycle) (AIAccountSubjectQuotaCycle, error) {
@@ -248,14 +280,21 @@ func QueryAIAccountSubjectQuotaSeries(authSubjectID string, start, end time.Time
 	return series, rows.Err()
 }
 
-func QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs []string, preferredKeys []string) (map[string]time.Time, error) {
+// QueryLatestAIAccountSubjectWeeklyCyclesBatch resolves each subject's cycle
+// anchor. Candidate filtering deliberately happens in
+// selectAIAccountSubjectWeeklyCycle rather than in SQL: the preference is
+// per-provider, and a single IN list built from a mixed batch dropped every
+// window belonging to a provider that names its buckets differently — with the
+// list holding "seven_day" for Claude, antigravity's own weekly rows never came
+// back and its accounts reported no cycle at all.
+func QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs []string) (map[string]time.Time, error) {
 	db := getReadDB()
 	ids := dedupeExactStrings(subjectIDs)
 	out := make(map[string]time.Time)
 	if db == nil || len(ids) == 0 {
 		return out, nil
 	}
-	args := make([]any, 0, len(ids)+len(preferredKeys)+1)
+	args := make([]any, 0, len(ids)+1)
 	for _, id := range ids {
 		args = append(args, id)
 	}
@@ -265,14 +304,6 @@ func QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs []string, preferred
 		FROM ai_account_subject_quota_cycles
 		WHERE auth_subject_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
 		  AND window_seconds >= ?`
-	keys := dedupeExactStrings(preferredKeys)
-	if len(keys) > 0 {
-		query += ` AND quota_key IN (` + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + `)`
-		for _, key := range keys {
-			args = append(args, key)
-		}
-	}
-	query += ` ORDER BY last_verified_at DESC, reset_at DESC`
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("usage: query shared quota cycles: %w", err)
