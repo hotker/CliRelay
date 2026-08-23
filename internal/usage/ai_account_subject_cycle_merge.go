@@ -105,7 +105,10 @@ func loadAIAccountSubjectCycleBuckets(db *sql.DB) ([]aiAccountSubjectCycleBucket
 		return nil, fmt.Errorf("usage: query shared subject cycle buckets: %w", err)
 	}
 	defer rows.Close()
+	return scanAIAccountSubjectCycleBuckets(rows)
+}
 
+func scanAIAccountSubjectCycleBuckets(rows *sql.Rows) ([]aiAccountSubjectCycleBucketRow, error) {
 	out := make([]aiAccountSubjectCycleBucketRow, 0)
 	for rows.Next() {
 		var row aiAccountSubjectCycleBucketRow
