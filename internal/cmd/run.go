@@ -269,7 +269,10 @@ func defaultRuntimeDataStackMaintenanceOps() runtimeDataStackMaintenanceOps {
 			if err := usage.RunAIAccountSubjectUsageTokensBackfillAtInit(); err != nil {
 				return err
 			}
-			return usage.RunAIAccountSubjectCycleBucketMergeAtInit()
+			if err := usage.RunAIAccountSubjectCycleBucketMergeAtInit(); err != nil {
+				return err
+			}
+			return usage.RunAIAccountSubjectCycleRealignAtInit()
 		},
 		scheduleUsageRollupCatchup: usage.ScheduleUsageRollupBlueGreenCatchup,
 	}

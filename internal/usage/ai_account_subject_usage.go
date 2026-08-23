@@ -54,6 +54,13 @@ func primaryAIAccountSubjectWeeklyQuotaKey(provider string) string {
 		return "code_week"
 	case "xai", "grok":
 		return "weekly_limit"
+	case "antigravity":
+		// Antigravity reports two weekly buckets — Gemini models and the
+		// third-party (Claude/GPT) ones. Gemini is the bucket an account actually
+		// spends; the 3p bucket usually sits unused, and while it does the
+		// upstream answers its reset as "now + 7d", so its derived start walks
+		// forward on every probe and can never anchor a period.
+		return "antigravity:gemini_weekly"
 	default:
 		return ""
 	}
@@ -113,21 +120,57 @@ func sameAIAccountSubjectCycle(a, b time.Time, windowSeconds int64) bool {
 	return absDuration(a.UTC().Sub(b.UTC())) <= aiAccountSubjectCycleDriftTolerance(windowSeconds)
 }
 
+// selectAIAccountSubjectWeeklyCycle answers "which window is this subject's card
+// cycle" and must answer it identically everywhere.
+//
+// The request-hot projection asks via an in-memory map and the readers ask via a
+// SQL result set, so the answer cannot depend on the order candidates arrive in.
+// It also cannot depend on last_verified_at or reset_at: a provider that reports
+// several weekly windows re-stamps them all on the same probe, and ordering by a
+// moving timestamp let the two sides pick different windows. Requests then landed
+// in a bucket no reader looked at — production had an account with 1084 lifetime
+// calls whose card reported 0 for the period.
 func selectAIAccountSubjectWeeklyCycle(cycles []AIAccountSubjectQuotaCycle) (AIAccountSubjectQuotaCycle, bool) {
-	var selected AIAccountSubjectQuotaCycle
+	candidates := make([]AIAccountSubjectQuotaCycle, 0, len(cycles))
+	preferred := make([]AIAccountSubjectQuotaCycle, 0, len(cycles))
 	for _, cycle := range cycles {
 		if cycle.WindowSeconds < aiAccountSubjectWeeklyWindowSeconds || cycle.CycleStartAt.IsZero() || cycle.ResetAt.IsZero() {
 			continue
 		}
+		candidates = append(candidates, cycle)
 		primaryKey := primaryAIAccountSubjectWeeklyQuotaKey(cycle.Provider)
-		if primaryKey != "" && strings.TrimSpace(cycle.QuotaKey) != primaryKey {
-			continue
+		if primaryKey != "" && strings.TrimSpace(cycle.QuotaKey) == primaryKey {
+			preferred = append(preferred, cycle)
 		}
-		if selected.AuthSubjectID == "" || cycle.LastVerifiedAt.After(selected.LastVerifiedAt) {
+	}
+	// The provider's named window wins when the probe returned it. When it did
+	// not — an upstream rename, or a fallback probe that only sees other windows
+	// — keep the remaining candidates instead of reporting no cycle at all.
+	if len(preferred) > 0 {
+		candidates = preferred
+	}
+	if len(candidates) == 0 {
+		return AIAccountSubjectQuotaCycle{}, false
+	}
+	selected := candidates[0]
+	for _, cycle := range candidates[1:] {
+		if aiAccountSubjectCycleRanksAhead(cycle, selected) {
 			selected = cycle
 		}
 	}
-	return selected, selected.AuthSubjectID != ""
+	return selected, true
+}
+
+// aiAccountSubjectCycleRanksAhead is a total order over cycle candidates, so the
+// winner is a pure function of the set. The narrowest window at or above a week
+// is the weekly one — a monthly window sorts behind it rather than displacing it
+// — and the quota key breaks the tie because, unlike any timestamp, it does not
+// move when the next probe lands.
+func aiAccountSubjectCycleRanksAhead(candidate, current AIAccountSubjectQuotaCycle) bool {
+	if candidate.WindowSeconds != current.WindowSeconds {
+		return candidate.WindowSeconds < current.WindowSeconds
+	}
+	return strings.TrimSpace(candidate.QuotaKey) < strings.TrimSpace(current.QuotaKey)
 }
 
 func cachedAIAccountSubjectWeeklyCycle(subjectID string) (AIAccountSubjectQuotaCycle, bool) {
