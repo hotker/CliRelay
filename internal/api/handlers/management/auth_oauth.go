@@ -109,6 +109,23 @@ func (h *Handler) saveTenantTokenRecord(ctx context.Context, tenantID string, re
 	return savedPath, nil
 }
 
+// oauthProxyIDFromRequest reads the proxy-pool entry chosen in the login dialog.
+//
+// The start request is the authoritative carrier: the record is built and saved
+// by the goroutine that request spawns, so a proxy id arriving later on
+// /oauth-callback would reach a closure that has already been handed its value.
+// The callback panel sends the field too, which is harmless duplication rather
+// than a second source of truth.
+func oauthProxyIDFromRequest(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if proxyID := strings.TrimSpace(c.Query("proxy_id")); proxyID != "" {
+		return proxyID
+	}
+	return strings.TrimSpace(c.Query("proxy-id"))
+}
+
 func (h *Handler) tenantOAuthBindings(c *gin.Context) (
 	authDir string,
 	saveRecord func(context.Context, *coreauth.Auth) (string, error),
@@ -117,7 +134,13 @@ func (h *Handler) tenantOAuthBindings(c *gin.Context) (
 ) {
 	tenantID := effectiveTenantID(c)
 	authDir = managementauthfiles.TenantAuthDir(h.cfg.AuthDir, tenantID)
+	// The proxy the operator picked in the login dialog is bound here rather than
+	// inside each provider flow. Every OAuth provider funnels its finished record
+	// through this one closure, so binding at this point covers all of them and
+	// leaves no provider to be forgotten when the next one is added.
+	proxyID := oauthProxyIDFromRequest(c)
 	saveRecord = func(ctx context.Context, record *coreauth.Auth) (string, error) {
+		managementauthfiles.BindProxyID(record, proxyID)
 		return h.saveTenantTokenRecord(ctx, tenantID, record)
 	}
 	registerSession = func(state, provider string) {
@@ -429,18 +452,25 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 	ctx := requestAuthContext(c)
 	authDir, saveRecord, _, _ := h.tenantOAuthBindings(c)
 
+	// Cookie login posts its fields as JSON, so the proxy id arrives in the body
+	// rather than the query string tenantOAuthBindings reads.
 	var payload struct {
-		Cookie string `json:"cookie"`
+		Cookie  string `json:"cookie"`
+		ProxyID string `json:"proxy_id"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "cookie is required"})
 		return
 	}
+	saveWithProxy := func(ctx context.Context, record *coreauth.Auth) (string, error) {
+		managementauthfiles.BindProxyID(record, payload.ProxyID)
+		return saveRecord(ctx, record)
+	}
 
 	result, err := iflowprovider.AuthenticateCookie(ctx, payload.Cookie, iflowprovider.CookieLoginOptions{
 		Config:     h.cfg,
 		AuthDir:    authDir,
-		SaveRecord: saveRecord,
+		SaveRecord: saveWithProxy,
 	})
 	if err != nil {
 		var duplicate iflowprovider.DuplicateBXAuthError
