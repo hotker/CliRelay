@@ -503,6 +503,9 @@ func normalizeCodexAuthMetadata(metadata map[string]any) {
 	if planType := strings.ToLower(metadataString(metadata, "plan_type", "planType", "chatgpt_plan_type")); planType != "" {
 		metadata["plan_type"] = planType
 	}
+	if userID := metadataString(metadata, "chatgpt_user_id", "chatgptUserId"); userID != "" {
+		metadata["chatgpt_user_id"] = userID
+	}
 	normalizeCodexMetadataFromJWT(metadataString(metadata, "id_token"), metadata)
 	normalizeCodexMetadataFromJWT(metadataString(metadata, "access_token"), metadata)
 }
@@ -534,6 +537,11 @@ func normalizeCodexMetadataFromJWT(token string, metadata map[string]any) {
 	if metadataString(metadata, "account_id") == "" {
 		if accountID := metadataString(authClaims, "account_id", "chatgpt_account_id"); accountID != "" {
 			metadata["account_id"] = accountID
+		}
+	}
+	if metadataString(metadata, "chatgpt_user_id") == "" {
+		if userID := metadataString(authClaims, "chatgpt_user_id"); userID != "" {
+			metadata["chatgpt_user_id"] = userID
 		}
 	}
 	if metadataString(metadata, "plan_type") == "" {

@@ -23,6 +23,7 @@ type AuthSubjectIdentity struct {
 	ID            string
 	Provider      string
 	AccountID     string
+	UserID        string
 	Email         string
 	SeedKind      string
 	SeedHash      string
@@ -49,6 +50,7 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 	}
 	tenantID := coreauth.NormalizedTenantID(auth.TenantID)
 	accountID := authMetadataString(auth.Metadata, "account_id", "accountId", "chatgpt_account_id")
+	userID := authMetadataString(auth.Metadata, "chatgpt_user_id", "chatgptUserId")
 	email := strings.ToLower(authEmail(auth))
 
 	seedKind := ""
@@ -57,6 +59,12 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 	subjectScope := AIAccountSubjectScopeTenant
 	shareReason := "fallback_identity_is_tenant_scoped"
 	switch {
+	case provider == "codex" && accountID != "" && userID != "":
+		seedKind = "account_user_id"
+		seedValue = accountID + "\x1f" + userID
+		shareEligible = true
+		subjectScope = AIAccountSubjectScopeShared
+		shareReason = "stable_provider_account_and_user_id"
 	case accountID != "":
 		seedKind = "account_id"
 		seedValue = accountID
@@ -104,6 +112,7 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 		ID:            stableAuthSubjectID(subjectSeed...),
 		Provider:      provider,
 		AccountID:     accountID,
+		UserID:        userID,
 		Email:         email,
 		SeedKind:      seedKind,
 		SeedHash:      stableSeedHash(seedHashValue),

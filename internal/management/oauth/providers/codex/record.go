@@ -35,6 +35,11 @@ func MetadataFromTokenStorage(tokenStorage *internalcodex.CodexTokenStorage, pla
 	}
 	metadata["email"] = tokenStorage.Email
 	metadata["account_id"] = tokenStorage.AccountID
+	if claims, _ := internalcodex.ParseJWTToken(tokenStorage.IDToken); claims != nil {
+		if userID := strings.TrimSpace(claims.CodexAuthInfo.ChatgptUserID); userID != "" {
+			metadata["chatgpt_user_id"] = userID
+		}
+	}
 	return metadata
 }
 

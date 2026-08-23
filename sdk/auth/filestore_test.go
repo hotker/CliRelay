@@ -154,6 +154,7 @@ func TestFileTokenStoreListNormalizesOpenAIBundleJSONForCodex(t *testing.T) {
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id": accountID,
 			"chatgpt_plan_type":  "plus",
+			"chatgpt_user_id":    "user-bundle",
 		},
 	})
 	idToken := makeJWTForTest(t, map[string]any{
@@ -163,6 +164,7 @@ func TestFileTokenStoreListNormalizesOpenAIBundleJSONForCodex(t *testing.T) {
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id": accountID,
 			"chatgpt_plan_type":  "plus",
+			"chatgpt_user_id":    "user-bundle",
 		},
 	})
 	data, err := json.Marshal(map[string]any{
@@ -196,12 +198,13 @@ func TestFileTokenStoreListNormalizesOpenAIBundleJSONForCodex(t *testing.T) {
 	wantExpired := time.Unix(expiresAt, 0).UTC().Format(time.RFC3339)
 	wantLastRefresh := time.Unix(issuedAt, 0).UTC().Format(time.RFC3339)
 	for key, want := range map[string]any{
-		"type":         "codex",
-		"account_id":   accountID,
-		"email":        "bundle@example.com",
-		"expired":      wantExpired,
-		"last_refresh": wantLastRefresh,
-		"plan_type":    "plus",
+		"type":            "codex",
+		"account_id":      accountID,
+		"chatgpt_user_id": "user-bundle",
+		"email":           "bundle@example.com",
+		"expired":         wantExpired,
+		"last_refresh":    wantLastRefresh,
+		"plan_type":       "plus",
 	} {
 		if got := auths[0].Metadata[key]; got != want {
 			t.Fatalf("metadata[%s] = %#v, want %#v", key, got, want)
