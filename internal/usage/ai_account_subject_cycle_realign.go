@@ -70,11 +70,19 @@ func runAIAccountSubjectCycleRealignDB(db *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, subjectID := range subjectIDs {
-		group := aiAccountSubjectCycleBucketsInPeriod(bySubject[subjectID], anchors[subjectID])
-		if len(group) < 2 {
+		anchor := anchors[subjectID]
+		group := aiAccountSubjectCycleBucketsInPeriod(bySubject[subjectID], anchor)
+		if len(group) == 0 {
 			continue
 		}
-		if err := foldAIAccountSubjectCycleBucketsTx(tx, anchors[subjectID].CycleStartAt, group); err != nil {
+		// A lone bucket still needs the pass when it is keyed to a start the
+		// readers no longer resolve — one misplaced bucket reads as zero just as
+		// surely as six do.
+		anchorKey := formatAIAccountSubjectCycleBucketStart(anchor.CycleStartAt)
+		if len(group) == 1 && group[0].start == anchorKey {
+			continue
+		}
+		if err := foldAIAccountSubjectCycleBucketsTx(tx, anchor.CycleStartAt, group); err != nil {
 			return err
 		}
 	}

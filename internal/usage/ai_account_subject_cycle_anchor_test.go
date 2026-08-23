@@ -316,3 +316,41 @@ func TestCycleRealignFoldsFragmentsOntoLiveAnchor(t *testing.T) {
 		t.Fatalf("cycle buckets after rerun = %d, want 2", buckets)
 	}
 }
+
+// One bucket keyed to a start no reader resolves reads as zero just as surely as
+// six do, so the repair cannot be limited to subjects with several fragments.
+func TestCycleRealignRekeysLoneMisplacedBucket(t *testing.T) {
+	initSharedSubjectTestDB(t)
+	subjectID := "authsub_realign_single"
+
+	anchorAt := time.Now().UTC().Truncate(time.Second).Add(-40 * time.Hour)
+	resetAt := anchorAt.Add(7 * 24 * time.Hour)
+	if _, err := getDB().Exec(`
+		INSERT INTO ai_account_subject_quota_cycles
+			(auth_subject_id, provider, quota_key, cycle_start_at, reset_at, window_seconds, last_verified_at)
+		VALUES (?, 'antigravity', ?, ?, ?, ?, ?)
+	`, subjectID, antigravityGeminiWeeklyKey,
+		anchorAt.Format(time.RFC3339Nano), resetAt.Format(time.RFC3339Nano),
+		weeklyWindowSeconds, anchorAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	strayAt := anchorAt.Add(30 * time.Hour)
+	if _, err := getDB().Exec(`
+		INSERT INTO ai_account_subject_usage_buckets (
+			auth_subject_id, bucket_kind, bucket_start, request_count,
+			success_count, failure_count, cost_total, total_tokens, first_event_at, updated_at
+		) VALUES (?, 'cycle', ?, 42, 42, 0, 0, 4200, ?, ?)
+	`, subjectID, formatAIAccountSubjectCycleBucketStart(strayAt),
+		strayAt.Format(time.RFC3339Nano), strayAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runAIAccountSubjectCycleRealignDB(getDB()); err != nil {
+		t.Fatal(err)
+	}
+	got := readCycleSummary(t, subjectID)
+	if !got.CycleKnown || got.CycleRequestTotal != 42 || got.CycleTotalTokens != 4200 {
+		t.Fatalf("cycle summary = %+v, want 42 requests / 4200 tokens", got)
+	}
+}
