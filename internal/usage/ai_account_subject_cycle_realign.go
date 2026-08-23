@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -104,6 +105,82 @@ func runAIAccountSubjectCycleRealignDB(db *sql.DB) error {
 	// re-reads the anchors this pass just folded onto.
 	resetAIAccountSubjectCycleCache()
 	return nil
+}
+
+// realignAuthSubjectCycleBucketsTx runs the same repair for one subject inside a
+// caller's transaction. Merging two tenants' halves of an account brings together
+// buckets anchored independently, which is the fragmented shape all over again.
+func realignAuthSubjectCycleBucketsTx(tx *sql.Tx, subjectID string) error {
+	subjectID = strings.TrimSpace(subjectID)
+	if subjectID == "" {
+		return nil
+	}
+	anchor, ok, err := loadAuthSubjectCycleAnchorTx(tx, subjectID)
+	if err != nil || !ok {
+		return err
+	}
+	buckets, err := loadAuthSubjectCycleBucketsTx(tx, subjectID)
+	if err != nil {
+		return err
+	}
+	group := aiAccountSubjectCycleBucketsInPeriod(buckets, anchor)
+	if len(group) == 0 {
+		return nil
+	}
+	anchorKey := formatAIAccountSubjectCycleBucketStart(anchor.CycleStartAt)
+	if len(group) == 1 && group[0].start == anchorKey {
+		return nil
+	}
+	return foldAIAccountSubjectCycleBucketsTx(tx, anchor.CycleStartAt, group)
+}
+
+func loadAuthSubjectCycleAnchorTx(tx *sql.Tx, subjectID string) (AIAccountSubjectQuotaCycle, bool, error) {
+	rows, err := tx.Query(`
+		SELECT auth_subject_id, provider, quota_key, cycle_start_at, reset_at, window_seconds, last_verified_at
+		FROM ai_account_subject_quota_cycles
+		WHERE auth_subject_id = ? AND window_seconds >= ?
+	`, subjectID, aiAccountSubjectWeeklyWindowSeconds)
+	if err != nil {
+		return AIAccountSubjectQuotaCycle{}, false, fmt.Errorf("usage: query subject quota cycles for realign: %w", err)
+	}
+	defer rows.Close()
+	cycles := make([]AIAccountSubjectQuotaCycle, 0, 4)
+	for rows.Next() {
+		var cycle AIAccountSubjectQuotaCycle
+		var start, reset, verified storedTime
+		if err := rows.Scan(&cycle.AuthSubjectID, &cycle.Provider, &cycle.QuotaKey, &start, &reset, &cycle.WindowSeconds, &verified); err != nil {
+			return AIAccountSubjectQuotaCycle{}, false, fmt.Errorf("usage: scan subject quota cycle for realign: %w", err)
+		}
+		if start.Valid {
+			cycle.CycleStartAt = start.Time.UTC()
+		}
+		if reset.Valid {
+			cycle.ResetAt = reset.Time.UTC()
+		}
+		if verified.Valid {
+			cycle.LastVerifiedAt = verified.Time.UTC()
+		}
+		cycles = append(cycles, cycle)
+	}
+	if err := rows.Err(); err != nil {
+		return AIAccountSubjectQuotaCycle{}, false, err
+	}
+	cycle, ok := selectAIAccountSubjectWeeklyCycle(cycles)
+	return cycle, ok, nil
+}
+
+func loadAuthSubjectCycleBucketsTx(tx *sql.Tx, subjectID string) ([]aiAccountSubjectCycleBucketRow, error) {
+	rows, err := tx.Query(`
+		SELECT auth_subject_id, bucket_start, request_count, success_count, failure_count,
+			cost_total, total_tokens, first_event_at, updated_at
+		FROM ai_account_subject_usage_buckets
+		WHERE bucket_kind = 'cycle' AND auth_subject_id = ?
+	`, subjectID)
+	if err != nil {
+		return nil, fmt.Errorf("usage: query subject cycle buckets for realign: %w", err)
+	}
+	defer rows.Close()
+	return scanAIAccountSubjectCycleBuckets(rows)
 }
 
 // loadAIAccountSubjectCycleAnchors resolves each subject's live period through the
