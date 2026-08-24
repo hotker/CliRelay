@@ -90,10 +90,9 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		lastStatus = httpResp.StatusCode
 		lastBody = append([]byte(nil), bodyBytes...)
 		lastErr = nil
-		if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-			log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-			continue
-		}
+		// 429 is an account-level RESOURCE_EXHAUSTED signal, not a
+		// host-specific hiccup: see antigravity_executor.go for the
+		// production trace that motivated dropping this fallback.
 		sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
 		if httpResp.StatusCode == http.StatusTooManyRequests {
 			if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
