@@ -272,7 +272,13 @@ func defaultRuntimeDataStackMaintenanceOps() runtimeDataStackMaintenanceOps {
 			if err := usage.RunAIAccountSubjectCycleBucketMergeAtInit(); err != nil {
 				return err
 			}
-			return usage.RunAIAccountSubjectCycleRealignAtInit()
+			if err := usage.RunAIAccountSubjectCycleRealignAtInit(); err != nil {
+				return err
+			}
+			// After realign: that pass folds fragments onto the stored anchor, and
+			// this one may then move that anchor to the period it should have
+			// rolled into.
+			return usage.RunAIAccountSubjectCycleRolloverRepairAtInit()
 		},
 		scheduleUsageRollupCatchup: usage.ScheduleUsageRollupBlueGreenCatchup,
 	}

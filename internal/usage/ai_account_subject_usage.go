@@ -233,13 +233,42 @@ func aiAccountSubjectCycleAt(tx *sql.Tx, subjectID string, at time.Time) (AIAcco
 	if !ok {
 		return AIAccountSubjectQuotaCycle{}, false, nil
 	}
-	at = at.UTC()
-	window := time.Duration(cycle.WindowSeconds) * time.Second
-	for !at.Before(cycle.ResetAt) {
-		cycle.CycleStartAt = cycle.ResetAt
-		cycle.ResetAt = cycle.ResetAt.Add(window)
+	cycle = advanceAIAccountSubjectCycleTo(cycle, at)
+	return cycle, !at.UTC().Before(cycle.CycleStartAt), nil
+}
+
+// advanceAIAccountSubjectCycleTo rolls a stored anchor forward to the period that
+// contains at.
+//
+// The stored anchor only moves when a probe lands, and probes stop whenever the
+// account is disabled, rate limited or simply unreachable. Every reader must
+// therefore apply the same elapsed-time roll the projection applies, or the two
+// sides disagree the moment a reset passes unprobed: the writer keys the bucket
+// to the period the request happened in while the card still reports the previous
+// period's start — and, matching buckets against that stale start, the previous
+// period's totals.
+func advanceAIAccountSubjectCycleTo(cycle AIAccountSubjectQuotaCycle, at time.Time) AIAccountSubjectQuotaCycle {
+	cycle.CycleStartAt, cycle.ResetAt = advanceQuotaCyclePeriod(cycle.CycleStartAt, cycle.ResetAt, cycle.WindowSeconds, at)
+	return cycle
+}
+
+// advanceQuotaCyclePeriod is the shared roll used by both cycle tables, so the
+// tenant-scoped reader cannot answer with a different period than the shared one.
+func advanceQuotaCyclePeriod(start, reset time.Time, windowSeconds int64, at time.Time) (time.Time, time.Time) {
+	if windowSeconds <= 0 || reset.IsZero() {
+		return start, reset
 	}
-	return cycle, !at.Before(cycle.CycleStartAt), nil
+	at = at.UTC()
+	reset = reset.UTC()
+	if at.Before(reset) {
+		return start, reset
+	}
+	// Jump to the containing period rather than stepping one window at a time: an
+	// anchor left behind by a long probe outage can be many windows old.
+	window := time.Duration(windowSeconds) * time.Second
+	skipped := at.Sub(reset) / window
+	start = reset.Add(skipped * window)
+	return start, start.Add(window)
 }
 
 func formatAIAccountSubjectCycleBucketStart(value time.Time) string {
