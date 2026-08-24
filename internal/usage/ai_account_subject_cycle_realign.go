@@ -187,13 +187,32 @@ func loadAuthSubjectCycleBucketsTx(tx *sql.Tx, subjectID string) ([]aiAccountSub
 // same selection the projection and the readers use, so the repair lands on the
 // bucket key they will look for.
 func loadAIAccountSubjectCycleAnchors(db *sql.DB) (map[string]AIAccountSubjectQuotaCycle, error) {
+	bySubject, err := loadAIAccountSubjectWeeklyCyclesBySubject(db)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]AIAccountSubjectQuotaCycle, len(bySubject))
+	for subjectID, cycles := range bySubject {
+		if cycle, ok := selectAIAccountSubjectWeeklyCycle(cycles); ok {
+			out[subjectID] = cycle
+		}
+	}
+	return out, nil
+}
+
+// loadAIAccountSubjectWeeklyCyclesBySubject returns every stored weekly window,
+// grouped by subject. Repairs that re-derive an anchor need all of a subject's
+// windows, not just the one currently selected: correcting a single window can
+// change which one the selection resolves to.
+func loadAIAccountSubjectWeeklyCyclesBySubject(db *sql.DB) (map[string][]AIAccountSubjectQuotaCycle, error) {
 	rows, err := db.Query(`
 		SELECT auth_subject_id, provider, quota_key, cycle_start_at, reset_at, window_seconds, last_verified_at
 		FROM ai_account_subject_quota_cycles
 		WHERE window_seconds >= ?
 	`, aiAccountSubjectWeeklyWindowSeconds)
 	if err != nil {
-		return nil, fmt.Errorf("usage: query shared quota cycles for realign: %w", err)
+		return nil, fmt.Errorf("usage: query shared quota cycles: %w", err)
 	}
 	defer rows.Close()
 
@@ -202,7 +221,11 @@ func loadAIAccountSubjectCycleAnchors(db *sql.DB) (map[string]AIAccountSubjectQu
 		var cycle AIAccountSubjectQuotaCycle
 		var start, reset, verified storedTime
 		if err := rows.Scan(&cycle.AuthSubjectID, &cycle.Provider, &cycle.QuotaKey, &start, &reset, &cycle.WindowSeconds, &verified); err != nil {
-			return nil, fmt.Errorf("usage: scan shared quota cycle for realign: %w", err)
+			return nil, fmt.Errorf("usage: scan shared quota cycle: %w", err)
+		}
+		cycle.AuthSubjectID = strings.TrimSpace(cycle.AuthSubjectID)
+		if cycle.AuthSubjectID == "" {
+			continue
 		}
 		if start.Valid {
 			cycle.CycleStartAt = start.Time.UTC()
@@ -215,17 +238,7 @@ func loadAIAccountSubjectCycleAnchors(db *sql.DB) (map[string]AIAccountSubjectQu
 		}
 		bySubject[cycle.AuthSubjectID] = append(bySubject[cycle.AuthSubjectID], cycle)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	out := make(map[string]AIAccountSubjectQuotaCycle, len(bySubject))
-	for subjectID, cycles := range bySubject {
-		if cycle, ok := selectAIAccountSubjectWeeklyCycle(cycles); ok {
-			out[subjectID] = cycle
-		}
-	}
-	return out, nil
+	return bySubject, rows.Err()
 }
 
 // aiAccountSubjectCycleBucketsInPeriod returns the buckets whose key falls inside
