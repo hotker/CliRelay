@@ -200,6 +200,8 @@ func aiAccountSubjectCycleRolloverFromProbe(
 	incoming := stored
 	incoming.CycleStartAt = probe.resetAt.Add(-time.Duration(probe.windowSeconds) * time.Second)
 	incoming.ResetAt = probe.resetAt
+	// The rule reads LastVerifiedAt as "when this observation was made", so judge
+	// with the probe's own timestamp.
 	incoming.LastVerifiedAt = probe.recordedAt
 	// Only ever forward: a probe older than the stored anchor must not rewind a
 	// period the server has already rolled into.
@@ -211,6 +213,11 @@ func aiAccountSubjectCycleRolloverFromProbe(
 	}
 	if !aiAccountSubjectCycleRollover(incoming, stored.ResetAt, true) {
 		return stored, false
+	}
+	// The metering probe a period is derived from can be older than the last probe
+	// of any kind, and the stored verification time must not travel backwards.
+	if stored.LastVerifiedAt.After(incoming.LastVerifiedAt) {
+		incoming.LastVerifiedAt = stored.LastVerifiedAt
 	}
 	return incoming, true
 }
