@@ -87,12 +87,11 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 			return cliproxyexecutor.Response{Payload: []byte(translated), Headers: httpResp.Header.Clone()}, nil
 		}
 
-		lastStatus = httpResp.StatusCode
-		lastBody = append([]byte(nil), bodyBytes...)
-		lastErr = nil
-		// 429 is an account-level RESOURCE_EXHAUSTED signal, not a
+		// This branch now always returns below, so it no longer needs to
+		// leave a lastStatus/lastBody/lastErr trail for the post-loop
+		// switch — 429 is an account-level RESOURCE_EXHAUSTED signal, not a
 		// host-specific hiccup: see antigravity_executor.go for the
-		// production trace that motivated dropping this fallback.
+		// production trace that motivated dropping the host fallback.
 		sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
 		if httpResp.StatusCode == http.StatusTooManyRequests {
 			if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
