@@ -203,10 +203,13 @@ attemptLoop:
 				lastStatus = httpResp.StatusCode
 				lastBody = append([]byte(nil), bodyBytes...)
 				lastErr = nil
-				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
-					continue
-				}
+				// 429 is an account-level RESOURCE_EXHAUSTED signal, not a
+				// host-specific hiccup: production traces show the same auth
+				// getting 429 on both sandbox and daily back to back, so
+				// falling back to the other host here only burns a second
+				// attempt on an account that's already known to be limited,
+				// leaving the outer selector fewer retries to reach a
+				// different, healthy account.
 				if antigravityShouldRetryNoCapacity(httpResp.StatusCode, bodyBytes) {
 					if idx+1 < len(baseURLs) {
 						log.Debugf("antigravity executor: no capacity on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
