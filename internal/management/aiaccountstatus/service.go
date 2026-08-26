@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	xaiauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	managementapitools "github.com/router-for-me/CLIProxyAPI/v6/internal/management/apitools"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -680,9 +681,14 @@ func (s *Service) applyRuntimeQuotaProbe(ctx context.Context, auth *coreauth.Aut
 		if quota.QuotaKey != "weekly_limit" || quota.Percent == nil {
 			continue
 		}
+		// Same threshold the runtime recovery probe uses: percentages now carry
+		// upstream precision, and a fraction of a percent left cannot serve a
+		// request. Calling that recovered puts the credential back in rotation to
+		// take another 402 and cool down again, over and over until the reset.
+		exhausted := xaiauth.WeeklyBilling{RemainingPercent: *quota.Percent}.Exhausted()
 		result := &coreauth.QuotaProbeResult{
-			Recovered:       *quota.Percent > 0,
-			WindowExhausted: *quota.Percent <= 0,
+			Recovered:       !exhausted,
+			WindowExhausted: exhausted,
 			Window:          "week",
 			WindowMinutes:   10080,
 		}
@@ -719,7 +725,7 @@ func (s *Service) loadPersistedStatus(subjectID string) (*usage.AIAccountSubject
 }
 
 func (s *Service) viewFromPersistedRecord(tenantID string, auth *coreauth.Auth, record usage.AIAccountSubjectStatusRecord) *AccountStatusView {
-	cycleStarts, _ := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{record.AuthSubjectID}, primaryWeeklyKeys(auth.Provider))
+	cycleStarts, _ := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch([]string{record.AuthSubjectID})
 	summaries, _ := usage.QueryAIAccountSubjectUsageSummaries([]string{record.AuthSubjectID}, cycleStarts)
 	subjects, _ := usage.ListAIAccountSubjects([]string{record.AuthSubjectID})
 	counts, _ := usage.CountAIAccountTenantBindings(tenantID, []string{record.AuthSubjectID})
@@ -841,17 +847,7 @@ func (s *Service) ListStatus(tenantID string, authIndexes, authSubjectIDs []stri
 	if err != nil {
 		return StatusListResponse{}, err
 	}
-	prefKeys := make([]string, 0)
-	prefSeen := map[string]struct{}{}
-	for _, auth := range wanted {
-		for _, key := range primaryWeeklyKeys(auth.Provider) {
-			if _, ok := prefSeen[key]; !ok {
-				prefSeen[key] = struct{}{}
-				prefKeys = append(prefKeys, key)
-			}
-		}
-	}
-	cycleStart, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs, prefKeys)
+	cycleStart, err := usage.QueryLatestAIAccountSubjectWeeklyCyclesBatch(subjectIDs)
 	if err != nil {
 		return StatusListResponse{}, err
 	}
@@ -911,90 +907,4 @@ func (s *Service) purgeExpiredJobs() {
 			delete(s.inFlight, key)
 		}
 	}
-}
-
-func flightKey(_ string, subjectID string) string {
-	return strings.TrimSpace(subjectID)
-}
-
-func reconcileTenantBindings(auths []*coreauth.Auth) error {
-	if len(auths) == 0 {
-		return nil
-	}
-	tenantID := ""
-	authIDs := make([]string, 0, len(auths))
-	for _, auth := range auths {
-		if auth != nil {
-			tenantID = auth.TenantID
-			if id := strings.TrimSpace(auth.ID); id != "" {
-				authIDs = append(authIDs, id)
-			}
-		}
-	}
-	rows, err := usage.ListAIAccountBindingsForTenantAuths(tenantID, authIDs)
-	if err != nil {
-		return err
-	}
-	byID := make(map[string]usage.AIAccountTenantBinding, len(rows))
-	for _, row := range rows {
-		byID[row.AuthID] = row
-	}
-	// Best-effort per auth: one bad binding row must not 500 the whole status list.
-	var firstErr error
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		identity := usage.ResolveAuthSubjectIdentity(auth)
-		if identity == nil {
-			continue
-		}
-		row, ok := byID[auth.ID]
-		if ok && row.BindingState == "active" && row.AuthSubjectID == identity.ID && row.AuthIndex == auth.EnsureIndex() && row.BindingSeedHash == identity.SeedHash {
-			continue
-		}
-		if err := usage.UpsertAIAccountTenantBinding(auth, identity); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	return firstErr
-}
-
-func sanitizeMsg(msg string) string {
-	msg = strings.TrimSpace(msg)
-	lower := strings.ToLower(msg)
-	if strings.Contains(lower, "bearer ") || strings.Contains(lower, "authorization:") {
-		return "upstream request failed"
-	}
-	if len(msg) > 200 {
-		return msg[:200]
-	}
-	return msg
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-func metadataString(auth *coreauth.Auth, keys ...string) string {
-	if auth == nil || auth.Metadata == nil {
-		return ""
-	}
-	for _, key := range keys {
-		if v, ok := auth.Metadata[key]; ok {
-			if s, ok := v.(string); ok {
-				if t := strings.TrimSpace(s); t != "" {
-					return t
-				}
-			}
-		}
-	}
-	return ""
 }
