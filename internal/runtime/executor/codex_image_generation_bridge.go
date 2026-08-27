@@ -30,11 +30,10 @@ var (
 	// Hosted image_generation tool payload.
 	//
 	// The field set mirrors the request that /v1/images/generations already sends to
-	// chatgpt.com/backend-api/codex/responses and that is verified to produce images
-	// (see buildCodexImageResponsesRequest): `action` and `model` are both required there.
-	// A bare {"type":"image_generation"} is accepted by the endpoint without an error, but
-	// the model never invokes it, so image requests silently degrade into "I have no image
-	// tool" text replies.
+	// chatgpt.com/backend-api/codex/responses (see buildCodexImageResponsesRequest). A bare
+	// {"type":"image_generation"} is also invoked by the model, but it cannot express the edit
+	// action, and it leaves the image model up to whatever the backend defaults to — pinning
+	// both keeps the conversation path and the /v1/images endpoints on the same model.
 	imageGenToolJSON      = []byte(codexHostedImageGenerateTool)
 	imageGenToolArrayJSON = []byte(`[` + codexHostedImageGenerateTool + `]`)
 
