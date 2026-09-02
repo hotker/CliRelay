@@ -170,6 +170,7 @@ func TestShouldCaptureRequestBody(t *testing.T) {
 type stubStreamingLogWriter struct{}
 
 func (stubStreamingLogWriter) WriteChunkAsync([]byte)                     {}
+func (stubStreamingLogWriter) NoteDroppedChunks(int)                      {}
 func (stubStreamingLogWriter) WriteStatus(int, map[string][]string) error { return nil }
 func (stubStreamingLogWriter) WriteAPIRequest([]byte) error               { return nil }
 func (stubStreamingLogWriter) WriteAPIResponse([]byte) error              { return nil }

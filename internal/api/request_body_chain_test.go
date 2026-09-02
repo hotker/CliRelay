@@ -20,6 +20,7 @@ import (
 type chainStreamingLogWriter struct{}
 
 func (chainStreamingLogWriter) WriteChunkAsync([]byte)                     {}
+func (chainStreamingLogWriter) NoteDroppedChunks(int)                      {}
 func (chainStreamingLogWriter) WriteStatus(int, map[string][]string) error { return nil }
 func (chainStreamingLogWriter) WriteAPIRequest([]byte) error               { return nil }
 func (chainStreamingLogWriter) WriteAPIResponse([]byte) error              { return nil }
