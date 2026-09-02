@@ -36,6 +36,10 @@ type codexHostedImage struct {
 // assistant text events Desktop actually persists.
 type codexImageStreamNormalizer struct {
 	images []codexHostedImage
+	// inlined records that a data URL for these images already reached the client inside an
+	// assistant message. A 2.7MB image inlined into every text-shaped event turned one picture
+	// into a 13MB SSE stream, which does not finish over a slow link; one copy is enough.
+	inlined bool
 }
 
 func newCodexImageStreamNormalizer() *codexImageStreamNormalizer {
@@ -57,15 +61,48 @@ func normalizeCodexImageGenerationOutboundEventWithState(n *codexImageStreamNorm
 		return nil
 	}
 	normalized := normalizeCodexImageGenerationCallStatus(payload)
-	if n != nil {
-		n.observe(normalized)
-		normalized = n.rewriteAssistantMarkdown(normalized)
+	if n == nil {
+		// Stateless callers see one event at a time and have no later message to rewrite,
+		// so the fallback display item has to ride along with the image event itself.
+		out := [][]byte{normalized}
+		if msg := synthesizeCodexImageDisplayMessageEvent(normalized); len(msg) > 0 {
+			out = append(out, msg)
+		}
+		return out
 	}
-	out := [][]byte{normalized}
-	if msg := synthesizeCodexImageDisplayMessageEvent(normalized); len(msg) > 0 {
-		out = append(out, msg)
+	n.observe(normalized)
+	normalized = n.rewriteAssistantMarkdown(normalized)
+	// The fallback is only needed when the turn is ending and no assistant message ended up
+	// carrying the picture — emitting it next to every image event duplicated the payload.
+	if msg := n.displayFallbackFor(normalized); len(msg) > 0 {
+		return [][]byte{msg, normalized}
 	}
-	return out
+	return [][]byte{normalized}
+}
+
+// displayFallbackFor returns a synthetic assistant message carrying the generated images,
+// but only at the end of a response that never inlined them into real assistant text.
+func (n *codexImageStreamNormalizer) displayFallbackFor(payload []byte) []byte {
+	if n == nil || n.inlined || len(n.images) == 0 {
+		return nil
+	}
+	body := sseJSONBody(payload)
+	if !gjson.ValidBytes(body) {
+		return nil
+	}
+	switch gjson.GetBytes(body, "type").String() {
+	case "response.completed", "response.done":
+	default:
+		return nil
+	}
+	n.inlined = true
+	text := appendCodexHostedImageMarkdown("", n.images)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	event := []byte(`{"type":"response.output_item.done","item":{"id":"msg_image_display","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":""}]}}`)
+	event, _ = sjson.SetBytes(event, "item.content.0.text", text)
+	return maybeWrapSSEData(bytes.HasPrefix(payload, dataTag), event)
 }
 
 func (n *codexImageStreamNormalizer) observe(payload []byte) {
@@ -126,11 +163,17 @@ func (n *codexImageStreamNormalizer) rewriteAssistantMarkdown(payload []byte) []
 	eventType := gjson.GetBytes(body, "type").String()
 	updated := body
 	changed := false
+	// Tracks a real data URL inlined by this event, as opposed to a text-only cleanup.
+	inlinedNow := false
 
 	switch eventType {
 	case "response.output_text.done":
+		// Same assistant text that response.output_item.done repeats below. Inlining the
+		// image in all three text-shaped events sent one 2.7MB picture as ~13MB of SSE, which
+		// does not finish over a slow link. Strip the model's unreachable sandbox refs so the
+		// text has no broken image, and let output_item.done carry the single inlined copy.
 		text := gjson.GetBytes(body, "text").String()
-		if next, ok := ensureCodexAssistantImageMarkdown(text, n.images); ok {
+		if next, ok := flattenCodexNonRenderableImageMarkdown(text); ok {
 			var err error
 			updated, err = sjson.SetBytes(updated, "text", next)
 			if err != nil {
@@ -142,7 +185,7 @@ func (n *codexImageStreamNormalizer) rewriteAssistantMarkdown(payload []byte) []
 		partType := strings.TrimSpace(gjson.GetBytes(body, "part.type").String())
 		if partType == "output_text" || partType == "text" {
 			text := gjson.GetBytes(body, "part.text").String()
-			if next, ok := ensureCodexAssistantImageMarkdown(text, n.images); ok {
+			if next, ok := flattenCodexNonRenderableImageMarkdown(text); ok {
 				var err error
 				updated, err = sjson.SetBytes(updated, "part.text", next)
 				if err != nil {
@@ -194,8 +237,12 @@ func (n *codexImageStreamNormalizer) rewriteAssistantMarkdown(payload []byte) []
 				return payload
 			}
 			changed = true
+			inlinedNow = true
 		}
 	case "response.completed", "response.done":
+		// The terminal snapshot repeats every output item. Inlining here after the streamed
+		// message already carried the data URL would double the payload for no new content —
+		// but the snapshot text still has to lose its unreachable sandbox refs.
 		output := gjson.GetBytes(body, "response.output")
 		if !output.IsArray() {
 			return payload
@@ -221,7 +268,14 @@ func (n *codexImageStreamNormalizer) rewriteAssistantMarkdown(payload []byte) []
 					continue
 				}
 				text := part.Get("text").String()
-				next, ok := ensureCodexAssistantImageMarkdown(text, n.images)
+				var next string
+				var ok bool
+				if n.inlined {
+					next, ok = flattenCodexNonRenderableImageMarkdown(text)
+				} else {
+					next, ok = ensureCodexAssistantImageMarkdown(text, n.images)
+					inlinedNow = inlinedNow || ok
+				}
 				if !ok {
 					continue
 				}
@@ -240,7 +294,40 @@ func (n *codexImageStreamNormalizer) rewriteAssistantMarkdown(payload []byte) []
 	if !changed {
 		return payload
 	}
+	if inlinedNow {
+		n.inlined = true
+	}
 	return maybeWrapSSEData(hadSSEPrefix, updated)
+}
+
+// flattenCodexNonRenderableImageMarkdown turns image refs the client cannot load into plain
+// text, without inlining any pixels.
+//
+// The model writes ChatGPT sandbox paths like ![cat](/mnt/data/0.png), which render as a broken
+// image anywhere outside ChatGPT. The picture itself travels once — inlined into the assistant
+// message item — so the duplicate text-shaped events only need the dead ref removed rather than
+// another multi-megabyte copy of the same data URL.
+func flattenCodexNonRenderableImageMarkdown(text string) (string, bool) {
+	if text == "" || !strings.Contains(text, "![") {
+		return text, false
+	}
+	changed := false
+	next := codexMarkdownAnyImageRef.ReplaceAllStringFunc(text, func(match string) string {
+		groups := codexMarkdownAnyImageRef.FindStringSubmatch(match)
+		if len(groups) < 3 || isCodexRenderableImageTarget(groups[2]) {
+			return match
+		}
+		changed = true
+		alt := strings.TrimSpace(groups[1])
+		if alt == "" {
+			alt = "generated image"
+		}
+		return alt
+	})
+	if !changed {
+		return text, false
+	}
+	return next, true
 }
 
 // ensureCodexAssistantImageMarkdown makes Desktop-visible assistant text show hosted images.

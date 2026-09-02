@@ -174,7 +174,8 @@ func TestCodexImageStreamRewritesMntDataMarkdownAfterHostedImage(t *testing.T) {
 		t.Fatalf("cached images = %d, want 1", len(n.images))
 	}
 
-	// Desktop-visible path: model writes ChatGPT sandbox markdown.
+	// output_text.done repeats the text that output_item.done carries below, so it only gets
+	// the unreachable sandbox ref flattened — inlining here too would send the image twice.
 	textDone := []byte(`data: {"type":"response.output_text.done","item_id":"msg_1","text":"给你画好了：\n\n![小猫](/mnt/data/0.png)\n"}`)
 	rewritten := normalizeCodexImageGenerationOutboundEventWithState(n, textDone)
 	if len(rewritten) != 1 {
@@ -182,13 +183,13 @@ func TestCodexImageStreamRewritesMntDataMarkdownAfterHostedImage(t *testing.T) {
 	}
 	body := bytes.TrimSpace(rewritten[0][len(dataTag):])
 	got := gjson.GetBytes(body, "text").String()
-	if !strings.Contains(got, "data:image/png;base64,iVBORw0KGgo=") {
-		t.Fatalf("text not rewritten to data url: %s", got)
+	if strings.Contains(got, "data:image/png;base64,") {
+		t.Fatalf("output_text.done must not inline the image: %s", got)
 	}
 	if strings.Contains(got, "/mnt/data/") {
-		t.Fatalf("text still has /mnt/data: %s", got)
+		t.Fatalf("text still has a broken /mnt/data ref: %s", got)
 	}
-	if !strings.Contains(got, "![小猫](") {
+	if !strings.Contains(got, "小猫") {
 		t.Fatalf("alt text lost: %s", got)
 	}
 
@@ -232,8 +233,8 @@ func TestCodexImageStreamAppendsDataURLWhenModelOmitsMntPath(t *testing.T) {
 	if !strings.Contains(got, "给你一只小猫。") {
 		t.Fatalf("original text lost: %s", got)
 	}
-	if !strings.Contains(got, "data:image/png;base64,iVBORw0KGgo=") {
-		t.Fatalf("expected appended data url: %s", got)
+	if strings.Contains(got, "data:image/png;base64,") {
+		t.Fatalf("output_text.done must not inline the image: %s", got)
 	}
 
 	msgDone := []byte(`data: {"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"给你一只小猫。"}]}}`)
@@ -269,14 +270,78 @@ func TestCodexImageStreamRewritesLocalGeneratedImagesPathWithoutDouble(t *testin
 	body := bytes.TrimSpace(out[0][len(dataTag):])
 	got := gjson.GetBytes(body, "text").String()
 	if strings.Contains(got, "generated_images/") {
-		t.Fatalf("local path should be rewritten: %s", got)
+		t.Fatalf("invented local path should be flattened: %s", got)
 	}
+	if strings.Contains(got, "data:image/png;base64,") {
+		t.Fatalf("output_text.done must not inline the image: %s", got)
+	}
+
+	// The message item is where the single inlined copy belongs.
+	msgDone := []byte(`data: {"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + mustJSONString(text) + `}]}}`)
+	out = normalizeCodexImageGenerationOutboundEventWithState(n, msgDone)
+	body = bytes.TrimSpace(out[0][len(dataTag):])
+	got = gjson.GetBytes(body, "item.content.0.text").String()
 	if strings.Count(got, "data:image/png;base64,iVBORw0KGgo=") != 1 {
-		t.Fatalf("want exactly one data url, got %q", got)
+		t.Fatalf("want exactly one data url in the message item, got %q", got)
 	}
 	if !strings.Contains(got, "![可爱的小鱼](data:image/png;base64,iVBORw0KGgo=)") {
 		t.Fatalf("alt/path rewrite failed: %s", got)
 	}
+}
+
+// TestCodexImageStreamSendsImageBytesOnce walks a full hosted-image turn in the order the
+// upstream emits it. A 2.7MB picture repeated across every text-shaped event produced a 13MB
+// SSE response that did not finish over a slow link, so the whole stream may carry the pixels
+// exactly once.
+func TestCodexImageStreamSendsImageBytesOnce(t *testing.T) {
+	n := newCodexImageStreamNormalizer()
+	const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	stream := [][]byte{
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"` + b64 + `","output_format":"png"}}`),
+		[]byte(`data: {"type":"response.output_text.done","item_id":"msg_1","text":"画好了：\n\n![猫](/mnt/data/0.png)"}`),
+		[]byte(`data: {"type":"response.content_part.done","item_id":"msg_1","part":{"type":"output_text","text":"画好了：\n\n![猫](/mnt/data/0.png)"}}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"画好了：\n\n![猫](/mnt/data/0.png)"}]}}`),
+		[]byte(`data: {"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"画好了：\n\n![猫](/mnt/data/0.png)"}]}]}}`),
+	}
+	occurrences := 0
+	for _, in := range stream {
+		for _, out := range normalizeCodexImageGenerationOutboundEventWithState(n, in) {
+			occurrences += strings.Count(string(out), b64)
+			if bytes.Contains(out, []byte("/mnt/data/")) {
+				t.Fatalf("broken sandbox ref reached the client: %s", firstBytes(out, 200))
+			}
+		}
+	}
+	// One native image_generation_call result plus one inlined data URL in the message item.
+	if occurrences != 2 {
+		t.Fatalf("image bytes appeared %d times in the stream, want 2", occurrences)
+	}
+}
+
+// TestCodexImageStreamFallsBackWhenNoAssistantMessage covers the turn where the model returns
+// only the picture: nothing inlines it, so the synthetic display item has to appear at the end.
+func TestCodexImageStreamFallsBackWhenNoAssistantMessage(t *testing.T) {
+	n := newCodexImageStreamNormalizer()
+	const b64 = "iVBORw0KGgo="
+	_ = normalizeCodexImageGenerationOutboundEventWithState(n,
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"`+b64+`","output_format":"png"}}`))
+	out := normalizeCodexImageGenerationOutboundEventWithState(n,
+		[]byte(`data: {"type":"response.completed","response":{"output":[{"id":"ig_1","type":"image_generation_call","status":"completed"}]}}`))
+	if len(out) != 2 {
+		t.Fatalf("events at completion = %d, want 2 (fallback + completed)", len(out))
+	}
+	body := bytes.TrimSpace(out[0][len(dataTag):])
+	got := gjson.GetBytes(body, "item.content.0.text").String()
+	if !strings.Contains(got, "data:image/png;base64,"+b64) {
+		t.Fatalf("fallback item missing the image: %s", got)
+	}
+}
+
+func firstBytes(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n])
 }
 
 func mustJSONString(s string) string {
@@ -345,10 +410,10 @@ func TestMaybeEnsureSkipsWhenBridgeExplicitlyDisabled(t *testing.T) {
 	}
 }
 
-func TestMaybeEnsureInjectsToolShapeThatUpstreamInvokes(t *testing.T) {
-	// action + model mirror buildCodexImageResponsesRequest, the request shape verified to
-	// return images from chatgpt.com/backend-api/codex/responses. A bare
-	// {"type":"image_generation"} is accepted upstream but never invoked by the model.
+func TestMaybeEnsureInjectsPinnedToolShape(t *testing.T) {
+	// action + model mirror buildCodexImageResponsesRequest, the shape verified to return
+	// images from chatgpt.com/backend-api/codex/responses. Pinning them keeps the conversation
+	// path on the same image model as /v1/images and leaves room for the edit action.
 	auth := &cliproxyauth.Auth{Provider: "codex"}
 	body := []byte(`{"model":"gpt-5.6-luna","tools":[{"type":"function","name":"shell"}]}`)
 	out := maybeEnsureCodexImageGenerationTool(body, auth, "gpt-5.6-luna", nil)
