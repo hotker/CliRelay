@@ -29,6 +29,10 @@ type RequestLogger interface {
 // StreamingLogWriter handles real-time logging of streaming response chunks.
 type StreamingLogWriter interface {
 	WriteChunkAsync(chunk []byte)
+	// NoteDroppedChunks records chunks that never reached WriteChunkAsync because
+	// an upstream log queue was full. Close must persist a truncated marker when
+	// any drops were noted, so a partial body is not mistaken for a complete log.
+	NoteDroppedChunks(n int)
 	WriteStatus(status int, headers map[string][]string) error
 	WriteAPIRequest(apiRequest []byte) error
 	WriteAPIResponse(apiResponse []byte) error

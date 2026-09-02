@@ -38,6 +38,7 @@ type ResponseWriterWrapper struct {
 	streamWriter        logging.StreamingLogWriter // streamWriter is a writer for handling streaming log entries.
 	chunkChannel        chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
 	streamDone          chan struct{}              // streamDone signals when the streaming goroutine completes.
+	droppedChunks       int                        // droppedChunks counts chunks skipped when chunkChannel was full.
 	logger              logging.RequestLogger      // logger is the instance of the request logger service.
 	requestInfo         *RequestInfo               // requestInfo holds the details of the original request.
 	ginCtx              *gin.Context               // ginCtx allows propagating first-response timing into usage records.
@@ -94,6 +95,7 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 		select {
 		case w.chunkChannel <- append([]byte(nil), data...):
 		default:
+			w.droppedChunks++
 		}
 		return n, err
 	}
@@ -143,6 +145,7 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 		select {
 		case w.chunkChannel <- []byte(data):
 		default:
+			w.droppedChunks++
 		}
 		return n, err
 	}
@@ -346,6 +349,10 @@ func (w *ResponseWriterWrapper) finalizeStreamingLog(c *gin.Context, forceLog bo
 	if w.streamDone != nil {
 		<-w.streamDone
 		w.streamDone = nil
+	}
+
+	if w.droppedChunks > 0 {
+		writer.NoteDroppedChunks(w.droppedChunks)
 	}
 
 	w.streamWriter = nil
