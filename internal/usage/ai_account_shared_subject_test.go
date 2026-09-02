@@ -101,6 +101,14 @@ func sharedSubjectTestAuth(tenantID, authID, accountID, email string) *coreauth.
 	}
 }
 
+func codexMemberTestAuth(tenantID, authID, accountID, userID, email string) *coreauth.Auth {
+	auth := sharedSubjectTestAuth(tenantID, authID, accountID, email)
+	if userID != "" {
+		auth.Metadata["chatgpt_user_id"] = userID
+	}
+	return auth
+}
+
 // A subject is the physical upstream account. Every seed that names that account
 // — the provider's id, the account email, the credential's own id — must resolve
 // to one subject however many tenants mounted it; only auth_index, which names
@@ -180,6 +188,28 @@ func TestResolveAuthSubjectIdentitySharesEverySeedThatNamesAnAccount(t *testing.
 	}
 	if indexA.ID == indexB.ID {
 		t.Fatalf("auth_index crossed the tenant boundary: %q", indexA.ID)
+	}
+}
+
+func TestResolveAuthSubjectIdentitySeparatesCodexTeamMembers(t *testing.T) {
+	authA := codexMemberTestAuth(sharedSubjectTenantA, "auth-a", "acct-team", "user-a", "a@example.com")
+	authB := codexMemberTestAuth(sharedSubjectTenantA, "auth-b", "acct-team", "user-b", "b@example.com")
+	authACopy := codexMemberTestAuth(sharedSubjectTenantB, "auth-a-copy", "acct-team", "user-a", "a@example.com")
+
+	identityA := ResolveAuthSubjectIdentity(authA)
+	identityB := ResolveAuthSubjectIdentity(authB)
+	identityACopy := ResolveAuthSubjectIdentity(authACopy)
+	if identityA == nil || identityB == nil || identityACopy == nil {
+		t.Fatal("expected Codex member identities")
+	}
+	if identityA.ID == identityB.ID {
+		t.Fatalf("different Team members share subject %q", identityA.ID)
+	}
+	if identityA.ID != identityACopy.ID {
+		t.Fatalf("same Team member differs across tenants: %q != %q", identityA.ID, identityACopy.ID)
+	}
+	if identityA.SeedKind != "account_user_id" || identityA.AccountID != "acct-team" || identityA.UserID != "user-a" {
+		t.Fatalf("Codex member identity contract = %+v", identityA)
 	}
 }
 
