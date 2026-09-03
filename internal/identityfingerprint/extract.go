@@ -30,6 +30,8 @@ const (
 	FieldKimiDeviceName         = "x-msh-device-name"
 	FieldKimiDeviceModel        = "x-msh-device-model"
 	FieldKimiDeviceID           = "x-msh-device-id"
+	FieldAntigravityVersion     = "antigravity-version"
+	FieldAntigravityProjectID   = "project-id"
 )
 
 var (
@@ -39,6 +41,7 @@ var (
 	geminiUARe       = regexp.MustCompile(`(?i)^google-api-nodejs-client/([0-9]+(?:\.[0-9]+){0,3})`)
 	xaiTokenVerRe    = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*(?:grok|xai)[a-z0-9_.-]*)/([0-9]+(?:\.[0-9]+){0,3})(?:[-+][a-z0-9_.-]+)?`)
 	kimiTokenVerRe   = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*kimi[a-z0-9_.-]*)/([0-9]+(?:\.[0-9]+){0,3})(?:[-+][a-z0-9_.-]+)?`)
+	antigravityUARe  = regexp.MustCompile(`(?i)(?:vscode/[^\s]+\s+)?\(?antigravity/([0-9]+(?:\.[0-9]+){0,3})\)?`)
 )
 
 func ExtractObservation(input LearnInput) (Observation, bool) {
@@ -58,6 +61,8 @@ func ExtractObservation(input LearnInput) (Observation, bool) {
 		return extractXAIObservation(input, headers, observedAt)
 	case ProviderKimi:
 		return extractKimiObservation(input, headers, observedAt)
+	case ProviderAntigravity:
+		return extractAntigravityObservation(input, headers, observedAt)
 	default:
 		return Observation{}, false
 	}
@@ -279,6 +284,47 @@ func extractKimiObservation(input LearnInput, headers http.Header, observedAt ti
 		Version:         version,
 		Fields:          fields,
 		ObservedHeaders: observedHeaders(headers, []string{"User-Agent", "X-Msh-Platform", "X-Msh-Version", "X-Msh-Device-Name", "X-Msh-Device-Model", "X-Msh-Device-Id"}),
+		ObservedAt:      observedAt.UTC(),
+	}, true
+}
+
+// IsAntigravityClientUserAgent reports whether a User-Agent carries the
+// Antigravity client token. Antigravity's upstream refuses any caller it cannot
+// recognise with "You do not have a valid license of this product (#3501)", so a
+// User-Agent that fails this check must never be learned as, or resolved into,
+// an account's outbound identity.
+func IsAntigravityClientUserAgent(ua string) bool {
+	return antigravityUARe.MatchString(strings.TrimSpace(ua))
+}
+
+// extractAntigravityObservation learns the identity a real Antigravity client presents.
+//
+// A caller whose User-Agent does not identify the Antigravity client is not the
+// Antigravity client, and recording it would pin the account to a made-up
+// identity that the upstream then rejects. Generic SDK User-Agents reach this
+// path routinely — a Node client sends a bare "node" — so the client token, not
+// merely a non-empty header, is what makes an observation.
+func extractAntigravityObservation(input LearnInput, headers http.Header, observedAt time.Time) (Observation, bool) {
+	ua := strings.TrimSpace(headers.Get("User-Agent"))
+	matches := antigravityUARe.FindStringSubmatch(ua)
+	if len(matches) == 0 {
+		return Observation{}, false
+	}
+	version := strings.TrimSpace(matches[1])
+	fields := map[string]string{FieldUserAgent: ua}
+	if version != "" {
+		fields[FieldAntigravityVersion] = version
+	}
+	return Observation{
+		Provider:        ProviderAntigravity,
+		AccountKey:      strings.TrimSpace(input.AccountKey),
+		ProfileKey:      ProfileKeyDefault,
+		AuthSubjectID:   strings.TrimSpace(input.AuthSubjectID),
+		ClientProduct:   "antigravity",
+		ClientVariant:   "vscode",
+		Version:         version,
+		Fields:          fields,
+		ObservedHeaders: observedHeaders(headers, []string{"User-Agent"}),
 		ObservedAt:      observedAt.UTC(),
 	}, true
 }

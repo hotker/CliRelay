@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	sqlapikey "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlite/apikey"
+	sqlapikey "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlstore/apikey"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -104,7 +104,7 @@ func MigrateAPIKeyPermissionProfilesFromYAML(configFilePath string) int {
 	if backupConfigForMigration(configFilePath, apiKeyPermissionProfilesMigrationBackupSuffix) {
 		cleanAPIKeyPermissionProfilesFromYAML(configFilePath)
 	}
-	log.Infof("usage: migrated %d API key permission profile(s) from config to SQLite", len(profiles))
+	log.Infof("usage: migrated %d API key permission profile(s) from config to the database", len(profiles))
 	return len(profiles)
 }
 

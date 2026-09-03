@@ -17,6 +17,7 @@ func TestRecordFromTokenStorageUsesPlanAndAccountHashFromIDToken(t *testing.T) {
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id": "acct-team",
 			"chatgpt_plan_type":  " team ",
+			"chatgpt_user_id":    "user-team-member",
 		},
 	})
 	storage := &internalcodex.CodexTokenStorage{
@@ -45,6 +46,9 @@ func TestRecordFromTokenStorageUsesPlanAndAccountHashFromIDToken(t *testing.T) {
 	}
 	if got, _ := record.Metadata["plan_type"].(string); got != "team" {
 		t.Fatalf("metadata[plan_type] = %q, want team", got)
+	}
+	if got, _ := record.Metadata["chatgpt_user_id"].(string); got != "user-team-member" {
+		t.Fatalf("metadata[chatgpt_user_id] = %q, want user-team-member", got)
 	}
 }
 

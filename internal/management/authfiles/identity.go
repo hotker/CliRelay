@@ -67,6 +67,9 @@ func CodexIDTokenClaims(auth *coreauth.Auth) map[string]any {
 	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptAccountID); v != "" {
 		result["chatgpt_account_id"] = v
 	}
+	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptUserID); v != "" {
+		result["chatgpt_user_id"] = v
+	}
 	if v := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); v != "" {
 		result["plan_type"] = v
 	}

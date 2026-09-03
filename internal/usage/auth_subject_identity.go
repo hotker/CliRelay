@@ -23,6 +23,7 @@ type AuthSubjectIdentity struct {
 	ID            string
 	Provider      string
 	AccountID     string
+	UserID        string
 	Email         string
 	SeedKind      string
 	SeedHash      string
@@ -49,6 +50,7 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 	}
 	tenantID := coreauth.NormalizedTenantID(auth.TenantID)
 	accountID := authMetadataString(auth.Metadata, "account_id", "accountId", "chatgpt_account_id")
+	userID := authMetadataString(auth.Metadata, "chatgpt_user_id", "chatgptUserId")
 	email := strings.ToLower(authEmail(auth))
 
 	seedKind := ""
@@ -57,6 +59,12 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 	subjectScope := AIAccountSubjectScopeTenant
 	shareReason := "fallback_identity_is_tenant_scoped"
 	switch {
+	case provider == "codex" && accountID != "" && userID != "":
+		seedKind = "account_user_id"
+		seedValue = accountID + "\x1f" + userID
+		shareEligible = true
+		subjectScope = AIAccountSubjectScopeShared
+		shareReason = "stable_provider_account_and_user_id"
 	case accountID != "":
 		seedKind = "account_id"
 		seedValue = accountID
@@ -104,6 +112,7 @@ func ResolveAuthSubjectIdentity(auth *coreauth.Auth) *AuthSubjectIdentity {
 		ID:            stableAuthSubjectID(subjectSeed...),
 		Provider:      provider,
 		AccountID:     accountID,
+		UserID:        userID,
 		Email:         email,
 		SeedKind:      seedKind,
 		SeedHash:      stableSeedHash(seedHashValue),
@@ -147,8 +156,9 @@ func LegacyTenantScopedAuthSubjectID(auth *coreauth.Auth) string {
 	if identity == nil {
 		return ""
 	}
-	// account_id and auth_index seeds never changed shape, so they have no legacy
-	// counterpart to migrate from.
+	// auth_index never changed shape. account_id did — Codex now prefers
+	// account_user_id — but that predecessor is LegacyAccountIDAuthSubjectID,
+	// not a tenant-scoped id.
 	seedValue := ""
 	switch identity.SeedKind {
 	case "email":
@@ -168,6 +178,23 @@ func LegacyTenantScopedAuthSubjectID(auth *coreauth.Auth) string {
 		coreauth.NormalizedTenantID(auth.TenantID),
 		seedValue,
 	)
+}
+
+// LegacyAccountIDAuthSubjectID is the subject this Codex credential used before
+// the seed became account_id+user_id. Personal Pro accounts kept their usage
+// there when the Team-collision fix started hashing the user id too, so the
+// card next to a still-correct WHAM bar read a few hours of traffic as "this
+// week". API keys and account-id-only auths have no such predecessor.
+func LegacyAccountIDAuthSubjectID(auth *coreauth.Auth) string {
+	identity := ResolveAuthSubjectIdentity(auth)
+	if identity == nil || identity.SeedKind != "account_user_id" {
+		return ""
+	}
+	accountID := strings.TrimSpace(identity.AccountID)
+	if accountID == "" {
+		return ""
+	}
+	return stableAuthSubjectID(identity.Provider, "account_id", accountID)
 }
 
 func BuildAuthSubjectMatcher(current *coreauth.Auth, auths []*coreauth.Auth) AuthSubjectMatcher {

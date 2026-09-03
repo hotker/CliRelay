@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	sqlapikey "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlite/apikey"
+	sqlapikey "github.com/router-for-me/CLIProxyAPI/v6/internal/storage/sqlstore/apikey"
 	log "github.com/sirupsen/logrus"
 )
 
 // Compatibility bridge contract:
 // - Owner: API key settings / config-access boundary.
-// - Real implementation: internal/storage/sqlite/apikey and internal/management/settings/apikey.
+// - Real implementation: internal/storage/sqlstore/apikey and internal/management/settings/apikey.
 // - Allowed callers: legacy adapters still being migrated; new management/config-access code should use apikey service first.
-// - Exit condition: remaining callers move to apikey service or sqlite store bridge; do not add new imports here.
+// - Exit condition: remaining callers move to apikey service or sqlstore bridge; do not add new imports here.
 type APIKeyRow = sqlapikey.APIKeyRow
 
 func APIKeyRowFromConfig(entry config.APIKeyEntry) APIKeyRow {
@@ -41,7 +41,7 @@ func backfillAPIKeyNames(db *sql.DB) {
 	sqlapikey.BackfillNames(db)
 }
 
-// MigrateAPIKeysFromConfig moves API key entries from YAML config into SQLite.
+// MigrateAPIKeysFromConfig moves API key entries from YAML config into the database.
 // It only migrates if the api_keys table is empty AND the config has entries.
 // After migration, it backs up config.yaml and re-saves it without the API key
 // fields so the YAML file stays clean.
@@ -117,7 +117,7 @@ func MigrateAPIKeysFromConfig(cfg *config.Config, configFilePath string) (int, e
 		return 0, err
 	}
 
-	log.Infof("usage: migrated %d API keys from config to SQLite", len(rows))
+	log.Infof("usage: migrated %d API keys from config to the database", len(rows))
 
 	cfg.APIKeys = nil
 	cfg.APIKeyEntries = nil

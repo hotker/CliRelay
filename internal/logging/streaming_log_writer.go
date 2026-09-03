@@ -4,11 +4,18 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/diagnostics"
 	log "github.com/sirupsen/logrus"
 )
+
+// StreamingLogTruncationNote is appended when async log queues dropped chunks.
+// The client still received the full stream; the persisted body did not.
+func StreamingLogTruncationNote(dropped int) string {
+	return fmt.Sprintf("\n\n[truncated: dropped %d streaming log chunks; persisted response body is incomplete]\n", dropped)
+}
 
 // FileStreamingLogWriter spools streaming response chunks to temporary files
 // and assembles the final human-readable log only when the stream closes.
@@ -30,6 +37,7 @@ type FileStreamingLogWriter struct {
 	apiRequest           []byte
 	apiResponse          []byte
 	apiResponseTimestamp time.Time
+	droppedChunks        atomic.Int64
 }
 
 func (w *FileStreamingLogWriter) WriteChunkAsync(chunk []byte) {
@@ -42,6 +50,13 @@ func (w *FileStreamingLogWriter) WriteChunkAsync(chunk []byte) {
 	select {
 	case w.chunkChan <- chunkCopy:
 	default:
+		w.droppedChunks.Add(1)
+	}
+}
+
+func (w *FileStreamingLogWriter) NoteDroppedChunks(n int) {
+	if n > 0 {
+		w.droppedChunks.Add(int64(n))
 	}
 }
 
@@ -92,6 +107,8 @@ func (w *FileStreamingLogWriter) Close() error {
 		<-w.closeChan
 		w.chunkChan = nil
 	}
+
+	w.appendTruncationNote()
 
 	select {
 	case errWrite := <-w.errorChan:
@@ -181,6 +198,25 @@ func (w *FileStreamingLogWriter) writeFinalLog(logFile *os.File) error {
 	return writeResponseSection(logFile, w.responseStatus, w.statusWritten, w.responseHeaders, responseBodyFile, nil, false)
 }
 
+func (w *FileStreamingLogWriter) appendTruncationNote() {
+	dropped := int(w.droppedChunks.Load())
+	if dropped <= 0 || w.responseBodyPath == "" {
+		return
+	}
+	log.WithField("dropped_chunks", dropped).Warn("streaming request log dropped chunks; persisted body is incomplete")
+	noteFile, errOpen := os.OpenFile(w.responseBodyPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if errOpen != nil {
+		log.WithError(errOpen).Warn("failed to append streaming log truncation note")
+		return
+	}
+	if _, errWrite := noteFile.WriteString(StreamingLogTruncationNote(dropped)); errWrite != nil {
+		log.WithError(errWrite).Warn("failed to write streaming log truncation note")
+	}
+	if errClose := noteFile.Close(); errClose != nil {
+		log.WithError(errClose).Warn("failed to close streaming log truncation note")
+	}
+}
+
 func (w *FileStreamingLogWriter) cleanupTempFiles() {
 	if w.requestBodyPath != "" {
 		if errRemove := os.Remove(w.requestBodyPath); errRemove != nil {
@@ -201,6 +237,8 @@ func (w *FileStreamingLogWriter) cleanupTempFiles() {
 type NoOpStreamingLogWriter struct{}
 
 func (w *NoOpStreamingLogWriter) WriteChunkAsync(_ []byte) {}
+
+func (w *NoOpStreamingLogWriter) NoteDroppedChunks(_ int) {}
 
 func (w *NoOpStreamingLogWriter) WriteStatus(_ int, _ map[string][]string) error {
 	return nil

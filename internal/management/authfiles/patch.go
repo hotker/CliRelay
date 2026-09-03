@@ -32,6 +32,10 @@ type FieldPatch struct {
 	UsingAPI *bool `json:"using_api"`
 	// ConcurrencyLimit sets the max active concurrent requests for this account (0 = unlimited).
 	ConcurrencyLimit *int `json:"concurrency_limit"`
+	// CodexConvergenceMode overrides the global identity fingerprint convergence mode for Codex accounts (off, device, session, full, or empty to inherit).
+	CodexConvergenceMode *string `json:"codex_convergence_mode"`
+	// CodexServiceTier sets how service_tier (Fast/Priority/Flex) is handled for this account: "pass", "priority", "flex", "drop", or empty/default to inherit.
+	CodexServiceTier *string `json:"codex_service_tier"`
 }
 
 type FieldPatchOptions struct {
@@ -296,6 +300,55 @@ func ApplyFieldPatch(auth *coreauth.Auth, patch FieldPatch, opts FieldPatchOptio
 			delete(attrs, "concurrency")
 			delete(attrs, "concurrency-limit")
 			attrs["concurrency_limit"] = fmt.Sprintf("%d", limit)
+		}
+		changed = true
+	}
+	if patch.CodexConvergenceMode != nil {
+		mode := strings.TrimSpace(strings.ToLower(*patch.CodexConvergenceMode))
+		if err := ensureCodexConvergenceModeEditable(auth, mode); err != nil {
+			return result, err
+		}
+		metadata := ensureMetadata(auth)
+		attrs := ensureAttributes(auth)
+		if mode == "" {
+			delete(metadata, metadataKeyCodexConvergenceMode)
+			delete(metadata, "convergence_mode")
+			delete(metadata, "codex-convergence-mode")
+			delete(attrs, metadataKeyCodexConvergenceMode)
+			delete(attrs, "convergence_mode")
+			delete(attrs, "codex-convergence-mode")
+		} else {
+			delete(metadata, "convergence_mode")
+			delete(metadata, "codex-convergence-mode")
+			metadata[metadataKeyCodexConvergenceMode] = mode
+			delete(attrs, "convergence_mode")
+			delete(attrs, "codex-convergence-mode")
+			attrs[metadataKeyCodexConvergenceMode] = mode
+		}
+		changed = true
+	}
+	if patch.CodexServiceTier != nil {
+		rawTier := strings.TrimSpace(strings.ToLower(*patch.CodexServiceTier))
+		if err := ensureCodexServiceTierEditable(auth, rawTier); err != nil {
+			return result, err
+		}
+		tier := NormalizeCodexServiceTier(rawTier)
+		metadata := ensureMetadata(auth)
+		attrs := ensureAttributes(auth)
+		if tier == "" || tier == "default" {
+			delete(metadata, metadataKeyCodexServiceTier)
+			delete(metadata, "service_tier")
+			delete(metadata, "codex-service-tier")
+			delete(attrs, metadataKeyCodexServiceTier)
+			delete(attrs, "service_tier")
+			delete(attrs, "codex-service-tier")
+		} else {
+			delete(metadata, "service_tier")
+			delete(metadata, "codex-service-tier")
+			metadata[metadataKeyCodexServiceTier] = tier
+			delete(attrs, "service_tier")
+			delete(attrs, "codex-service-tier")
+			attrs[metadataKeyCodexServiceTier] = tier
 		}
 		changed = true
 	}
