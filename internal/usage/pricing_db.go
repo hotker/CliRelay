@@ -385,6 +385,16 @@ func modelPricingLookupModelIDs(modelID string) []string {
 			add(suffix)
 		}
 	}
+	// Strip the last dash-segment from the providerless ID so models with
+	// variant/tier suffixes like "-thinking", "-agent", "-high", "-low",
+	// "-medium", "-extra-low", "-tiered" can inherit pricing from the base model.
+	providerless := modelID
+	if idx := strings.Index(modelID, "/"); idx > 0 {
+		providerless = modelID[idx+1:]
+	}
+	if lastDash := strings.LastIndex(providerless, "-"); lastDash > 0 {
+		add(providerless[:lastDash])
+	}
 	return lookupIDs
 }
 

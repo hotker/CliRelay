@@ -545,3 +545,59 @@ func TestQueryTodayCostByKeyResetsDaily(t *testing.T) {
 		t.Fatalf("today cost = %v, want 4", got)
 	}
 }
+
+func TestCalculateCostSuffixStrippedFallback(t *testing.T) {
+	initModelConfigTestDB(t)
+
+	if err := UpsertModelConfig(ModelConfigRow{
+		ModelID:               "claude-opus-4-6",
+		Enabled:               true,
+		PricingMode:           "token",
+		InputPricePerMillion:  15,
+		OutputPricePerMillion: 75,
+		Source:                "user",
+	}); err != nil {
+		t.Fatalf("UpsertModelConfig(base) error = %v", err)
+	}
+
+	// Models with variant/tier suffixes should fall back to the base via
+	// last-dash stripping: "claude-opus-4-6-thinking" → "claude-opus-4-6".
+	for _, modelID := range []string{
+		"claude-opus-4-6-thinking",
+		"claude-opus-4-6-agent",
+		"claude-opus-4-6-high",
+		"claude-opus-4-6-low",
+		"claude-opus-4-6-medium",
+		"claude-opus-4-6-tiered",
+	} {
+		wantCost := 15.0 + 75.0
+		cost := CalculateCostV2(modelID, TokenStats{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+		if math.Abs(cost-wantCost) > 1e-12 {
+			t.Fatalf("CalculateCostV2(%q) = %v, want %v", modelID, cost, wantCost)
+		}
+	}
+}
+
+func TestCalculateCostSuffixStrippedFallbackWithProvider(t *testing.T) {
+	initModelConfigTestDB(t)
+
+	if err := UpsertModelConfig(ModelConfigRow{
+		ModelID:               "gemini-2.5-flash",
+		Enabled:               true,
+		PricingMode:           "token",
+		InputPricePerMillion:  0.3,
+		OutputPricePerMillion: 2.5,
+		Source:                "openrouter",
+	}); err != nil {
+		t.Fatalf("UpsertModelConfig(base) error = %v", err)
+	}
+
+	// Provider-prefixed model with suffix should still fall back via
+	// providerless last-dash stripping: "ollama/gemini-2.5-flash-thinking"
+	// → providerless "gemini-2.5-flash-thinking" → last-dash "gemini-2.5-flash".
+	wantCost := 0.3 + 2.5
+	cost := CalculateCostV2("ollama/gemini-2.5-flash-thinking", TokenStats{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	if math.Abs(cost-wantCost) > 1e-12 {
+		t.Fatalf("CalculateCostV2(ollama/gemini-2.5-flash-thinking) = %v, want %v", cost, wantCost)
+	}
+}

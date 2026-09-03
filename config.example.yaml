@@ -223,9 +223,6 @@ request-log-storage:
   # Default is 1024 (≈1GB). Set to 0 to disable the size cap.
   max-total-size-mb: 1024
 
-  # Reclaim disk space after cleanup. This can be I/O intensive on very large databases.
-  vacuum-on-cleanup: true
-
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""
 
@@ -255,6 +252,16 @@ max-retry-interval: 30
 quota-exceeded:
   switch-project: true # Whether to automatically switch to another project when a quota is exceeded
   switch-preview-model: true # Whether to automatically switch to a preview model when a quota is exceeded
+
+# Antigravity provider behavior.
+# By default, CliRelay automatically obfuscates known upstream-filtering keywords (like Claude Agent SDK, Hermes Agent, Nous Research)
+# with zero-width spaces in system instructions to prevent false 429 RESOURCE_EXHAUSTED errors.
+# You can explicitly configure additional sensitive words or override the list:
+# antigravity:
+#   sensitive-words:             # optional: words to obfuscate with zero-width characters in system instructions
+#     - "Claude Agent SDK"
+#     - "Hermes Agent"
+#     - "Nous Research"
 
 # Routing strategy for selecting credentials when multiple match.
 routing:

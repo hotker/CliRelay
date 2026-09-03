@@ -332,6 +332,35 @@ func TestPreferEnabledAliasOverDisabledSameSubject(t *testing.T) {
 	}
 }
 
+func TestStartRefreshSeparatesCodexTeamMembers(t *testing.T) {
+	authA := &coreauth.Auth{
+		ID: "team-user-a", Provider: "codex", FileName: "team-user-a.json",
+		Metadata: map[string]any{"account_id": "shared-team", "chatgpt_user_id": "user-a"},
+	}
+	authB := &coreauth.Auth{
+		ID: "team-user-b", Provider: "codex", FileName: "team-user-b.json",
+		Metadata: map[string]any{"account_id": "shared-team", "chatgpt_user_id": "user-b"},
+	}
+	manager := newTestManager(t, "tenant-team", authA, authB)
+	var probes atomic.Int32
+	svc := New(&config.Config{}, manager, func(string) *managementapitools.Service {
+		return managementapitools.NewForTenant("tenant-team", &config.Config{}, manager, managementapitools.Dependencies{})
+	}, nil)
+	svc.SetProbeFunc(func(context.Context, *managementapitools.Service, *config.Config, *coreauth.Auth) (ProbeResult, error) {
+		probes.Add(1)
+		return ProbeResult{}, nil
+	})
+
+	accepted := svc.StartRefresh("tenant-team", RefreshRequest{Force: true})
+	if accepted.Accepted != 2 {
+		t.Fatalf("accepted=%d want 2 independent Team members", accepted.Accepted)
+	}
+	waitJob(t, svc, "tenant-team", accepted.JobID)
+	if got := probes.Load(); got != 2 {
+		t.Fatalf("probes=%d want 2 independent Team members", got)
+	}
+}
+
 func TestPersistFailureDoesNotReportSuccess(t *testing.T) {
 	auth := &coreauth.Auth{
 		ID: "id-persist", Provider: "codex", FileName: "p.json",

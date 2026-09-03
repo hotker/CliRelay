@@ -161,6 +161,10 @@ func (a sdkStreamingLogWriterAdapter) WriteChunkAsync(chunk []byte) {
 	a.inner.WriteChunkAsync(chunk)
 }
 
+func (a sdkStreamingLogWriterAdapter) NoteDroppedChunks(n int) {
+	a.inner.NoteDroppedChunks(n)
+}
+
 func (a sdkStreamingLogWriterAdapter) WriteStatus(status int, headers map[string][]string) error {
 	return a.inner.WriteStatus(status, headers)
 }

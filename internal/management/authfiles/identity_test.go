@@ -37,6 +37,7 @@ func TestCodexIDTokenClaimsReturnsDisplayClaims(t *testing.T) {
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_plan_type":  "plus",
 			"chatgpt_account_id": "acct_123",
+			"chatgpt_user_id":    "user_team_member",
 		},
 	})
 	auth := &coreauth.Auth{
@@ -53,6 +54,9 @@ func TestCodexIDTokenClaimsReturnsDisplayClaims(t *testing.T) {
 	}
 	if got, _ := claims["chatgpt_account_id"].(string); got != "acct_123" {
 		t.Fatalf("chatgpt_account_id = %q, want acct_123", got)
+	}
+	if got, _ := claims["chatgpt_user_id"].(string); got != "user_team_member" {
+		t.Fatalf("chatgpt_user_id = %q, want user_team_member", got)
 	}
 }
 

@@ -100,6 +100,61 @@ func TestExtractRequestBodyPrefersOverride(t *testing.T) {
 	}
 }
 
+type recordingStreamingLogWriter struct {
+	dropped int
+	closed  bool
+}
+
+func (w *recordingStreamingLogWriter) WriteChunkAsync([]byte)                     {}
+func (w *recordingStreamingLogWriter) NoteDroppedChunks(n int)                    { w.dropped += n }
+func (w *recordingStreamingLogWriter) WriteStatus(int, map[string][]string) error { return nil }
+func (w *recordingStreamingLogWriter) WriteAPIRequest([]byte) error               { return nil }
+func (w *recordingStreamingLogWriter) WriteAPIResponse([]byte) error              { return nil }
+func (w *recordingStreamingLogWriter) SetFirstChunkTimestamp(time.Time)           {}
+func (w *recordingStreamingLogWriter) Close() error {
+	w.closed = true
+	return nil
+}
+
+func TestFinalizeStreamingLogNotesDroppedChunks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := &recordingStreamingLogWriter{}
+	wrapper := &ResponseWriterWrapper{
+		logger:        stubRequestLogger{},
+		streamWriter:  writer,
+		droppedChunks: 4,
+	}
+
+	if err := wrapper.finalizeStreamingLog(c, false); err != nil {
+		t.Fatalf("finalizeStreamingLog() error = %v", err)
+	}
+	if writer.dropped != 4 {
+		t.Fatalf("NoteDroppedChunks = %d, want 4", writer.dropped)
+	}
+	if !writer.closed {
+		t.Fatal("expected stream writer Close()")
+	}
+}
+
+func TestWriteCountsDroppedStreamingChunksWhenQueueIsFull(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	wrapper := NewResponseWriterWrapper(c.Writer, stubRequestLogger{}, &RequestInfo{}, c)
+	wrapper.isStreaming = true
+	wrapper.chunkChannel = make(chan []byte, 1)
+	wrapper.chunkChannel <- []byte("queued")
+
+	if _, err := wrapper.Write([]byte("dropped")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if wrapper.droppedChunks != 1 {
+		t.Fatalf("droppedChunks = %d, want 1", wrapper.droppedChunks)
+	}
+}
+
 func TestExtractRequestBodySupportsStringOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

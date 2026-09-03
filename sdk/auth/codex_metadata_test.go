@@ -18,6 +18,7 @@ func TestCodexBuildAuthRecord_PersistsPlanTypeMetadata(t *testing.T) {
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_plan_type":  "FREE",
 			"chatgpt_account_id": "acct_123",
+			"chatgpt_user_id":    "user_123",
 		},
 	}
 	jwt := makeJWTForTest(t, claims)
@@ -40,6 +41,9 @@ func TestCodexBuildAuthRecord_PersistsPlanTypeMetadata(t *testing.T) {
 	}
 	if got := record.Metadata["account_id"]; got != "acct_123" {
 		t.Fatalf("account_id = %v, want acct_123", got)
+	}
+	if got := record.Metadata["chatgpt_user_id"]; got != "user_123" {
+		t.Fatalf("chatgpt_user_id = %v, want user_123", got)
 	}
 }
 

@@ -95,6 +95,9 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		payloadStr, _ = sjson.Delete(payloadStr, "request.generationConfig.maxOutputTokens")
 	}
 
+	payloadBytes := e.obfuscateSensitiveWords([]byte(payloadStr))
+	payloadStr = string(payloadBytes)
+
 	httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), strings.NewReader(payloadStr))
 	if errReq != nil {
 		return nil, nil, errReq
@@ -102,6 +105,14 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
+	if e != nil && e.cfg != nil {
+		// Only apply the fingerprint when the feature is on: with it off the
+		// resolver still hands back the built-in template, and applying that
+		// would overwrite an identity the credential carries of its own.
+		if fp, _, enabled := antigravityIdentityFingerprint(e.cfg, auth, ctx); enabled {
+			applyAntigravityIdentityFingerprintHeaders(httpReq.Header, fp)
+		}
+	}
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	} else {
