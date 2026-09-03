@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/management/aiaccountstatus"
 	imagegeneration "github.com/router-for-me/CLIProxyAPI/v6/internal/management/imagegeneration"
 	settingsstore "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/store"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/management/warmup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
@@ -53,6 +54,7 @@ type Handler struct {
 	identityService      *identity.Service
 	aiAccountStatus      *aiaccountstatus.Service
 	statusScheduler      *aiaccountstatus.Scheduler
+	warmupSvc            *warmup.Service
 }
 
 type trendCacheEntry struct {
@@ -85,6 +87,16 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 	h.imageGeneration = h.newImageGenerationService()
 	h.videoGeneration = h.newVideoGenerationService()
 	return h
+}
+
+func (h *Handler) warmupService() *warmup.Service {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.warmupSvc == nil {
+		h.warmupSvc = warmup.NewService(h.cfg, h.authManager)
+		h.warmupSvc.Start()
+	}
+	return h.warmupSvc
 }
 
 func (h *Handler) newImageGenerationService() *imagegeneration.Service {
