@@ -111,3 +111,30 @@ func TestProjectionQuotaUsedSumsAttributableWindows(t *testing.T) {
 		t.Fatalf("summed projection used=%v, want 15", got)
 	}
 }
+
+func TestMergeAuthFileTrendSharedPassesProjectionQuota(t *testing.T) {
+	t.Parallel()
+
+	weeklyUsed := 80.0
+	projUsed := 20.0
+	shared := AuthFileTrendResponse{
+		QuotaSeries: []usage.QuotaSnapshotSeries{
+			{QuotaKey: "product:GrokBuild"},
+		},
+		WeeklyQuotaUsed:             &weeklyUsed,
+		ProjectionQuotaUsed:         &projUsed,
+		ProjectionQuotaAttributable: true,
+	}
+	tenant := AuthFileTrendResponse{}
+
+	merged := mergeAuthFileTrendShared(tenant, shared)
+	if merged.WeeklyQuotaUsed == nil || *merged.WeeklyQuotaUsed != 80.0 {
+		t.Fatalf("merged weekly quota used=%v, want 80.0", merged.WeeklyQuotaUsed)
+	}
+	if merged.ProjectionQuotaUsed == nil || *merged.ProjectionQuotaUsed != 20.0 {
+		t.Fatalf("merged projection quota used=%v, want 20.0", merged.ProjectionQuotaUsed)
+	}
+	if !merged.ProjectionQuotaAttributable {
+		t.Fatalf("merged projection quota attributable=false, want true")
+	}
+}
