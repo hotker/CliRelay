@@ -7,6 +7,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -69,7 +70,8 @@ func (d *AntigravityDriver) ExecuteWarmup(ctx context.Context, auth *coreauth.Au
 		SourceFormat: sdktranslator.FromString("antigravity"),
 	}
 
-	execResp, err := d.executor.Execute(ctx, auth, execReq, opts)
+	execCtx := context.WithValue(ctx, util.ContextKeyAPIKey, "POST /auth-files/warmup")
+	execResp, err := d.executor.Execute(execCtx, auth, execReq, opts)
 	res.Latency = time.Since(start)
 
 	if err != nil {
