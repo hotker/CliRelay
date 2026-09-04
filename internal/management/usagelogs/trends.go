@@ -100,6 +100,10 @@ func mergeAuthFileTrendShared(tenant, shared AuthFileTrendResponse) AuthFileTren
 		if shared.WeeklyQuotaUsed != nil {
 			out.WeeklyQuotaUsed = shared.WeeklyQuotaUsed
 		}
+		if shared.ProjectionQuotaUsed != nil {
+			out.ProjectionQuotaUsed = shared.ProjectionQuotaUsed
+		}
+		out.ProjectionQuotaAttributable = shared.ProjectionQuotaAttributable
 	}
 	// Prefer richer shared hourly (all tenants); keep tenant-only when shared empty.
 	if sumHourlyRequests(shared.HourlyUsage) > sumHourlyRequests(tenant.HourlyUsage) {
