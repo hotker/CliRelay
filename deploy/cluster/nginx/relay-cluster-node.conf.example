@@ -15,6 +15,8 @@ upstream clirelay_app {
     zone clirelay_app 64k;
     server 127.0.0.1:8319 max_conns=400;
     # Spill-over: a local hop that forwards to the peer node over mutual TLS.
+    # Leave it out, with the 8446 and 8445 servers below, while the peer runs
+    # no CliRelay: a timed-out request would only fail there a second time.
     server 127.0.0.1:8446 backup;
 }
 

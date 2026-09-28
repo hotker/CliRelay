@@ -1,9 +1,10 @@
 package api
 
 import (
-	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -285,7 +286,9 @@ func buildHTTPServer(cfg *config.Config, engine *gin.Engine) *http.Server {
 		}
 	}
 	return &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", host, port),
+		// JoinHostPort brackets an IPv6 host such as ::1; an empty host still
+		// gives ":port", which binds every interface.
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler:           engine,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       readTimeout,

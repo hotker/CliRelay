@@ -228,6 +228,42 @@ func TestLoadConfigAllowsPortEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsHostEnvOverride(t *testing.T) {
+	cases := []struct {
+		name     string
+		yamlHost string
+		env      string
+		want     string
+	}{
+		{name: "env overrides yaml", yamlHost: "0.0.0.0", env: "127.0.0.1", want: "127.0.0.1"},
+		{name: "localhost is normalized", yamlHost: "", env: "localhost", want: "127.0.0.1"},
+		{name: "empty env keeps yaml", yamlHost: "10.0.0.5", env: "", want: "10.0.0.5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			raw := "host: \"" + tc.yamlHost + "\"\nport: 8318\n"
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			t.Setenv(EnvHost, tc.env)
+			// The port override returns early; the host override must still apply.
+			t.Setenv(EnvPort, "8319")
+
+			cfg, err := LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig returned error: %v", err)
+			}
+			if cfg.Host != tc.want {
+				t.Fatalf("Host = %q, want %q", cfg.Host, tc.want)
+			}
+			if cfg.Port != 8319 {
+				t.Fatalf("Port = %d, want 8319", cfg.Port)
+			}
+		})
+	}
+}
+
 func TestLoadConfigAllowsDataStackEnvOverrides(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte(`

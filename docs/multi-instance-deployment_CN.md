@@ -57,7 +57,7 @@ CliRelay 支持两种部署方式：
 
 ## 3. 故障场景与实测表现
 
-下列数字来自与生产相同配置的演练：Patroni 4.1.5，PostgreSQL 15.19，ttl 30s / loop_wait 10s，同步复制。
+下列数字来自与生产相同配置的演练：Patroni 4.1.5，PostgreSQL 15.19，ttl 30s / loop_wait 10s，同步复制。表中各行都以第 2 节的三票 etcd 为前提；etcd 只剩一票时见 [5.1](#51-etcd-只剩一票时降级运行)。
 
 | 场景 | 表现 | 用户影响 |
 |---|---|---|
@@ -127,8 +127,17 @@ docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml list
 | `use_pg_rewind` + `wal_log_hints` | on | 故障节点恢复后自动回滚分叉部分并重新加入 |
 | `remove_data_directory_on_*` | false | 绝不自动删除数据目录，出现分叉时由人来决定 |
 | `max_slot_wal_keep_size` | 8GB | 备库长时间离线时，限制主库为它保留的 WAL，防止撑爆磁盘 |
+| `wal_compression` | lz4 | 生产主库的 WAL 字节里约九成是整页镜像。压缩后，WAL、归档和复制流量一起变小，CPU 开销很小 |
+| `checkpoint_timeout` | 15min | 每次检查点之后，页面的第一次修改都要写一份整页镜像，所以检查点越少，WAL 越少。按这里的写入量，崩溃后几秒就能回放完 15 分钟的 WAL |
 | pg_hba | 本机密码认证；跨机器必须 TLS 加集群证书加密码；其他来源一律拒绝 | 5432 暴露在公网，靠证书做访问控制 |
 | 监听端口 | 127.0.0.1 与公网 IP 的 55432 | 与单实例的端口一致，本机 CliRelay 的 DSN 不用改 |
+
+`bootstrap.dcs` 里的值只在新建集群时写入。已有集群用下面的命令修改，reload 后立即生效，不需要重启：
+
+```bash
+docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml edit-config \
+  --set postgresql.parameters.wal_compression=lz4 --set postgresql.parameters.checkpoint_timeout=15min --force
+```
 
 #### 从单实例无停机迁移到 Patroni
 
@@ -171,6 +180,9 @@ docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml list
 ```bash
 CLIRELAY_CLUSTER_ENABLED=true
 CLIRELAY_CLUSTER_NODE_ID=n43                     # 各节点唯一
+# slot 只给本机 nginx 用，所以只监听回环，外部连不到它的明文端口。
+# 写在这里而不是 config.yaml：改 .env 不会让运行中的进程热重载
+CLIRELAY_HOST=127.0.0.1
 # 多主机 DSN：本机优先，target_session_attrs=read-write 自动找到当前主库
 CLIRELAY_POSTGRES_DSN=postgres://cliproxy:<密码>@127.0.0.1:55432,198.51.100.20:55432/cliproxy?target_session_attrs=read-write&sslmode=verify-ca&sslrootcert=/etc/clirelay-cluster/tls/ca.crt&sslcert=/etc/clirelay-cluster/tls/node.crt&sslkey=/etc/clirelay-cluster/tls/node.key&connect_timeout=5
 # 集群共享 Redis
@@ -216,6 +228,7 @@ server {                                    # 接收对端溢出：只转本机 
 - 本机 slot 连不上，或者正在用的连接数达到 `max_conns`，nginx 就改用 backup，也就是转给对端。
 - `proxy_next_upstream` 只对"连接失败或超时"重试，这时请求还没有发出去，POST 也可以安全地换节点。
 - 部署脚本切流时，会把同一文件里两处指向 active slot 的端口一起改写，并逐处校验。
+- 对端没有运行 CliRelay 时（比如只剩一个应用节点），不要配 `backup` 和两个溢出 server：本机 slot 一超时，请求会被转去对端，再失败一次。
 
 ### 4.7 DNS 健康检查（仲裁机）
 
@@ -239,6 +252,7 @@ server {                                    # 接收对端溢出：只转本机 
 
 - **每日全量备份**（`clirelay-pg-basebackup.timer`，每天 04:20）：
   - 优先从备库拉取（`target_session_attrs=prefer-standby`），不给主库增加负担；
+  - 默认由成员一侧压缩后再传输（`COMPRESS=server-zstd`），仲裁机收到后先解压成普通目录再校验。仲裁机的线路常按流量计费，这样每天的传输量能降到原来的约四分之一；
   - 用 `pg_verifybackup` 校验通过后才压缩保存，保留最近 7 份；
   - 完成后清理比最老那份备份还早的 WAL。
 - **连续 WAL 归档**（`clirelay-pg-receivewal.service`）：
@@ -271,11 +285,44 @@ GitHub Actions 的 `Deploy CliRelay` 按节点逐台部署：
 | 查看数据库拓扑 | `docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml list` |
 | 计划内切换主库 | `patronictl ... switchover --leader <当前> --candidate <目标> --force` |
 | 维护某个节点 | 仲裁机上 `touch /etc/clirelay-dnswatch/hold`；nginx 把本机 upstream 标记为 `down` 后重载；维护完再恢复 |
-| 故障节点恢复 | 启动它的 Patroni 容器即可，自动 rewind 后重新加入；`patronictl list` 看到 `Sync Standby` 即恢复完成 |
+| 故障节点恢复 | 启动它的 Patroni 容器即可，自动 rewind 后重新加入；`patronictl list` 看到 `Sync Standby` 即恢复完成。etcd 只剩一票时不要这样做，见 5.1 |
 | 立刻做一份备份 | 仲裁机上 `systemctl start clirelay-pg-basebackup` |
 | 查看 WAL 归档 | 仲裁机上 `systemctl status clirelay-pg-receivewal`；`ls /opt/clirelay-cluster/backups/wal` |
 | 从备份恢复 | 解压到新的数据目录，用同一镜像启动单实例 PostgreSQL 核对数据，确认后再作为新集群的起点 |
 | 证书轮换 | 用同一 CA 重新签发，分发后依次重启 etcd、Patroni、nginx、CliRelay |
+
+### 5.1 etcd 只剩一票时（降级运行）
+
+仲裁机或另一个节点长时间离线、etcd 只剩一个成员时，第 3 节的表格不再成立。补齐三票之前，按下面的规则运行：
+
+- **打开 `failsafe_mode`，并且只保留一个 Patroni 成员。** 只有一票时，这台机器的 etcd 一卡顿（宿主机 I/O 卡住几秒就会），关着 failsafe 的主库就会自行降级、重启。打开之后，主库连不上 etcd 时要向其余**每个**成员发请求，每个最多等 2 秒，全部应答才继续当主库；只剩它自己时直接放行。成员只要在 etcd 里登记过就算在内，写了 `nofailover` 的也一样。所以多一个成员，就多一个"它一抖，主库就重启"的依赖。
+- **离线节点一开机就会自己加入。** 容器是 `restart: unless-stopped`：机器恢复后，Patroni 自动启动、登记、rewind，成为同步备库；主库自行降级时，它还可能被选成新主库。能连上这台机器时，先关掉自动重启，再停掉容器：
+
+  ```bash
+  docker update --restart=no clirelay-patroni clirelay-etcd clirelay-cluster-redis
+  docker stop -t 60 clirelay-patroni clirelay-etcd clirelay-cluster-redis
+  ```
+
+  如果它已经自己加入了，先在它上面执行这两条，再在主库这台删掉它的成员键。下一轮（10 秒内）failsafe 名单就只剩主库：
+
+  ```bash
+  deploy/cluster/bin/etcdctl.sh del /clirelay/clirelay/members/<成员名>
+  ```
+
+  WAL 归档和每日备份不经过 Patroni，可以继续在那台机器上运行。
+- **关掉同步复制，放宽超时。** 跨公网的同步备库每抖一次，主库的提交就要等一次。这类宿主机的 I/O 卡顿常见 3–10 秒；`retry_timeout` 调到 20 后，Patroni 访问 etcd 的单次超时从约 3.3 秒变成约 6.7 秒。`ttl` 要满足 `loop_wait + 2 × retry_timeout ≤ ttl`：
+
+  ```bash
+  docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml edit-config \
+    --set synchronous_mode=false --set ttl=60 --set retry_timeout=20 --force
+  ```
+
+- **只剩一个应用节点时，去掉集群共享 Redis 和 nginx 溢出。** 共享 Redis 在另一台机器上时，链路一抖，请求路径上的计数调用就要等满 200ms 超时，才退回本机计数，日志里还会反复出现 `marked unavailable`；只有一个节点时，本机计数本来就是准确的。对端没有应用时，溢出只会让超时的请求再失败一次（见 4.6）。
+- **恢复成两个成员的顺序：** 先补齐三票 etcd。再去掉配置里已经下线的机器：各节点 `node.env` 的 `ETCD_HOSTS`、`PEER_CIDRS`，以及仲裁机 `backup.env` 的 `BACKUP_HOSTS`、`WAL_ARCHIVE_DSN`。然后关掉 `failsafe_mode`，最后才启动第二个成员。没有部署 CliRelay 的成员，要在 `node.env` 里写 `NOFAILOVER=true`、`NOSYNC=true`，主库就不会落到每条查询都要跨机的那台。
+
+`deploy/cluster/bin/cluster-status.sh` 的 `Risks` 段会指出两种危险组合：failsafe 开着且有多个成员；etcd 不足三票且 failsafe 关着。
+
+2026-09-28 的实际经过（北京时间；etcd 单票、failsafe 开、同步复制开）：hk-relay 因流量耗尽离线三天，恢复开机后自动加入集群。01:46，n43 连不上本机 etcd，failsafe 等 hk-relay 应答超时，n43 自行降级，hk-relay 当了约 9 小时主库，n43 上的 CliRelay 每条查询都要跨机。10:43 n43 抢回主库，10:49、11:06 又因为同样的原因各重启一次。这段时间里，每次提交都要等 hk-relay 确认，应用访问 hk-relay 上的共享 Redis 也不断超时。按上面的步骤摘掉 hk-relay 后恢复正常；核对 WAL 后确认，没有丢失已提交的数据。
 
 ## 6. 应用层如何保证多实例正确
 

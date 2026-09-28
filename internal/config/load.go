@@ -289,6 +289,9 @@ func (cfg *Config) ApplyEnvOverrides() {
 		}
 	}
 	cfg.applyClusterEnvOverrides()
+	if host := strings.TrimSpace(os.Getenv(EnvHost)); host != "" {
+		cfg.Host = host
+	}
 	for _, key := range []string{EnvPort, EnvLegacyPort} {
 		if rawPort := strings.TrimSpace(os.Getenv(key)); rawPort != "" {
 			if port, err := strconv.Atoi(rawPort); err == nil && port > 0 {

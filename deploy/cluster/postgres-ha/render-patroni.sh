@@ -17,6 +17,11 @@
 #   SHARED_BUFFERS, EFFECTIVE_CACHE_SIZE, WORK_MEM, MAINTENANCE_WORK_MEM
 #   STANDBY_HOST / STANDBY_PORT / STANDBY_SLOT   optional: bootstrap as a
 #       standby cluster that follows an external primary (migration only)
+#   NOFAILOVER / NOSYNC  optional, true or false (default false): keep this
+#       member out of leader races / synchronous standby selection. Set both
+#       on a member that runs no CliRelay, so the primary never lands where
+#       every query would cross the network. Neither takes the member out of
+#       failsafe_mode's topology (docs/multi-instance-deployment.md, 5.1).
 #   TLS_DIR              directory with ca.crt/node.crt/node.key inside the container
 set -euo pipefail
 
@@ -38,6 +43,14 @@ EFFECTIVE_CACHE_SIZE="${EFFECTIVE_CACHE_SIZE:-1GB}"
 WORK_MEM="${WORK_MEM:-8MB}"
 MAINTENANCE_WORK_MEM="${MAINTENANCE_WORK_MEM:-128MB}"
 REST_LISTEN="${REST_LISTEN:-0.0.0.0}"
+NOFAILOVER="${NOFAILOVER:-false}"
+NOSYNC="${NOSYNC:-false}"
+for tag in NOFAILOVER NOSYNC; do
+  case "${!tag}" in
+    true | false) ;;
+    *) echo "render-patroni.sh: $tag must be true or false, got '${!tag}'" >&2; exit 1 ;;
+  esac
+done
 
 yaml_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
@@ -109,6 +122,14 @@ bootstrap:
         wal_level: replica
         hot_standby: 'on'
         wal_log_hints: 'on'
+        # Full-page images were about 90% of the WAL bytes on the production
+        # primary. lz4 shrinks them for little CPU, and the WAL archive and
+        # replication traffic shrink with them.
+        wal_compression: lz4
+        # A page's first change after each checkpoint writes a full-page
+        # image, so fewer checkpoints mean less WAL. At this write rate, 15
+        # minutes of WAL replays in seconds after a crash.
+        checkpoint_timeout: 15min
         wal_keep_size: 1GB
         max_slot_wal_keep_size: 8GB
         hot_standby_feedback: 'on'
@@ -202,8 +223,8 @@ watchdog:
   mode: 'off'
 
 tags:
-  nofailover: false
+  nofailover: ${NOFAILOVER}
   noloadbalance: false
   clonefrom: false
-  nosync: false
+  nosync: ${NOSYNC}
 YAML
