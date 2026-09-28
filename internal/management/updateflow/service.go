@@ -185,6 +185,9 @@ func (s *Service) CurrentFrontendState() (string, string) {
 }
 
 func (s *Service) FetchProgress(ctx context.Context) (*ProgressResponse, error) {
+	if !s.config().AutoUpdate.Enabled {
+		return nil, errAutoUpdateDisabled
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, JoinURLPath(ResolveUpdaterURL(s.cfg), "/v1/status"), nil)
 	if err != nil {
 		return nil, err
@@ -195,7 +198,7 @@ func (s *Service) FetchProgress(ctx context.Context) (*ProgressResponse, error) 
 	client := &http.Client{Timeout: UpdateHTTPTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, classifyUpdaterError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -210,6 +213,9 @@ func (s *Service) FetchProgress(ctx context.Context) (*ProgressResponse, error) 
 }
 
 func (s *Service) OpenProgressStream(ctx context.Context, lastEventID string) (*http.Response, error) {
+	if !s.config().AutoUpdate.Enabled {
+		return nil, errAutoUpdateDisabled
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, JoinURLPath(ResolveUpdaterURL(s.cfg), "/v1/events"), nil)
 	if err != nil {
 		return nil, err
@@ -231,7 +237,7 @@ func (s *Service) OpenProgressStream(ctx context.Context, lastEventID string) (*
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, classifyUpdaterError(err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()

@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -81,10 +82,26 @@ func (h *Handler) GetCurrentUpdateState(c *gin.Context) {
 func (h *Handler) GetUpdateProgress(c *gin.Context) {
 	progress, err := h.fetchUpdateProgress(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "update_progress_failed", "message": err.Error()})
+		respondUpdaterProgressError(c, "update_progress_failed", err)
 		return
 	}
 	c.JSON(http.StatusOK, progress)
+}
+
+// respondUpdaterProgressError answers a progress request the updater did not serve.
+// A node with no updater to reach gets the same 503 updater_unavailable that
+// ApplyUpdate returns; only an updater that answered badly is a bad gateway.
+//
+// Not a 200 with a synthesized idle status, and not a 204: the panel adopts any
+// progress it is sent as the current state, so an idle answer would end a run it is
+// watching while the updater restarts itself. Any non-2xx keeps the panel on its
+// existing retry backoff.
+func respondUpdaterProgressError(c *gin.Context, failure string, err error) {
+	if errors.Is(err, managementupdate.ErrUpdaterUnavailable) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "updater_unavailable", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusBadGateway, gin.H{"error": failure, "message": err.Error()})
 }
 
 func (h *Handler) StreamUpdateProgress(c *gin.Context) {
@@ -97,7 +114,7 @@ func (h *Handler) StreamUpdateProgress(c *gin.Context) {
 	}
 	upstream, err := h.updateService().OpenProgressStream(c.Request.Context(), lastEventID)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "update_events_failed", "message": err.Error()})
+		respondUpdaterProgressError(c, "update_events_failed", err)
 		return
 	}
 	defer upstream.Body.Close()
