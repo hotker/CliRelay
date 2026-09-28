@@ -122,6 +122,14 @@ bootstrap:
         wal_level: replica
         hot_standby: 'on'
         wal_log_hints: 'on'
+        # Full-page images were about 90% of the WAL bytes on the production
+        # primary. lz4 shrinks them for little CPU, and the WAL archive and
+        # replication traffic shrink with them.
+        wal_compression: lz4
+        # A page's first change after each checkpoint writes a full-page
+        # image, so fewer checkpoints mean less WAL. At this write rate, 15
+        # minutes of WAL replays in seconds after a crash.
+        checkpoint_timeout: 15min
         wal_keep_size: 1GB
         max_slot_wal_keep_size: 8GB
         hot_standby_feedback: 'on'

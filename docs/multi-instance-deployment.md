@@ -135,8 +135,17 @@ Key settings and why:
 | `use_pg_rewind` + `wal_log_hints` | on | A failed node rewinds its divergent tail and rejoins by itself |
 | `remove_data_directory_on_*` | false | A data directory is never deleted automatically; a human decides after a diverged timeline |
 | `max_slot_wal_keep_size` | 8GB | Caps the WAL a primary keeps for a replica that stays away, so it cannot fill the disk |
+| `wal_compression` | lz4 | Full-page images were about 90% of the WAL bytes on the production primary; compressing them shrinks the WAL, the archive and replication traffic for little CPU |
+| `checkpoint_timeout` | 15min | A page's first change after each checkpoint writes a full-page image, so fewer checkpoints mean less WAL. At this write rate 15 minutes of WAL replays in seconds after a crash |
 | pg_hba | Password on the same host; TLS + cluster certificate + password across hosts; everything else rejected | Port 55432 faces the internet; certificates are the access control |
 | Ports | 55432 on `127.0.0.1` and the public IP | Same port as the single-node stack, so the local CliRelay DSN stays valid |
+
+Values under `bootstrap.dcs` are written only when a cluster is created. On an existing cluster, set them with the command below; a reload applies them without a restart:
+
+```bash
+docker exec clirelay-patroni patronictl -c /etc/patroni/patroni.yml edit-config \
+  --set postgresql.parameters.wal_compression=lz4 --set postgresql.parameters.checkpoint_timeout=15min --force
+```
 
 #### Migrating a live single-node database without downtime
 
@@ -179,6 +188,10 @@ Keep `config.yaml` identical on all nodes, apart from node-local values such as 
 ```bash
 CLIRELAY_CLUSTER_ENABLED=true
 CLIRELAY_CLUSTER_NODE_ID=n43                     # unique per node
+# The slot only serves the local nginx, so it listens on loopback and its
+# plain-HTTP port is unreachable from outside. Set here rather than in
+# config.yaml: editing .env does not hot-reload the running process.
+CLIRELAY_HOST=127.0.0.1
 # multi-host DSN: local host first; target_session_attrs=read-write finds the primary
 CLIRELAY_POSTGRES_DSN=postgres://cliproxy:<password>@127.0.0.1:55432,198.51.100.20:55432/cliproxy?target_session_attrs=read-write&sslmode=verify-ca&sslrootcert=/etc/clirelay-cluster/tls/ca.crt&sslcert=/etc/clirelay-cluster/tls/node.crt&sslkey=/etc/clirelay-cluster/tls/node.key&connect_timeout=5
 # shared cluster Redis
@@ -225,6 +238,7 @@ server {                                    # accepts the peer's spill-over: loc
 - When the local slot refuses the connection or already holds `max_conns` connections, nginx uses the backup, which is the peer.
 - `proxy_next_upstream` retries only connection-level failures, where the request has not been sent yet, so it is safe for POST.
 - On cutover the deploy script rewrites both slot references in the file and verifies each one.
+- When the peer runs no CliRelay (a single application node, for example), leave out the `backup` server and both spill-over servers: a request that times out locally would only be sent to the peer to fail again.
 - `location = /manage/version.txt` serves the panel's version file, so the panel deploy can verify each node.
 
 ### 4.7 DNS health checks (arbiter)
@@ -252,6 +266,7 @@ Replication protects against a lost machine, not against a bad `DELETE`: the mis
 
 - **Daily base backup** (`clirelay-pg-basebackup.timer`, 04:20):
   - taken from a replica when one is up (`target_session_attrs=prefer-standby`);
+  - compressed by the member before it crosses the network (`COMPRESS=server-zstd`, the default) and decompressed into a plain directory on the arbiter. The arbiter's link is often metered, and this cuts the daily transfer to about a quarter;
   - verified with `pg_verifybackup` before it is compressed, keeping the newest 7;
   - afterwards, WAL older than the oldest kept backup is pruned.
 - **Continuous WAL archive** (`clirelay-pg-receivewal.service`): `pg_receivewal` follows the primary through the multi-host DSN on the permanent slot `clirelay_walarchive`. Patroni keeps that slot on every member, so a failover neither loses segments nor needs reconfiguration.
@@ -314,7 +329,7 @@ When the arbiter or the other node stays offline and etcd is left with a single 
     --set synchronous_mode=false --set ttl=60 --set retry_timeout=20 --force
   ```
 
-- **With one application node left, the shared Redis is not needed.** When it lives on another machine, every hiccup of the link makes requests wait for its timeout before falling back to local counters; with a single node, the local counters are exact anyway.
+- **With one application node left, drop the shared Redis and the nginx spill-over.** When the shared Redis lives on another machine, every hiccup of the link makes the counter calls on the request path wait out their 200 ms timeout before falling back to local counters, and the log keeps repeating `marked unavailable`; with a single node, the local counters are exact anyway. With no application on the peer, spilling over only makes a timed-out request fail a second time (see 4.6).
 - **Going back to two members, in order:** restore the third etcd vote. Remove the machines that are gone from the configuration: `ETCD_HOSTS` and `PEER_CIDRS` in each node's `node.env`, `BACKUP_HOSTS` and `WAL_ARCHIVE_DSN` in the arbiter's `backup.env`. Turn `failsafe_mode` off. Only then start the second member. A member that runs no CliRelay gets `NOFAILOVER=true` and `NOSYNC=true` in its `node.env`, so the primary never lands where every query crosses the network.
 
 The `Risks` section of `deploy/cluster/bin/cluster-status.sh` flags both dangerous combinations: failsafe on with more than one member, and fewer than three etcd members with failsafe off.
