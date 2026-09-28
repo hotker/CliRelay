@@ -263,6 +263,14 @@ server {                                    # 接收对端溢出：只转本机 
   - 设置 `restore_command = 'gunzip -c /wal/%f.gz > %p'` 和 `recovery_target_time`，建空文件 `recovery.signal`；
   - 用同一镜像启动单实例 PostgreSQL 回放到目标时间，核对数据后，再决定导出需要的数据，或者以它作为新集群的起点；
   - 正在写入的最后一段是 `*.partial`。要恢复到最新时刻，先把它解压、去掉 `.partial` 后缀，再放进 `pg_wal/`。
+  - 有三个容易踩的坑，`pitr-drill.sh` 里都已处理：
+    - 归档目录是 `0700 root`，而 PostgreSQL 以 uid 70 运行。直接挂载时 `restore_command` 一段也读不到，恢复会停在备份的终点，照样启动成一个看起来正常的库，还会占用一个线上已经用过的时间线编号。要先把归档复制一份，改成 70 属主再挂载；
+    - 正在写入的 `.partial` 段，gzip 流还没有结尾，`gunzip` 会在最后一个完整块之后报错。忽略这个错误，再用 `truncate -s 16M` 补成整段，补上的零会被当作 WAL 的结尾；
+    - 镜像的入口脚本会在 `PGDATA` 里找 `PG_VERSION`，找不到就去 initdb。要用 `--entrypoint postgres` 直接启动。
+- **每周恢复演练**（`clirelay-pitr-drill.timer`，每周日 05:10）：
+  - `pitr-drill.sh` 把第二新的全量备份恢复到一个没有网络的临时实例，回放全部归档，结束后删除；
+  - 只有回放到了归档里最新的时间线，并且最后一个事务在 15 分钟以内，才算通过，否则以失败退出（用 `systemctl status clirelay-pitr-drill` 查看）；
+  - 2026-09-28 实测：从时间线 11 的备份出发，依次回放时间线 11–14 共 28 段，11 秒回放到 15 秒前。与生产逐行核对，`request_logs` 行数完全一致。
 
 ### 4.9 逐台滚动发版
 
@@ -287,6 +295,7 @@ GitHub Actions 的 `Deploy CliRelay` 按节点逐台部署：
 | 维护某个节点 | 仲裁机上 `touch /etc/clirelay-dnswatch/hold`；nginx 把本机 upstream 标记为 `down` 后重载；维护完再恢复 |
 | 故障节点恢复 | 启动它的 Patroni 容器即可，自动 rewind 后重新加入；`patronictl list` 看到 `Sync Standby` 即恢复完成。etcd 只剩一票时不要这样做，见 5.1 |
 | 立刻做一份备份 | 仲裁机上 `systemctl start clirelay-pg-basebackup` |
+| 验证备份能恢复 | 仲裁机上 `systemctl start clirelay-pitr-drill`，用 `journalctl -u clirelay-pitr-drill` 查看结果 |
 | 查看 WAL 归档 | 仲裁机上 `systemctl status clirelay-pg-receivewal`；`ls /opt/clirelay-cluster/backups/wal` |
 | 从备份恢复 | 解压到新的数据目录，用同一镜像启动单实例 PostgreSQL 核对数据，确认后再作为新集群的起点 |
 | 证书轮换 | 用同一 CA 重新签发，分发后依次重启 etcd、Patroni、nginx、CliRelay |
