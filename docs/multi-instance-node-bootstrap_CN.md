@@ -124,8 +124,11 @@ cat > /tmp/deploy.env <<'EOF'
 DOMAIN=relay.07230805.xyz
 NODE_PUBLIC_IP=203.0.113.43
 NGINX_CONF=/etc/nginx/conf.d/relay.07230805.xyz.conf
-# 与该机现有 slot 单元一致：CPUQuota=120%、MemoryHigh=900M、MemoryMax=1100M、GOMEMLIMIT=700MiB
-SERVICE_CPU_QUOTA=120%
+# CPUQuota=200%、MemoryHigh=900M、MemoryMax=1100M、GOMEMLIMIT=700MiB。
+# CPU 不要再压回 120%：2026-09-28 宿主机 steal 升到 30–50% 时，120% 让 Go GC 跑不完一轮，
+# 堆顶在 GOMEMLIMIT、九成调度周期被限流，请求大量超时；放到 200% 后堆从 687MiB 回落到 364MiB。
+# 剩下两个核留给 Patroni、etcd 和 nginx
+SERVICE_CPU_QUOTA=200%
 SERVICE_MEMORY_HIGH=900M
 SERVICE_MEMORY_MAX=1100M
 SERVICE_GO_MEM_LIMIT=734003200
