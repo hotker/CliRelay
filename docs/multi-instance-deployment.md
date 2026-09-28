@@ -275,6 +275,14 @@ Replication protects against a lost machine, not against a bad `DELETE`: the mis
   - set `restore_command = 'gunzip -c /wal/%f.gz > %p'` and `recovery_target_time`, and create an empty `recovery.signal`;
   - start a standalone PostgreSQL from the same image and let it replay to the target. Check the data, then export what you need or use it as the seed of a new cluster;
   - the segment still being written is `*.partial`: to recover up to the latest moment, decompress it, drop the `.partial` suffix and put it into `pg_wal/`.
+  - three traps, all handled in `pitr-drill.sh`:
+    - the archive directory is `0700 root` and PostgreSQL runs as uid 70. Mounted as is, `restore_command` cannot read a single segment, so recovery stops at the end of the base backup, still starts a healthy-looking database, and takes a timeline ID the live cluster has already used. Copy the archive and give the copy to uid 70 first;
+    - the gzip stream of the `.partial` segment has no trailer yet, so `gunzip` fails after the last complete block. Ignore that error and pad the result to a whole segment with `truncate -s 16M`; the zeros read as the end of the WAL;
+    - the image's entrypoint looks for `PG_VERSION` in `PGDATA` and runs initdb when it is missing. Start with `--entrypoint postgres`.
+- **Weekly restore drill** (`clirelay-pitr-drill.timer`, Sundays 05:10):
+  - `pitr-drill.sh` restores the second newest base backup into a throwaway instance with no network, replays the whole archive and removes it;
+  - it passes only if the replay reaches the newest timeline in the archive and its last transaction is at most 15 minutes old; otherwise it exits with a failure (`systemctl status clirelay-pitr-drill`);
+  - measured on 2026-09-28: starting from a timeline-11 backup it replayed 28 segments across timelines 11–14 and reached 15 seconds before the drill in 11 s. The `request_logs` row count matched production exactly.
 
 ### 4.9 Rolling deploys
 
@@ -299,6 +307,7 @@ Releases must keep the old and new versions able to run side by side. Database m
 | Maintain a node | On the arbiter `touch /etc/clirelay-dnswatch/hold`; mark the node's local upstream `down` in nginx and reload; revert afterwards |
 | Recover a failed node | Start its Patroni container; it rewinds and rejoins. `patronictl list` shows `Sync Standby` when done. Not while etcd is down to one member; see 5.1 |
 | Take a backup now | On the arbiter `systemctl start clirelay-pg-basebackup` |
+| Prove a backup restores | On the arbiter `systemctl start clirelay-pitr-drill`, then `journalctl -u clirelay-pitr-drill` |
 | Check the WAL archive | On the arbiter `systemctl status clirelay-pg-receivewal`; `ls /opt/clirelay-cluster/backups/wal` |
 | Restore from a backup | See 4.8 |
 | Rotate certificates | Re-issue from the same CA, distribute, then restart etcd, Patroni, nginx and CliRelay one node at a time |

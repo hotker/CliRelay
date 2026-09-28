@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the CliRelay restore drill weekly
+
+[Timer]
+# Sunday 05:10 Asia/Shanghai, after the 04:20 base backup.
+OnCalendar=Sun *-*-* 05:10:00 Asia/Shanghai
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
