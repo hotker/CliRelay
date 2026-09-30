@@ -262,6 +262,11 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, cfg *c
 		}
 	}
 	// Ensure UA remains absent even if custom headers attempted to set it.
+	// Version stays: ChatGPT still gates the model on it when the socket
+	// carries no User-Agent.
+	if !isAPIKey {
+		raiseCodexPresentedClientVersion(headers, codexRequestModel(ctx))
+	}
 	headers.Del("User-Agent")
 
 	return headers

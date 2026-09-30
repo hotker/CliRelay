@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/codexclientver"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -112,6 +114,84 @@ func applyCodexHeaders(r *http.Request, cfg *config.Config, auth *cliproxyauth.A
 			}
 		}
 	}
+	if !isAPIKey {
+		raiseCodexPresentedClientVersion(r.Header, codexRequestModel(r.Context()))
+	}
+}
+
+type codexRequestModelKey struct{}
+
+// withCodexRequestModel records the model a Codex call is about to send, so the
+// outbound client version can meet that model's manifest minimum.
+func withCodexRequestModel(ctx context.Context, model string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, codexRequestModelKey{}, model)
+}
+
+func codexRequestModel(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	model, _ := ctx.Value(codexRequestModelKey{}).(string)
+	return strings.TrimSpace(model)
+}
+
+// raiseCodexPresentedClientVersion lifts Version and the version inside
+// User-Agent up to what this model requires. A client older than the
+// manifest minimum is rejected even when the model is listed. A newer
+// identity is left alone. An empty requirement leaves the headers as built,
+// which is what tests and a process that has not resolved a version yet see.
+func raiseCodexPresentedClientVersion(headers http.Header, model string) {
+	if headers == nil {
+		return
+	}
+	required := codexclientver.Required(model)
+	if required == "" {
+		return
+	}
+	current := strings.TrimSpace(headers.Get("Version"))
+	if current == "" {
+		current = codexVersionFromUserAgent(headers.Get("User-Agent"))
+	}
+	if current != "" && compareCodexClientVersion(current, required) >= 0 {
+		return
+	}
+	headers.Set("Version", required)
+	ua := headers.Get("User-Agent")
+	if ua == "" {
+		return
+	}
+	headers.Set("User-Agent", replaceCodexVersionInUserAgent(ua, required))
+}
+
+func replaceCodexVersionInUserAgent(ua, version string) string {
+	lower := strings.ToLower(ua)
+	for _, prefix := range []string{"codex_cli_rs/", "codex-tui/", "codex-cli/", "codex desktop/"} {
+		idx := strings.Index(lower, prefix)
+		if idx < 0 {
+			continue
+		}
+		start := idx + len(prefix)
+		end := start
+		for end < len(ua) {
+			c := ua[end]
+			if (c >= '0' && c <= '9') || c == '.' {
+				end++
+				continue
+			}
+			break
+		}
+		if end > start {
+			return ua[:start] + version + ua[end:]
+		}
+	}
+	return "codex_cli_rs/" + version
 }
 
 func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/codexclientver"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	sdkmodelcatalog "github.com/router-for-me/CLIProxyAPI/v6/sdk/modelcatalog"
@@ -52,6 +53,7 @@ type codexModelPayload struct {
 	// Manifest-only fields describing a model this build may not know. They stay
 	// raw so a shape change in one of them cannot fail the whole manifest.
 	Description              string          `json:"description"`
+	MinimalClientVersion     string          `json:"minimal_client_version"`
 	SupportedReasoningLevels json.RawMessage `json:"supported_reasoning_levels"`
 	ContextWindow            json.RawMessage `json:"context_window"`
 }
@@ -131,6 +133,9 @@ func resolveCodexModelsClientVersion(cfg *config.Config, auth *cliproxyauth.Auth
 		}
 	}
 	_ = auth
+	if official := codexclientver.Official(); official != "" && compareCodexClientVersion(official, candidate) > 0 {
+		candidate = official
+	}
 	if candidate == "" {
 		return defaultCodexModelsClientVer
 	}
@@ -443,6 +448,7 @@ func parseCodexModelList(body []byte, now int64) (models []*sdkmodelcatalog.Mode
 		if created == 0 {
 			created = now
 		}
+		codexclientver.NoteMinimum(modelID, item.MinimalClientVersion)
 		model := &sdkmodelcatalog.ModelInfo{
 			ID:          modelID,
 			Object:      object,

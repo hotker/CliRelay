@@ -310,10 +310,11 @@ echo "first_deploy=${first_deploy} active=${active_port} next=${next_port} from=
 		t.Fatalf("a fresh node has nothing to reconcile")
 	}
 
-	// A live node alternates as before.
+	// A live node replaces the slot nginx already routes to. A second slot
+	// would reuse the same cluster node id.
 	out, _, err = run(t, "8319", "clirelay2-8319", reconcile)
-	if err != nil || !strings.Contains(out, "first_deploy=0 active=8319 next=8318 from=8319") {
-		t.Fatalf("a live node must alternate slots: %v\n%s", err, out)
+	if err != nil || !strings.Contains(out, "first_deploy=0 active=8319 next=8319 from=8319") {
+		t.Fatalf("a live node must stay on its current slot: %v\n%s", err, out)
 	}
 
 	// A record with nothing running is an outage, not a fresh node.
