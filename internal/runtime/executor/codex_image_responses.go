@@ -49,6 +49,7 @@ func (e *CodexExecutor) executeCodexImageViaResponses(
 		if err != nil {
 			return nil, nil, err
 		}
+		httpReq = httpReq.WithContext(withCodexRequestModel(httpReq.Context(), e.resolveCodexImageBaseModel()))
 		applyCodexHeaders(httpReq, e.cfg, execCtx.Auth, apiKey, true)
 		recorder.RecordRequest(url, http.MethodPost, httpReq.Header.Clone(), body)
 

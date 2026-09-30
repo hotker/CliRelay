@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	modelconfigsettings "github.com/router-for-me/CLIProxyAPI/v6/internal/management/settings/modelconfig"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/modeldiscovery"
 	internalrouting "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
@@ -265,10 +266,12 @@ func (s *Server) modelAllowedByScopedRoutingGroupsForTenant(tenantID, model, rou
 // one cannot disagree on how a prefixed or wildcard entry is read.
 type scopedRoutingModelGate struct {
 	unrestricted bool
+	tenantID     string
 	groups       []scopedRoutingModelGroupGate
 }
 
 type scopedRoutingModelGroupGate struct {
+	name     string
 	allowed  []string
 	excluded []string
 }
@@ -285,6 +288,9 @@ func (g scopedRoutingModelGate) allows(model string) bool {
 			continue
 		}
 		if len(group.allowed) == 0 || routeAllowedModelMatches(model, group.allowed) {
+			return true
+		}
+		if internalrouting.NormalizeGroupName(group.name) == "default" && modeldiscovery.Listed(g.tenantID, "codex", model) {
 			return true
 		}
 	}
@@ -317,6 +323,7 @@ func (s *Server) scopedRoutingModelGateForTenant(tenantID, routeGroup string, al
 	}
 
 	var gate scopedRoutingModelGate
+	gate.tenantID = tenantID
 	for _, group := range routing.ChannelGroups {
 		groupName := internalrouting.NormalizeGroupName(group.Name)
 		if _, ok := scopedGroups[groupName]; !ok {
@@ -326,6 +333,7 @@ func (s *Server) scopedRoutingModelGateForTenant(tenantID, routeGroup string, al
 			return unrestricted
 		}
 		gate.groups = append(gate.groups, scopedRoutingModelGroupGate{
+			name:     groupName,
 			allowed:  group.AllowedModels,
 			excluded: group.ExcludedModels,
 		})

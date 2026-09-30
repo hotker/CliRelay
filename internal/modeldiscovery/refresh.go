@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/codexclientver"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -107,6 +108,12 @@ func Warm(ctx context.Context, auth *coreauth.Auth, cfg *config.Config, tenantID
 	fetch := fetchers[provider]
 	mu.Unlock()
 
+	if NormalizeProvider(provider) == "codex" {
+		// The manifest query and the later chat call have to present one client
+		// version. Resolve it before asking, so a model the feed just unlocked
+		// is both listed and callable.
+		codexclientver.Refresh(ctx)
+	}
 	models, err := runFetch(ctx, fetch, auth, cfg)
 	ok := err == nil && len(models) > 0
 	if ok {

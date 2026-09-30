@@ -12,7 +12,7 @@
 #   deploy-blue-green.sh --print-settings  print the effective settings and exit
 #
 # SCRIPT_VERSION must stay in sync with deploy gate expectations.
-SCRIPT_VERSION='2026.09.25.2'
+SCRIPT_VERSION='2026.09.30.1'
 set -euo pipefail
 
 mode=deploy
@@ -788,13 +788,20 @@ resolve_slots() {
 		fi
 	fi
 
-	# Alternate between two local ports so nginx can cut over only after the
-	# new slot is healthy.
-	case "$active_port" in
-	"$PORT_A") next_port="$PORT_B" ;;
-	*) next_port="$PORT_A" ;;
-	esac
+	# One process per node. A second slot reads the same cluster node id from
+	# config and the membership row is replaced out from under the process
+	# that is serving. Replace the slot nginx already routes to; the previous
+	# binary is kept beside it so a failed health check can start it again.
+	next_port="$active_port"
 	cutover_from="$active_port"
+	idle_port="$PORT_B"
+	if [ "$active_port" = "$PORT_B" ]; then
+		idle_port="$PORT_A"
+	fi
+	if slot_is_running "$idle_port"; then
+		echo "single-instance: stopping idle slot ${SERVICE_NAME}-${idle_port}" >&2
+		systemctl disable --now "${SERVICE_NAME}-${idle_port}" >/dev/null 2>&1 || true
+	fi
 }
 
 resolve_slots
@@ -843,8 +850,22 @@ if slot_is_running "$next_port"; then
 	echo "${next_unit} is still running a previous build; restarting it on the new binary" >&2
 fi
 
+# The slot we are about to replace is the one nginx routes to. Keep its
+# binary so a failed readiness check or smoke can put that build back.
+if [ -f "$next_bin" ]; then
+	cp -a "$next_bin" "${next_bin}.previous"
+fi
 install -m 0755 "$TEMP_BIN" "$next_bin"
 rm -f "$TEMP_BIN"
+
+restore_previous_binary() {
+	if [ ! -f "${next_bin}.previous" ]; then
+		echo "no previous binary to restore at ${next_bin}.previous" >&2
+		return 1
+	fi
+	cp -a "${next_bin}.previous" "$next_bin"
+	systemctl restart "$next_unit"
+}
 
 working_dir="$(read_service_property WorkingDirectory)"
 working_dir="${working_dir:-$service_dir}"
@@ -923,6 +944,10 @@ done
 if ! http_ok "$probe_url"; then
 	systemctl status "$next_unit" --no-pager -l >&2 || true
 	journalctl -u "$next_unit" --no-pager -n 80 >&2 || true
+	if [ "$next_port" = "$cutover_from" ]; then
+		echo "single-instance readiness failed; restoring the previous binary" >&2
+		restore_previous_binary || true
+	fi
 	fail "new slot failed readiness check after ${HEALTH_TIMEOUT_SECONDS}s: $ready_url (fallback $health_url)"
 fi
 
@@ -992,7 +1017,12 @@ if [ "$smoke_ok" -ne 1 ]; then
 	if [ "$cutover_from" = "$next_port" ] || ! switch_nginx_port "$next_port" "$cutover_from"; then
 		restore_nginx_backup
 	fi
-	systemctl disable --now "$next_unit" >/dev/null 2>&1 || true
+	if [ "$next_port" = "$cutover_from" ]; then
+		echo "single-instance smoke failed; restoring the previous binary" >&2
+		restore_previous_binary || true
+	else
+		systemctl disable --now "$next_unit" >/dev/null 2>&1 || true
+	fi
 	fail "external HTTPS smoke failed for ${PUBLIC_BASE_URL} via ${smoke_route_desc}; traffic restored to ${cutover_from}"
 fi
 
@@ -1000,8 +1030,11 @@ echo "$next_port" >"$ACTIVE_PORT_FILE"
 cutover_done=1
 
 old_port="$active_port"
-if [ "$first_deploy" -eq 1 ]; then
-	echo "Deploy complete: first slot ${next_unit} (${next_port}) is serving ${COMMIT_SHA}; nothing to drain."
+if [ "$first_deploy" -eq 1 ] || [ "$next_port" = "$active_port" ]; then
+	# Nothing else is running. Reporting an old port would make the workflow
+	# wait for this same unit to stop.
+	old_port=""
+	echo "Deploy complete: ${next_unit} (${next_port}) is serving ${COMMIT_SHA}; single instance, nothing to drain."
 else
 	cleanup_unit="${SERVICE_NAME}-drain-${active_port}-$(date +%s)"
 	if systemd-run \

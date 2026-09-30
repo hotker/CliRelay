@@ -266,8 +266,8 @@ func TestCodexHeadersReplayLearnedFingerprintWithoutInboundHeaders(t *testing.T)
 
 	applyCodexHeaders(req, cfg, auth, "codex-token", false)
 
-	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.130.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9" {
-		t.Fatalf("first User-Agent = %q, want learned Codex UA", got)
+	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9" {
+		t.Fatalf("first User-Agent = %q, want learned Codex UA raised to the current client", got)
 	}
 	if got := req.Header.Get("Originator"); got != "codex_cli_rs" {
 		t.Fatalf("first Originator = %q, want learned Codex originator", got)
@@ -279,11 +279,11 @@ func TestCodexHeadersReplayLearnedFingerprintWithoutInboundHeaders(t *testing.T)
 	replayReq := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 	applyCodexHeaders(replayReq, cfg, auth, "codex-token", false)
 
-	if got := replayReq.Header.Get("User-Agent"); got != "codex_cli_rs/0.130.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9" {
-		t.Fatalf("replayed User-Agent = %q, want stored learned Codex UA", got)
+	if got := replayReq.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9" {
+		t.Fatalf("replayed User-Agent = %q, want stored learned Codex UA raised to the current client", got)
 	}
-	if got := replayReq.Header.Get("Version"); got != "0.130.0" {
-		t.Fatalf("replayed Version = %q, want stored learned Codex version", got)
+	if got := replayReq.Header.Get("Version"); got != "0.159.1" {
+		t.Fatalf("replayed Version = %q, want the current client", got)
 	}
 	if got := replayReq.Header.Get("Originator"); got != "codex_cli_rs" {
 		t.Fatalf("replayed Originator = %q, want stored learned Codex originator", got)
@@ -568,9 +568,9 @@ func TestCodexHeadersUseOneSelectedProfileWithoutFieldMixing(t *testing.T) {
 	eventually(t, time.Second, func() bool {
 		cliReq := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 		applyCodexHeaders(cliReq, cfg, auth, "codex-token", false)
-		return cliReq.Header.Get("User-Agent") == "codex_cli_rs/0.144.1 (Mac OS 26.5.2; arm64) unknown" &&
+		return cliReq.Header.Get("User-Agent") == "codex_cli_rs/0.159.1 (Mac OS 26.5.2; arm64) unknown" &&
 			cliReq.Header.Get("Originator") == "codex_cli_rs" &&
-			cliReq.Header.Get("Version") == "0.144.1" &&
+			cliReq.Header.Get("Version") == "0.159.1" &&
 			cliReq.Header.Get("X-Codex-Beta-Features") == ""
 	})
 
@@ -585,9 +585,9 @@ func TestCodexHeadersUseOneSelectedProfileWithoutFieldMixing(t *testing.T) {
 	eventually(t, time.Second, func() bool {
 		desktopReq := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 		applyCodexHeaders(desktopReq, cfg, auth, "codex-token", false)
-		return desktopReq.Header.Get("User-Agent") == "Codex Desktop/0.144.0-alpha.4 (Mac OS 26.5.2; arm64)" &&
+		return desktopReq.Header.Get("User-Agent") == "Codex Desktop/0.159.1-alpha.4 (Mac OS 26.5.2; arm64)" &&
 			desktopReq.Header.Get("Originator") == "Codex Desktop" &&
-			desktopReq.Header.Get("Version") == "0.144.0" &&
+			desktopReq.Header.Get("Version") == "0.159.1" &&
 			desktopReq.Header.Get("X-Codex-Beta-Features") == "remote_compaction_v2"
 	})
 }
@@ -644,7 +644,7 @@ func TestCodexFingerprintHotPathDoesNotWaitForPersistentStore(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
 		t.Fatalf("applyCodexHeaders waited for persistent store: elapsed=%s", elapsed)
 	}
-	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.150.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.9" {
+	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.9" {
 		t.Fatalf("User-Agent = %q, want inbound learned profile", got)
 	}
 	if got := req.Header.Get("Originator"); got != "codex_cli_rs" {
@@ -724,7 +724,7 @@ func TestCodexSelectionUsesStaleCacheWhileRefreshIsBlocked(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
 		t.Fatalf("applyCodexHeaders waited for stale cache refresh: elapsed=%s", elapsed)
 	}
-	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.151.0 (Mac OS 26.5.2; arm64) cached" {
+	if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.5.2; arm64) cached" {
 		t.Fatalf("User-Agent = %q, want stale cached profile", got)
 	}
 	select {
@@ -783,7 +783,7 @@ func TestCodexFingerprintConcurrentRequestsShareAsyncStoreWork(t *testing.T) {
 			<-start
 			req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil).WithContext(ctx)
 			applyCodexHeaders(req, cfg, auth, "codex-token", false)
-			if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.152.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.9" {
+			if got := req.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.9" {
 				t.Errorf("User-Agent = %q", got)
 			}
 		}()

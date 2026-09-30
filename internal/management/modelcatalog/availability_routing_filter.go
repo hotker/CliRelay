@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/modeldiscovery"
 	internalrouting "github.com/router-for-me/CLIProxyAPI/v6/internal/routing"
 )
 
@@ -39,10 +40,12 @@ type routingModelGate struct {
 	// unrestricted is set when some scoped group serves every model its channels
 	// offer, which makes the union of scoped groups unrestricted too.
 	unrestricted bool
+	tenantID     string
 	groups       []routingModelGroupGate
 }
 
 type routingModelGroupGate struct {
+	name     string
 	allowed  []string
 	excluded []string
 }
@@ -64,6 +67,9 @@ func (g routingModelGate) allows(model string) bool {
 			continue
 		}
 		if len(group.allowed) == 0 || routingAllowedModelMatches(model, group.allowed) {
+			return true
+		}
+		if internalrouting.NormalizeGroupName(group.name) == "default" && modeldiscovery.Listed(g.tenantID, "codex", model) {
 			return true
 		}
 	}
@@ -92,6 +98,7 @@ func (s *Service) resolveRoutingModelGate(allowedGroupsRaw string) routingModelG
 		return unrestricted
 	}
 	var gate routingModelGate
+	gate.tenantID = s.tenantID
 	for _, group := range routing.ChannelGroups {
 		groupName := internalrouting.NormalizeGroupName(group.Name)
 		if _, ok := scopedGroups[groupName]; !ok {
@@ -103,6 +110,7 @@ func (s *Service) resolveRoutingModelGate(allowedGroupsRaw string) routingModelG
 			return unrestricted
 		}
 		gate.groups = append(gate.groups, routingModelGroupGate{
+			name:     groupName,
 			allowed:  group.AllowedModels,
 			excluded: group.ExcludedModels,
 		})
