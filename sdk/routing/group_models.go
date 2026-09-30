@@ -2,6 +2,25 @@ package routing
 
 import "strings"
 
+// discoveredModel is installed by model discovery. Nil until that package
+// initialises, which is the same as "nothing has been listed".
+var discoveredModel func(tenantID, modelID string) bool
+
+// SetDiscoveredModel registers the lookup the channel-group gate uses to admit
+// a model the upstream listed after an allow list was saved. Nil clears it.
+func SetDiscoveredModel(fn func(tenantID, modelID string) bool) {
+	discoveredModel = fn
+}
+
+// DiscoveredModel reports whether tenantID's stored upstream lists contain modelID.
+func DiscoveredModel(tenantID, modelID string) bool {
+	fn := discoveredModel
+	if fn == nil {
+		return false
+	}
+	return fn(tenantID, modelID)
+}
+
 // ChannelGroupExcludesModel reports whether a channel group's excluded-models
 // list covers the requested model.
 //

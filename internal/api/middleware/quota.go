@@ -130,15 +130,23 @@ func RecordTokenUsage(subject string, totalTokens int64) {
 		return
 	}
 	getTPMTracker(subject).add(totalTokens)
+	recordClusterTokens(subject, totalTokens)
 }
 
 // RecordTokenUsageForRequest records TPM against the end-user pool when known.
+// Without an end user it uses the subject the key was admitted under, which
+// is how a usage record spooled during a database outage still lands in its
+// account's pool.
 func RecordTokenUsageForRequest(apiKey, endUserID string, totalTokens int64) {
 	if totalTokens <= 0 {
 		return
 	}
 	if id := strings.TrimSpace(endUserID); id != "" {
 		RecordTokenUsage("eu:"+id, totalTokens)
+		return
+	}
+	if subject, ok := admissionSubjectFor(apiKey); ok {
+		RecordTokenUsage(subject, totalTokens)
 		return
 	}
 	RecordTokenUsage(apiKey, totalTokens)
@@ -174,11 +182,12 @@ func QuotaMiddleware() gin.HandlerFunc {
 			return
 		}
 		policy := parseQuotaPolicy(apiKey, metadata)
+		rememberAdmissionSubject(apiKey, policy.subject)
 
 		// ── Always record this request for system-wide RPM tracking ──
 		// This must happen before any metadata checks so ALL authenticated
 		// POST requests are counted for the dashboard RPM display.
-		getRPMTracker(policy.subject).add()
+		policy.countRequest()
 
 		if metadata == nil {
 			c.Next()
@@ -372,17 +381,19 @@ func acquireKeyConcurrency(apiKey string, limit int) (func(), bool) {
 	}
 	inFlightByKey[apiKey]++
 
-	return func() {
-		inFlightMu.Lock()
-		defer inFlightMu.Unlock()
+	return func() { releaseKeyConcurrency(apiKey) }, true
+}
 
-		current := inFlightByKey[apiKey]
-		if current <= 1 {
-			delete(inFlightByKey, apiKey)
-			return
-		}
-		inFlightByKey[apiKey] = current - 1
-	}, true
+func releaseKeyConcurrency(apiKey string) {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+
+	current := inFlightByKey[apiKey]
+	if current <= 1 {
+		delete(inFlightByKey, apiKey)
+		return
+	}
+	inFlightByKey[apiKey] = current - 1
 }
 
 func keyConcurrencyCount(apiKey string) int {
@@ -469,5 +480,5 @@ func GetConcurrencySnapshot() ([]ConcurrencySnapshot, int64) {
 		return true
 	})
 
-	return snapshots, totalInFlight
+	return applyClusterRates(snapshots, totalInFlight)
 }

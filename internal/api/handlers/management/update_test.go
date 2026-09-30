@@ -746,7 +746,7 @@ func TestFetchUpdateProgressProxiesUpdaterStatus(t *testing.T) {
 	t.Setenv("CLIRELAY_UPDATER_URL", updater.URL)
 	t.Setenv("CLIRELAY_UPDATER_TOKEN", "test-token")
 
-	handler := &Handler{cfg: &config.Config{}}
+	handler := &Handler{cfg: autoUpdateEnabledConfig()}
 	progress, err := handler.fetchUpdateProgress(context.Background())
 	if err != nil {
 		t.Fatalf("fetchUpdateProgress() error = %v, want nil", err)
@@ -787,7 +787,7 @@ func TestStreamUpdateProgressProxiesUpdaterSSE(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/update/events", nil)
-	(&Handler{cfg: &config.Config{}}).StreamUpdateProgress(ctx)
+	(&Handler{cfg: autoUpdateEnabledConfig()}).StreamUpdateProgress(ctx)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
@@ -818,7 +818,7 @@ func TestStreamUpdateProgressTimesOutWhenUpdaterDoesNotStartStream(t *testing.T)
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/update/events", nil)
 	started := time.Now()
-	(&Handler{cfg: &config.Config{}}).StreamUpdateProgress(ctx)
+	(&Handler{cfg: autoUpdateEnabledConfig()}).StreamUpdateProgress(ctx)
 
 	if elapsed := time.Since(started); elapsed > 3500*time.Millisecond {
 		t.Fatalf("StreamUpdateProgress elapsed = %s, want fast timeout", elapsed)

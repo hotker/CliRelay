@@ -12,6 +12,11 @@ const (
 
 	// EnvAuthPath overrides auth-dir with the path visible inside the running container/process.
 	EnvAuthPath = "AUTH_PATH"
+	// EnvHost overrides the configured listen host. A slot behind a same-host
+	// reverse proxy sets 127.0.0.1 so its plain-HTTP port is not reachable
+	// from outside. Unlike a config.yaml edit, it does not hot-reload the
+	// running process.
+	EnvHost = "CLIRELAY_HOST"
 	// EnvPort overrides the configured listen port for blue-green deploy slots.
 	EnvPort = "CLIRELAY_PORT"
 	// EnvLegacyPort keeps the existing Docker installer PORT environment useful.

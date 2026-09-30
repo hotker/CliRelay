@@ -65,8 +65,8 @@ func TestCodexFingerprintRefreshCannotReplaceUnpersistedLearning(t *testing.T) {
 	})
 	first := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil).WithContext(ctx)
 	applyCodexHeaders(first, cfg, auth, "test-token", false)
-	if got := first.Header.Get("User-Agent"); got != learnedUA {
-		t.Fatalf("first request UA=%q, want %q", got, learnedUA)
+	if got := first.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.3.1; arm64) learned" {
+		t.Fatalf("first request UA=%q, want the current client with the learned suffix", got)
 	}
 	select {
 	case <-refreshStarted:
@@ -77,8 +77,8 @@ func TestCodexFingerprintRefreshCannotReplaceUnpersistedLearning(t *testing.T) {
 	waitCodexFingerprintRefreshIdle(t, accountKey)
 	replay := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 	applyCodexHeaders(replay, cfg, auth, "test-token", false)
-	if got := replay.Header.Get("User-Agent"); got != learnedUA {
-		t.Fatalf("old empty snapshot replaced learned UA: got %q, want %q", got, learnedUA)
+	if got := replay.Header.Get("User-Agent"); got != "codex_cli_rs/0.159.1 (Mac OS 26.3.1; arm64) learned" {
+		t.Fatalf("old empty snapshot replaced learned UA: got %q", got)
 	}
 	persistOnce.Do(func() { close(persistRelease) })
 	eventually(t, time.Second, func() bool {

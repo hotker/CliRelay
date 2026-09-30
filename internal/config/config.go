@@ -44,6 +44,12 @@ type Config struct {
 	// Redis config controls the Redis connection for usage persistence.
 	Redis RedisConfig `yaml:"redis" json:"redis"`
 
+	// Cluster config controls multi-instance deployment. Disabled by default.
+	Cluster ClusterConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
+
+	// DBResilience controls how a short database outage is ridden out.
+	DBResilience DBResilienceConfig `yaml:"db-resilience,omitempty" json:"db-resilience,omitempty"`
+
 	// TLS config controls HTTPS server settings.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
 
@@ -212,6 +218,10 @@ type Config struct {
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
 	legacyMigrationPending bool `yaml:"-" json:"-"`
+
+	// runtimeSettings records the runtime_settings rows this config was loaded
+	// from; see RuntimeSettingState.
+	runtimeSettings *RuntimeSettingState `yaml:"-" json:"-"`
 }
 
 func (cfg *Config) MainAPIReadTimeout() time.Duration {

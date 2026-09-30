@@ -31,6 +31,7 @@ func admitWebsocketHandshake(c *gin.Context) {
 		return
 	}
 	policy := parseQuotaPolicy(apiKey, metadata)
+	rememberAdmissionSubject(apiKey, policy.subject)
 	if !policy.hasLimits() {
 		// No gate is published, so turns of keys without limits skip quota
 		// entirely, as they always have.
@@ -51,7 +52,7 @@ func admitWebsocketHandshake(c *gin.Context) {
 // POST, the turn counts toward RPM whether or not it is admitted.
 func (p quotaPolicy) turnGate() handlers.QuotaGate {
 	return func() (func(), *handlers.QuotaRejection) {
-		getRPMTracker(p.subject).add()
+		p.countRequest()
 		release, verdict := p.admit()
 		if verdict != nil {
 			return nil, verdict.forTurn()

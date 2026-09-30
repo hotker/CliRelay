@@ -5,6 +5,8 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/modeldiscovery"
+	sdkmodelcatalog "github.com/router-for-me/CLIProxyAPI/v6/sdk/modelcatalog"
 )
 
 func TestScopedRoutingAllowedModelsUsesSystemCfgWhenNoDB(t *testing.T) {
@@ -48,6 +50,43 @@ func TestScopedRoutingModelGateHonorsExcludedModels(t *testing.T) {
 	}
 	if !server.modelAllowedByScopedRoutingGroupsForTenant(identity.SystemTenantID, "grok-4.7", "", nil) {
 		t.Fatal("expected a newly added upstream model to stay listed")
+	}
+}
+
+func TestDefaultGroupListsAModelDiscoveryAddedLater(t *testing.T) {
+	modeldiscovery.ResetForTest()
+	t.Cleanup(modeldiscovery.ResetForTest)
+	modeldiscovery.Store(identity.SystemTenantID, "codex", []*sdkmodelcatalog.ModelInfo{{ID: "gpt-6.1-sol"}})
+
+	server := &Server{cfg: &config.Config{
+		Routing: config.RoutingConfig{
+			IncludeDefaultGroup: true,
+			ChannelGroups: []config.RoutingChannelGroup{
+				{Name: "default", AllowedModels: []string{"gpt-5.5"}},
+				{Name: "curated", AllowedModels: []string{"deepseek-v4-flash"}},
+			},
+		},
+	}}
+	if !server.modelAllowedByScopedRoutingGroupsForTenant(identity.SystemTenantID, "gpt-6.1-sol", "", nil) {
+		t.Fatal("root group hid a model the upstream manifest listed")
+	}
+	if server.modelAllowedByScopedRoutingGroupsForTenant(identity.SystemTenantID, "not-on-the-manifest", "", nil) {
+		t.Fatal("allow list stopped applying to models discovery did not list")
+	}
+	if server.modelAllowedByScopedRoutingGroupsForTenant(identity.SystemTenantID, "gpt-6.1-sol", "curated", nil) {
+		t.Fatal("a curated group inherited a discovered model")
+	}
+
+	blocked := &Server{cfg: &config.Config{
+		Routing: config.RoutingConfig{
+			IncludeDefaultGroup: true,
+			ChannelGroups: []config.RoutingChannelGroup{
+				{Name: "default", AllowedModels: []string{"gpt-5.5"}, ExcludedModels: []string{"gpt-6.1-sol"}},
+			},
+		},
+	}}
+	if blocked.modelAllowedByScopedRoutingGroupsForTenant(identity.SystemTenantID, "gpt-6.1-sol", "", nil) {
+		t.Fatal("an exclusion lost to discovery")
 	}
 }
 

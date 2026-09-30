@@ -15,7 +15,9 @@ import (
 	"github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/cluster/clusterruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/egresshealth"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
@@ -97,6 +99,17 @@ type Server struct {
 
 	draining         atomic.Bool
 	inFlightRequests atomic.Int64
+
+	// clusterRuntime is this server's hold on the cluster wiring; nil on a
+	// single node.
+	clusterRuntime *clusterruntime.Runtime
+
+	// configSync applies management changes made on other cluster nodes.
+	configSync configSyncState
+
+	// egress checks the proxies upstream traffic leaves through; it backs
+	// /readyz/egress.
+	egress *egresshealth.Prober
 }
 
 // Start begins listening for and serving HTTP or HTTPS requests.
@@ -106,6 +119,8 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to start HTTP server: server not initialized")
 	}
 
+	s.startConfigSync()
+	s.egress.Start(context.Background())
 	useTLS := s.cfg != nil && s.cfg.TLS.Enable
 	if useTLS {
 		cert := strings.TrimSpace(s.cfg.TLS.Cert)
@@ -143,13 +158,20 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	s.stopConfigSync()
+	s.egress.Stop()
 	if s.mgmt != nil {
 		s.mgmt.Close()
 	}
 	s.stopProxyWarmup()
 
 	// Shutdown the HTTP server.
-	if err := s.server.Shutdown(ctx); err != nil {
+	err := s.server.Shutdown(ctx)
+	// Drained (or out of time): give this node's cluster slots back now rather
+	// than letting them sit until their leases expire.
+	clusterruntime.Release(s.clusterRuntime)
+	s.clusterRuntime = nil
+	if err != nil {
 		log.Errorf("API server shutdown timed out with %d in-flight request(s)", s.inFlightRequests.Load())
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
 	}

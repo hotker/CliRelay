@@ -1,9 +1,10 @@
 package api
 
 import (
-	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/cluster/clusterruntime"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/identity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
@@ -54,6 +56,7 @@ func newServerEngine(cfg *config.Config, optionState *serverOptionConfig) *gin.E
 		optionState.engineConfigurator(engine)
 	}
 
+	engine.Use(clusterNodeHeaderMiddleware())
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
 	// Admission runs before any body handling: a denied source must not be able
@@ -162,6 +165,9 @@ func (s *Server) applyInitialRuntimeConfig(cfg *config.Config, authManager *auth
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second)
 		authManager.SetAccountConcurrencyConfig(cfg.AccountConcurrency.WaitTimeout(), cfg.AccountConcurrency.QueueDepth())
 	}
+	// Cluster-wide limits, slots, affinity and cooldowns; a no-op on a single
+	// node. Before the server listens, after StartService prepared the cluster.
+	s.clusterRuntime = clusterruntime.Install(cfg, authManager)
 	managementasset.SetCurrentConfig(cfg)
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	s.applyProxyWarmupConfig(cfg)
@@ -222,6 +228,8 @@ func (s *Server) configureManagementHandler(
 	// Quota snapshots have to keep advancing for accounts nobody is watching;
 	// see config.AccountStatusRefreshConfig.
 	s.mgmt.StartAccountStatusScheduler()
+	// Stored warmup policies run from startup, not from the first panel visit.
+	s.mgmt.StartWarmupScheduler()
 }
 
 func (s *Server) registerBuiltinModules(cfg *config.Config, accessManager *sdkaccess.Manager) {
@@ -278,7 +286,9 @@ func buildHTTPServer(cfg *config.Config, engine *gin.Engine) *http.Server {
 		}
 	}
 	return &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", host, port),
+		// JoinHostPort brackets an IPv6 host such as ::1; an empty host still
+		// gives ":port", which binds every interface.
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler:           engine,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       readTimeout,

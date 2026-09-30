@@ -19,9 +19,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	engine := newServerEngine(cfg, optionState)
 	requestLogger, toggle := configureRequestLoggerMiddleware(engine, cfg, configFilePath, optionState)
 	s := newServerRuntimeState(engine, cfg, authManager, accessManager, configFilePath, requestLogger, toggle)
+	s.egress = s.newEgressProber()
 	s.installDynamicMiddleware(configFilePath)
 	s.applyInitialRuntimeConfig(cfg, authManager)
 	s.configureManagementHandler(cfg, configFilePath, authManager, accessManager, optionState)
+	s.configSync.resync, s.configSync.modelsChanged = optionState.configResyncCallback, optionState.modelConfigMutatedCallback
 	s.setupRoutes()
 	s.registerBuiltinModules(cfg, accessManager)
 	s.applyRouterConfigurator(optionState, cfg)

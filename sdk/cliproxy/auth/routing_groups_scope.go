@@ -293,7 +293,7 @@ func candidateSupportsModelOpts(cfg *runtimeConfigSnapshot, registryRef ModelReg
 		return false
 	}
 	groups := authGroups(cfg, auth)
-	if !opts.IgnoreGroupAllowedModels && !modelAllowedByRoutingGroupScopes(cfg, modelID, groups, routeGroup, allowedGroups) {
+	if !opts.IgnoreGroupAllowedModels && !modelAllowedByRoutingGroupScopes(cfg, auth.TenantID, modelID, groups, routeGroup, allowedGroups) {
 		return false
 	}
 	if registryRef == nil {
@@ -351,7 +351,7 @@ func authHasDisableAllModelsRule(auth *Auth) bool {
 	return false
 }
 
-func modelAllowedByRoutingGroupScopes(cfg *runtimeConfigSnapshot, modelID string, candidateGroups map[string]struct{}, routeGroup string, allowedGroups map[string]struct{}) bool {
+func modelAllowedByRoutingGroupScopes(cfg *runtimeConfigSnapshot, tenantID, modelID string, candidateGroups map[string]struct{}, routeGroup string, allowedGroups map[string]struct{}) bool {
 	modelID = strings.TrimSpace(modelID)
 	if cfg == nil || modelID == "" || len(candidateGroups) == 0 {
 		return true
@@ -385,7 +385,7 @@ func modelAllowedByRoutingGroupScopes(cfg *runtimeConfigSnapshot, modelID string
 			return true
 		}
 		foundRestrictedGroup = true
-		if routingGroupModelAllowed(groupName, group.AllowedModels, group.ExcludedModels, modelID) {
+		if routingGroupModelAllowed(groupName, group.AllowedModels, group.ExcludedModels, modelID, tenantID) {
 			return true
 		}
 	}
@@ -400,14 +400,22 @@ func modelAllowedByRoutingGroupScopes(cfg *runtimeConfigSnapshot, modelID string
 // purpose: an exclusion that misses serves a model the operator blocked, so it
 // matches loosely (see sdkrouting.ChannelGroupExcludesModel); an allow entry
 // that misses only refuses one, so it keeps its exact match.
-func routingGroupModelAllowed(groupName string, allowedModels, excludedModels []string, modelID string) bool {
+func routingGroupModelAllowed(groupName string, allowedModels, excludedModels []string, modelID, tenantID string) bool {
 	if sdkrouting.ChannelGroupExcludesModel(excludedModels, modelID) {
 		return false
 	}
 	if len(allowedModels) == 0 {
 		return strings.TrimSpace(modelID) != ""
 	}
-	return routingGroupAllowsModel(groupName, allowedModels, modelID)
+	if routingGroupAllowsModel(groupName, allowedModels, modelID) {
+		return true
+	}
+	// The default group is the root pool behind /v1 and the model plaza. Its
+	// allow list is a snapshot, so a model the manifest adds later would stay
+	// invisible until somebody checked it by hand. Discovery is that check.
+	// Other groups stay frozen: a curated pool must not inherit every new model.
+	// An exclusion already returned false above.
+	return normalizeGroupName(groupName) == "default" && sdkrouting.DiscoveredModel(tenantID, modelID)
 }
 
 // routingGroupAllowsModel reports whether an allow list names the model. It has

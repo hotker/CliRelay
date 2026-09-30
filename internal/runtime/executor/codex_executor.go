@@ -170,6 +170,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return resp, err
 	}
+	httpReq = httpReq.WithContext(withCodexRequestModel(httpReq.Context(), firstNonEmptyString(req.Model, execCtx.BaseModel)))
 	applyCodexHeaders(httpReq, e.cfg, auth, apiKey, true)
 	recorder := execCtx.Recorder()
 	recorder.RecordRequest(url, http.MethodPost, httpReq.Header.Clone(), body)
@@ -291,6 +292,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return resp, err
 	}
+	httpReq = httpReq.WithContext(withCodexRequestModel(httpReq.Context(), firstNonEmptyString(req.Model, execCtx.BaseModel)))
 	applyCodexHeaders(httpReq, e.cfg, auth, apiKey, false)
 	recorder := execCtx.Recorder()
 	recorder.RecordRequest(url, http.MethodPost, httpReq.Header.Clone(), body)
@@ -383,6 +385,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if err != nil {
 		return nil, err
 	}
+	httpReq = httpReq.WithContext(withCodexRequestModel(httpReq.Context(), firstNonEmptyString(req.Model, execCtx.BaseModel)))
 	applyCodexHeaders(httpReq, e.cfg, auth, apiKey, true)
 	recorder := execCtx.Recorder()
 	recorder.RecordRequest(url, http.MethodPost, httpReq.Header.Clone(), body)
@@ -603,14 +606,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
 			key := codexPromptCacheMapKey(auth, req.Model, userIDResult.String())
-			var ok bool
-			if cache, ok = getCodexCache(key); !ok {
-				cache = codexCache{
-					ID:     uuid.New().String(),
-					Expire: time.Now().Add(1 * time.Hour),
-				}
-				setCodexCache(key, cache)
-			}
+			cache.ID = getOrCreateCodexCacheID(key, codexClaudePromptCacheTTL, uuid.NewString)
 		}
 	} else if from == "openai-response" {
 		promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key")

@@ -91,7 +91,9 @@ func (h *Handler) saveTenantTokenRecord(ctx context.Context, tenantID string, re
 	}
 	record.Attributes["path"] = managementauthfiles.TenantFilePath(h.cfg.AuthDir, tenantID, name)
 
-	savedPath, err := h.authFileRepository().Save(ctx, record)
+	// A login creates or replaces the credential outright (see
+	// coreauth.WithCredentialCreate); single-node stores ignore the mark.
+	savedPath, err := h.authFileRepository().Save(coreauth.WithCredentialCreate(ctx), record)
 	if err != nil {
 		return "", err
 	}
@@ -520,6 +522,9 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 	}
 	if err := ValidateOAuthState(state); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid state"})
+		return
+	}
+	if respondSharedAuthStatus(c, state) {
 		return
 	}
 

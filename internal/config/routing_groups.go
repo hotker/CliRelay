@@ -24,8 +24,11 @@ type ChannelGroupMatch struct {
 //
 //	both empty        → every model the group's channels serve, including ones
 //	                    the upstream adds later
-//	AllowedModels set → a frozen allow list; a model the upstream adds later is
-//	                    rejected until an operator adds it here
+//	AllowedModels set → a frozen allow list on every group except default.
+//	                    The default group is the root pool: a model live
+//	                    discovery has listed for the tenant is served too,
+//	                    unless it is excluded, so the plaza does not wait for
+//	                    someone to check the new id. Other groups stay frozen.
 //	ExcludedModels set→ every model except these, so new upstream models stay
 //	                    usable without touching the config
 //	both set          → the allow list minus the exclusions

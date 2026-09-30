@@ -107,10 +107,10 @@ func (s selectorService) diagnoseEmptyCandidates(
 		// Re-run only the model-scope gate. A candidate that clears it was excluded
 		// for some other reason, which this diagnosis deliberately does not guess at.
 		groups := authGroups(scope.cfg, candidate)
-		if modelAllowedByRoutingGroupScopes(scope.cfg, scope.modelKey, groups, scopedRouteGroup, scope.allowedGroups) {
+		if modelAllowedByRoutingGroupScopes(scope.cfg, candidate.TenantID, scope.modelKey, groups, scopedRouteGroup, scope.allowedGroups) {
 			continue
 		}
-		excludedBy, notAllowedBy := blockingRouteGroups(scope.cfg, scope.modelKey, groups, scopedRouteGroup, scope.allowedGroups)
+		excludedBy, notAllowedBy := blockingRouteGroups(scope.cfg, candidate.TenantID, scope.modelKey, groups, scopedRouteGroup, scope.allowedGroups)
 		for _, name := range excludedBy {
 			rejection.modelExcludedByGroups[name] = struct{}{}
 		}
@@ -205,7 +205,7 @@ func describeScopeNames(scope map[string]struct{}) string {
 // model, notAllowed groups whose allow list does not name it.
 func blockingRouteGroups(
 	cfg *runtimeConfigSnapshot,
-	modelID string,
+	tenantID, modelID string,
 	candidateGroups map[string]struct{},
 	routeGroup string,
 	allowedGroups map[string]struct{},
@@ -227,7 +227,7 @@ func blockingRouteGroups(
 		if len(group.AllowedModels) == 0 && len(group.ExcludedModels) == 0 {
 			continue
 		}
-		if routingGroupModelAllowed(name, group.AllowedModels, group.ExcludedModels, modelID) {
+		if routingGroupModelAllowed(name, group.AllowedModels, group.ExcludedModels, modelID, tenantID) {
 			continue
 		}
 		if sdkrouting.ChannelGroupExcludesModel(group.ExcludedModels, modelID) {

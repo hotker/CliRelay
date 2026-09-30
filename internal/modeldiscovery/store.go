@@ -160,6 +160,32 @@ func Fresh(tenantID, provider string) []*sdkmodelcatalog.ModelInfo {
 	return cloneModels(stored.models)
 }
 
+// Listed reports whether provider's stored list for the tenant contains modelID.
+// The root channel group uses the Codex list so a model Codex publishes is
+// reachable without an operator appending it to a frozen allow list. Other
+// providers stay behind that list: an xAI or Kimi id discovery happens to
+// return is not a model the root pool was asked to grow. Exclusions are the
+// caller's job.
+func Listed(tenantID, provider, modelID string) bool {
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	provider = NormalizeProvider(provider)
+	if modelID == "" || provider == "" || !IsShared(provider) {
+		return false
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	entry, ok := entries[storeKey(tenantID, provider)]
+	if !ok {
+		return false
+	}
+	for _, model := range entry.models {
+		if model != nil && strings.EqualFold(strings.TrimSpace(model.ID), modelID) {
+			return true
+		}
+	}
+	return false
+}
+
 // Snapshot returns the last list stored for a tenant and provider, however old.
 func Snapshot(tenantID, provider string) []*sdkmodelcatalog.ModelInfo {
 	if !IsShared(provider) {

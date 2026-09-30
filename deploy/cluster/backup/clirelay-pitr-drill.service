@@ -1,0 +1,10 @@
+[Unit]
+Description=CliRelay cluster restore drill (base backup + WAL archive)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/clirelay-cluster/backup/pitr-drill.sh
+Nice=10
+IOSchedulingClass=idle

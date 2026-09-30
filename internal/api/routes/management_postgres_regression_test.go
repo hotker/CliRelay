@@ -308,9 +308,10 @@ func postgresSmokeAllowsStatus(routePath string, status int, body string) bool {
 		return (strings.Contains(body, "not found") || strings.Contains(body, "validation") || strings.Contains(body, "invalid")) &&
 			(strings.Contains(routePath, ":") || strings.Contains(routePath, "*") || targetedLookup)
 	}
-	if status == http.StatusBadGateway {
-		return routePath == "/v0/management/update/progress" && strings.Contains(body, "update_progress_failed") ||
-			routePath == "/v0/management/update/events" && strings.Contains(body, "update_events_failed")
+	if status == http.StatusServiceUnavailable && strings.Contains(body, "updater_unavailable") {
+		// The smoke config leaves auto-update off and runs no updater sidecar, so the
+		// progress endpoints report that there is no updater instead of dialling one.
+		return routePath == "/v0/management/update/progress" || routePath == "/v0/management/update/events"
 	}
 	if status == http.StatusInternalServerError {
 		// Qwen and Kimi use OAuth *device* login: the handler must reach the upstream

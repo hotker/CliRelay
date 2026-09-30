@@ -146,15 +146,7 @@ func applyCodexPromptCacheHeaders(auth *cliproxyauth.Auth, from sdktranslator.Fo
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
 			key := codexPromptCacheMapKey(auth, req.Model, userIDResult.String())
-			if cached, ok := getCodexCache(key); ok {
-				cache = cached
-			} else {
-				cache = codexCache{
-					ID:     uuid.New().String(),
-					Expire: time.Now().Add(1 * time.Hour),
-				}
-				setCodexCache(key, cache)
-			}
+			cache.ID = getOrCreateCodexCacheID(key, codexClaudePromptCacheTTL, uuid.NewString)
 		}
 	} else if from == "openai-response" {
 		if promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key"); promptCacheKey.Exists() {
@@ -270,6 +262,11 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, cfg *c
 		}
 	}
 	// Ensure UA remains absent even if custom headers attempted to set it.
+	// Version stays: ChatGPT still gates the model on it when the socket
+	// carries no User-Agent.
+	if !isAPIKey {
+		raiseCodexPresentedClientVersion(headers, codexRequestModel(ctx))
+	}
 	headers.Del("User-Agent")
 
 	return headers
